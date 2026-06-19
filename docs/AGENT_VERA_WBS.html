@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Агент Вера — Иерархическая структура работ (ИСР)</title>
+    <style>
+        :root {
+            --bg: #0A0A0A;
+            --fg: #F0F0F0;
+            --accent: #F5B800;
+            --surface: #1A1A1A;
+            --border: #2D2D2D;
+            --muted: #999999;
+
+            --pm:     #F5B800;
+            --be:     #FB923C;
+            --fe:     #38BDF8;
+            --uxr:    #C084FC;
+            --uxd:    #FB7185;
+            --expert: #4ADE80;
+            --qa:     #F87171;
+            --ba:     #60A5FA;
+            --mkt:    #2DD4BF;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        @media print {
+            * {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            @page { margin: 16mm 14mm; }
+            .phase-section { break-inside: avoid-page; }
+            .task-block { break-inside: avoid; }
+            .phase-header { break-after: avoid; }
+            h2, h3 { break-after: avoid; }
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--fg);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            line-height: 1.6;
+            padding: 56px 24px;
+        }
+
+        .container { max-width: 880px; margin: 0 auto; }
+
+        /* ── Header ── */
+        .header {
+            border-bottom: 2px solid var(--accent);
+            padding-bottom: 36px;
+            margin-bottom: 56px;
+        }
+
+        .logo-platform-wrap {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03));
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 12px;
+            padding: 8px 12px;
+            margin-bottom: 32px;
+        }
+
+        .logo-platform-img-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            outline: 1px solid rgba(245,184,0,0.45);
+            box-shadow: 0 0 16px rgba(245,184,0,0.28);
+        }
+
+        .logo-platform-img { width: 32px; height: 32px; border-radius: 50%; display: block; }
+
+        .logo-platform-name {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--accent);
+            text-shadow: 0 0 8px rgba(245,184,0,0.4);
+        }
+
+        .logo-platform-braille {
+            font-size: 9px;
+            letter-spacing: 0.15em;
+            color: rgba(245,184,0,0.8);
+            user-select: none;
+        }
+
+        .tag {
+            display: block;
+            font-size: 30px;
+            font-weight: 700;
+            color: var(--fg);
+            margin-bottom: 14px;
+        }
+
+        .header-title-row { display: flex; align-items: center; gap: 20px; margin-bottom: 10px; }
+
+        .logo-vera {
+            height: 72px;
+            width: 72px;
+            border-radius: 50%;
+            border: 2px solid rgba(245, 184, 0, 0.35);
+            flex-shrink: 0;
+        }
+
+        h1 { font-size: 36px; font-weight: 800; line-height: 1.1; letter-spacing: -0.5px; }
+        h1 span { color: var(--accent); }
+
+        .subtitle { font-size: 14px; color: var(--muted); margin-top: 4px; }
+
+        .meta { display: flex; gap: 28px; flex-wrap: wrap; margin-top: 24px; }
+        .meta-item { display: flex; flex-direction: column; gap: 3px; }
+        .meta-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.2px; }
+        .meta-value { font-size: 14px; font-weight: 500; }
+
+        /* ── Legend ── */
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 48px;
+        }
+        .legend-item { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+        .legend-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+        /* ── Phase ── */
+        .phase-section { margin-bottom: 48px; }
+
+        .phase-header {
+            display: flex;
+            align-items: baseline;
+            gap: 14px;
+            margin-bottom: 6px;
+            flex-wrap: wrap;
+        }
+
+        .phase-number {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: var(--accent);
+            color: #0A0A0A;
+            font-weight: 800;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .phase-header h2 { font-size: 20px; font-weight: 700; }
+
+        .focus-badge {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--accent);
+            background: rgba(245, 184, 0, 0.1);
+            border: 1px solid rgba(245, 184, 0, 0.3);
+            border-radius: 4px;
+            padding: 2px 8px;
+        }
+
+        .phase-dates {
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 18px;
+            margin-left: 44px;
+        }
+
+        /* ── Task block ── */
+        .task-block {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px 22px;
+            margin-bottom: 14px;
+        }
+
+        .task-head {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .task-code {
+            background: rgba(245, 184, 0, 0.1);
+            border: 1px solid rgba(245, 184, 0, 0.3);
+            color: var(--accent);
+            font-size: 11px;
+            font-weight: 700;
+            border-radius: 6px;
+            padding: 3px 8px;
+            white-space: nowrap;
+            margin-top: 2px;
+            flex-shrink: 0;
+        }
+
+        .task-title-wrap { flex: 1; }
+
+        .task-title {
+            font-size: 14.5px;
+            font-weight: 700;
+            color: var(--fg);
+            margin-bottom: 6px;
+            line-height: 1.4;
+        }
+
+        .role-badge {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 2px 9px;
+            border-radius: 4px;
+        }
+
+        .role-pm     { background: rgba(245, 184, 0, 0.15); color: var(--pm);     border: 1px solid rgba(245, 184, 0, 0.35); }
+        .role-be     { background: rgba(251, 146, 60, 0.15); color: var(--be);    border: 1px solid rgba(251, 146, 60, 0.35); }
+        .role-fe     { background: rgba(56, 189, 248, 0.15); color: var(--fe);    border: 1px solid rgba(56, 189, 248, 0.35); }
+        .role-uxr    { background: rgba(192, 132, 252, 0.15); color: var(--uxr);  border: 1px solid rgba(192, 132, 252, 0.35); }
+        .role-uxd    { background: rgba(251, 113, 133, 0.15); color: var(--uxd);  border: 1px solid rgba(251, 113, 133, 0.35); }
+        .role-expert { background: rgba(74, 222, 128, 0.15); color: var(--expert);border: 1px solid rgba(74, 222, 128, 0.35); }
+        .role-qa     { background: rgba(248, 113, 113, 0.15); color: var(--qa);   border: 1px solid rgba(248, 113, 113, 0.35); }
+        .role-ba     { background: rgba(96, 165, 250, 0.15); color: var(--ba);    border: 1px solid rgba(96, 165, 250, 0.35); }
+        .role-mkt    { background: rgba(45, 212, 191, 0.15); color: var(--mkt);   border: 1px solid rgba(45, 212, 191, 0.35); }
+
+        /* ── WBS subtask list ── */
+        .wbs-list { margin-top: 2px; }
+
+        .wbs-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 6px 0;
+            font-size: 13.5px;
+            color: var(--fg);
+            border-bottom: 1px solid #1c1c1c;
+        }
+
+        .wbs-item:last-child { border-bottom: none; }
+
+        .wbs-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--muted);
+            margin-top: 7px;
+            flex-shrink: 0;
+        }
+
+        .wbs-num {
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+            flex-shrink: 0;
+            min-width: 44px;
+            margin-top: 1px;
+        }
+
+        /* ── WBS artifact groups (Реализация / Взаимодействие / Тестирование / ...) ── */
+        .wbs-group { margin-top: 14px; }
+        .wbs-group:first-child { margin-top: 0; }
+
+        .wbs-group-title {
+            font-size: 10.5px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.7px;
+            color: var(--accent);
+            margin-bottom: 2px;
+        }
+
+        .wbs-group.interaction .wbs-group-title { color: var(--fe); }
+
+        /* ── Footer ── */
+        .footer {
+            border-top: 1px solid var(--border);
+            padding-top: 24px;
+            margin-top: 56px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .footer span { font-size: 13px; color: var(--muted); }
+
+        @media (max-width: 620px) {
+            h1 { font-size: 28px; }
+            .phase-dates { margin-left: 0; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <!-- Header -->
+    <header class="header">
+        <div class="logo-platform-wrap">
+            <span class="logo-platform-img-wrap">
+                <img src="frontend/public/logo.png" alt="" class="logo-platform-img">
+            </span>
+            <span class="logo-platform-name">Работа для всех</span>
+            <span class="logo-platform-braille">⠗⠁⠃⠕⠞⠁⠀⠙⠇⠫⠀⠺⠎⠑⠓</span>
+        </div>
+        <div class="tag">Иерархическая структура работ (ИСР)</div>
+        <div class="header-title-row">
+            <img src="frontend/public/logo_ai_assistant.png" alt="Вера" class="logo-vera">
+            <div>
+                <h1>Агент <span>Вера</span></h1>
+                <p class="subtitle">Декомпозиция работ по дорожной карте проекта</p>
+            </div>
+        </div>
+        <div class="meta">
+            <div class="meta-item">
+                <span class="meta-label">Период</span>
+                <span class="meta-value">10 июня — 28 августа 2026</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Источник</span>
+                <span class="meta-value">Дорожная карта (Google Sheets)</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Фаз</span>
+                <span class="meta-value">7 + сквозные</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Акцент декомпозиции</span>
+                <span class="meta-value">Проектирование и Разработка</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Legend -->
+    <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:var(--pm)"></div><span>PM — Менеджер проекта</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--be)"></div><span>Backend</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--fe)"></div><span>Frontend</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--uxr)"></div><span>UX-R — Исследователь</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--uxd)"></div><span>UX-D — Дизайнер</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--expert)"></div><span>Expert — Контент-эксперт</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--qa)"></div><span>QA — Тестировщик</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--ba)"></div><span>BA — Бизнес-аналитик</span></div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--mkt)"></div><span>MKT — Маркетинг</span></div>
+    </div>
+
+    <!-- ════════════════ ФАЗА 1 ════════════════ -->
+    <section class="phase-section">
+        <div class="phase-header">
+            <div class="phase-number">1</div>
+            <h2>Инициация</h2>
+        </div>
+        <div class="phase-dates">Июнь Н2 — Июнь Н3</div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">1.1</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Формирование функциональных и нефункциональных требований к ассистенту Вера совместно со стейкхолдерами проекта</div>
+                    <span class="role-badge role-pm">PM</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">1.1.1</span><span>Назначение и проведение рабочих встреч со стейкхолдерами проекта</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.1.2</span><span>Подготовка опросников для сбора требований</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.1.3</span><span>Проведение опросов потенциальных пользователей в социальных сетях</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.1.4</span><span>Общение в группах/сообществах потенциальных пользователей (соискатели с инвалидностью, работодатели)</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.1.5</span><span>Фиксация результатов встреч, опросов и обсуждений в едином документе</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.1.6</span><span>Формализация функциональных требований их фиксация</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.1.7</span><span>Формализация нефункциональных требований (производительность, доступность, надёжность) их фиксация</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.1.8</span><span>Согласование и утверждение итогового списка требований с заказчиком</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">1.2</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Изучение ТЗ проекта, выбор архитектуры сервисов и их взаимодействия между собой</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">1.2.1</span><span>Анализ предварительного ТЗ и архитектурной концепции</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.2.2</span><span>Анализ вариантов внутренней архитектуры Agent Service (модульная, слоистая, графовая и др.)</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.2.3</span><span>Анализ вариантов внутренней архитектуры MCP Tools Server (модульная, слоистая и др.)</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.2.4</span><span>Анализ вариантов внутренней архитектуры RAG Service (модульная, слоистая, pipeline и др.)</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.2.5</span><span>Утверждение трёхсервисной архитектуры (Agent Service, MCP Tools Server, RAG Service) и проработка механизмов взаимодействия между сервисами (протоколы, точки интеграции)</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.2.6</span><span>Фиксация принятых архитектурных решений и схемы взаимодействия сервисов в документе</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">1.3</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Определение стека технологий и выбор нужных библиотек</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">1.3.1</span><span>Анализ кандидатов технологий для каждого из трёх сервисов</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.3.2</span><span>Сравнение библиотек оркестрации диалога агента</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.3.3</span><span>Сравнение вариантов векторного хранилища</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.3.4</span><span>Утверждение итогового стека технологий</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.3.5</span><span>Фиксация результатов сравнения и обоснования выбора стека в документе</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">1.4</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Фиксация выбранной архитектуры и стека</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">1.4.1</span><span>Подготовка архитектурной схемы сервисов</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.4.2</span><span>Документирование выбранного стека технологий</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.4.3</span><span>Review и согласование с PM</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">1.5</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Финализация ТЗ с учётом выбранной архитектуры и стека технологий</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">1.5.1</span><span>Актуализация разделов ТЗ с учётом архитектурных решений</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.5.2</span><span>Согласование финальной версии ТЗ с PM и заказчиком</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">1.6</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Определение метрик для сбора аналитики с целью оценки качества работы сервиса</div>
+                    <span class="role-badge role-ba">BA</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">1.6.1</span><span>Определение продуктовых метрик (конверсия, вовлечённость, удержание)</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.6.2</span><span>Определение технических метрик (latency, релевантность поиска)</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.6.3</span><span>Согласование целевых значений метрик с PM и заказчиком</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.6.4</span><span>Подготовка плана сбора и анализа аналитики</span></div>
+                <div class="wbs-item"><span class="wbs-num">1.6.5</span><span>Согласование плана с PM и передача backend-разработчику для реализации в фазе мониторинга</span></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ════════════════ ФАЗА 2 ════════════════ -->
+    <section class="phase-section">
+        <div class="phase-header">
+            <div class="phase-number">2</div>
+            <h2>Проектирование</h2>
+            <span class="focus-badge">Приоритетная фаза</span>
+        </div>
+        <div class="phase-dates">Июнь Н2 — Июль Н1</div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">2.1</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Анализ особенностей целевой аудитории, выявление предпочтений в интерфейсе</div>
+                    <span class="role-badge role-uxr">UX-R</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">2.1.1</span><span>Подготовка гайда интервью для двух аудиторий (соискатели, работодатели)</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.1.2</span><span>Проведение интервью с соискателями с инвалидностью</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.1.3</span><span>Проведение интервью с работодателями</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.1.4</span><span>Анализ барьеров доступности (визуальные, моторные, когнитивные нарушения)</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.1.5</span><span>Синтез выявленных потребностей и ограничений</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.1.6</span><span>Фиксация результатов исследования в сводном документе (инсайты, барьеры, потребности)</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">2.2</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Документирование результатов в виде набора рекомендаций</div>
+                    <span class="role-badge role-uxr">UX-R</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">2.2.1</span><span>Формирование User Stories по ролям (соискатель / работодатель)</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.2.2</span><span>Построение Customer Journey Map диалога с Верой</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.2.3</span><span>Формулирование рекомендаций к интерфейсу и доступности</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.2.4</span><span>Передача и презентация рекомендаций UX-дизайнеру</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">2.3</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Разработка ТЗ на интерфейс чат-ассистента на основе рекомендаций UX-исследователя</div>
+                    <span class="role-badge role-uxd">UX-D</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">2.3.1</span><span>Анализ рекомендаций UX-R и приоритизация требований</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.3.2</span><span>Формирование структуры экранов чата (история, ввод, источники ответа)</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.3.3</span><span>Описание пользовательских флоу для авторизованных и неавторизованных</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.3.4</span><span>Согласование ТЗ на интерфейс с PM и Backend</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">2.4</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Разработка макетов экранов и описание пользовательских сценариев взаимодействия</div>
+                    <span class="role-badge role-uxd">UX-D</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">2.4.1</span><span>Wireframes ключевых экранов: чат, история диалога, быстрые подсказки-кнопки</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.4.2</span><span>Прототипирование сценария «вопрос → ответ → источники»</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.4.3</span><span>Дизайн состояний: загрузка, ошибка, пустой диалог, стриминг ответа</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">2.5</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Формирование требований к доступности (контрастность, навигация, адаптивность)</div>
+                    <span class="role-badge role-uxd">UX-D</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">2.5.1</span><span>Проверка цветовых решений на соответствие требованиям контрастности</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.5.2</span><span>Требования к навигации с клавиатуры и для скринридеров</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.5.3</span><span>Требования к адаптивной верстке (десктоп / планшет / мобильный)</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.5.4</span><span>Чек-лист accessibility для передачи frontend-разработчику</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">2.6</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Подготовка спецификации для frontend-разработчика</div>
+                    <span class="role-badge role-uxd">UX-D</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">2.6.1</span><span>Сбор финальных макетов, состояний и accessibility-чек-листа в единый пакет</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.6.2</span><span>Описание дизайн-токенов и переиспользуемых компонентов</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.6.3</span><span>Передача спецификации Frontend-разработчику</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.6.4</span><span>Сессия вопросов и ответов с разработчиком по спецификации</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.6.5</span><span>Внесение уточнений по итогам сессии в спецификацию</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">2.7</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Развёртывание RabbitMQ и построение схем взаимодействия сервисов (параллельно с UX)</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">2.7.1</span><span>Установка и конфигурация RabbitMQ</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.7.2</span><span>Проектирование очереди <code>agent.requests</code></span></div>
+                <div class="wbs-item"><span class="wbs-num">2.7.3</span><span>Настройка retry-политики и dead-letter queue</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.7.4</span><span>Построение и документирование схемы взаимодействия сервисов</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">2.8</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Развёртывание и настройка Redis (LangGraph checkpointer)</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">2.8.1</span><span>Установка и конфигурация Redis</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.8.2</span><span>Подключение Redis как checkpointer для LangGraph</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.8.3</span><span>Тестирование сохранения и восстановления состояния диалога</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.8.4</span><span>Настройка TTL и политики очистки устаревших сессий</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.8.5</span><span>Документирование конфигурации Redis и политики TTL</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">2.9</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Описание контрактов взаимодействия между сервисами, backend и frontend частями сервиса</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">2.9.1</span><span>Контракт Agent Service ↔ MCP Tools Server</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.9.2</span><span>Контракт MCP Tools Server ↔ RAG Service</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.9.3</span><span>Контракт Frontend ↔ Agent Service (запрос/стриминг ответа)</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.9.4</span><span>Согласование контрактов со всеми участниками разработки</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">2.10</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Разработка и фиксация стратегии продвижения сервиса на рынке</div>
+                    <span class="role-badge role-mkt">MKT</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">2.10.1</span><span>Анализ целевой аудитории и доступных каналов продвижения</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.10.2</span><span>Формирование позиционирования ассистента Вера</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.10.3</span><span>Подготовка плана продвижения к запуску пилота</span></div>
+                <div class="wbs-item"><span class="wbs-num">2.10.4</span><span>Согласование стратегии с PM</span></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ════════════════ ФАЗА 3 ════════════════ -->
+    <section class="phase-section">
+        <div class="phase-header">
+            <div class="phase-number">3</div>
+            <h2>Разработка</h2>
+            <span class="focus-badge">Приоритетная фаза</span>
+        </div>
+        <div class="phase-dates">Июнь Н3 — Август Н1</div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">3.1</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Разработка, юнит-тестирование, деплой RAG Server</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Реализация</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.1.1</span><span>Препроцессинг документов: очистка, извлечение структуры (статьи/пункты, заголовки секций)</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.1.2</span><span>Иерархический чанкинг: документ → секция → чанк (300–500 токенов, overlap 50–100)</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.1.3</span><span>Генерация синтетических заголовков чанков и гипотетических вопросов (LLM на этапе ingestion)</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.1.4</span><span>Эмбеддинг чанков и upsert векторов с метаданными в Qdrant</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.1.5</span><span>Гибридный поиск: dense (cosine) + sparse (BM25) + RRF fusion</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.1.6</span><span>Reranker: cross-encoder (BAAI/bge-reranker-base) над топ-20 кандидатами</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.1.7</span><span>API: <code>POST /search</code>, <code>POST /ingest</code>, <code>DELETE /document/{id}</code>, <code>GET /health</code></span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group interaction">
+                <div class="wbs-group-title">Взаимодействие</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.1.8</span><span>Принимает HTTP-запросы от MCP Tools Server (<code>POST /search</code>) — синхронный hot path</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.1.9</span><span>Хранит и читает векторы/метаданные в Qdrant (self-hosted)</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.1.10</span><span>Экспортирует спаны <code>embed_query</code> / <code>vector_search</code> в Arize Phoenix через OTLP</span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Тестирование</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.1.11</span><span>Юнит-тесты ingestion pipeline (чанкинг, заполнение метаданных)</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.1.12</span><span>Юнит-тесты гибридного поиска и reranker на синтетических запросах</span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Документация</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.1.13</span><span>Описание API-эндпоинтов и схемы метаданных чанков</span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Деплой</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.1.14</span><span>Docker-образ RAG Service, деплой в тестовое окружение</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">3.2</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Разработка, юнит-тестирование, деплой Agent Service</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Реализация</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.2.1</span><span>Граф LangGraph: <code>analyze_intent</code> → <code>call_kb_search</code> → <code>generate_with_context</code> / <code>generate_direct</code></span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.2.2</span><span>Системный промпт: роль, две аудитории, источники только из БЗ</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.2.3</span><span><code>AgentState</code> (TypedDict): session_id, user_id, messages, retrieved_chunks, tool_calls</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.2.4</span><span>Стриминг токенов ответа по мере генерации</span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group interaction">
+                <div class="wbs-group-title">Взаимодействие</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.2.5</span><span>Consumer очереди RabbitMQ <code>agent.requests</code> — приём задач от Next.js Proxy (асинхронный вход, retry x3 + dead-letter)</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.2.6</span><span>HTTP-вызов MCP Tools Server (тул <code>kb_search</code>) через <code>langchain-mcp-adapters</code> — синхронный hot path внутри шага рассуждения LLM</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.2.7</span><span>Чтение/запись состояния диалога в Redis (LangGraph checkpointer)</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.2.8</span><span>SSE-стрим ответа клиенту по <code>reply_to</code></span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Тестирование</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.2.9</span><span>Юнит-тесты узлов графа и условных переходов (нужен тул / не нужен)</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.2.10</span><span>Тесты восстановления состояния диалога из checkpointer</span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Документация</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.2.11</span><span>Описание графа агента и системного промпта</span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Деплой</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.2.12</span><span>Docker-образ Agent Service (worker), деплой в тестовое окружение</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">3.3</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Разработка, юнит-тестирование, деплой MCP Server</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Реализация</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.3.1</span><span>Инструмент <code>kb_search(query, audience)</code> с Pydantic-валидацией аргументов</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.3.2</span><span>Монтирование FastMCP в FastAPI: <code>app.mount("/mcp", mcp.sse_app())</code></span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.3.3</span><span>HTTP-клиент к RAG Service (<code>clients/rag_client.py</code>)</span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group interaction">
+                <div class="wbs-group-title">Взаимодействие</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.3.4</span><span>Принимает вызовы тулов от Agent Service по MCP-протоколу (HTTP/SSE транспорт)</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.3.5</span><span>HTTP-запрос к RAG Service (<code>POST /search</code>) и проксирование результата агенту</span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Тестирование</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.3.6</span><span>Юнит-тесты валидации аргументов тула</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.3.7</span><span>Тесты поведения при недоступности RAG Service (таймауты, ошибки)</span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Документация</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.3.8</span><span>Описание доступных инструментов и схемы их аргументов</span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Деплой</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.3.9</span><span>Docker-образ MCP Tools Server, деплой в тестовое окружение</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">3.4</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Интеграция сервисов RAG Server, Agent Service, MCP Server с очередями и Redis. Документирование контрактов для frontend-разработчика</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+
+            <div class="wbs-group interaction">
+                <div class="wbs-group-title">Взаимодействие (сквозная проверка)</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.4.1</span><span>Сквозная связка трёх сервисов в единый pipeline: клиент → RabbitMQ → Agent Service → MCP Server (HTTP) → RAG Service (HTTP)</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.4.2</span><span>Проверка доставки сообщений через RabbitMQ под нагрузкой (retry, dead-letter queue)</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.4.3</span><span>Проверка хранения и восстановления состояния сессии через Redis</span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Тестирование</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.4.4</span><span>End-to-end прогон сценария: запрос клиента → ответ со стримингом и источниками</span></div>
+                    <div class="wbs-item"><span class="wbs-num">3.4.5</span><span>Отладка сквозных ошибок на стыках сервисов</span></div>
+                </div>
+            </div>
+
+            <div class="wbs-group">
+                <div class="wbs-group-title">Документация</div>
+                <div class="wbs-list">
+                    <div class="wbs-item"><span class="wbs-num">3.4.6</span><span>Итоговые API-контракты для Frontend-разработчика: формат запроса, формат SSE-событий стриминга</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">3.5</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Подготовка нормативной базы для RAG сервиса</div>
+                    <span class="role-badge role-expert">Expert</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">3.5.1</span><span>Подбор нормативных актов (ТК РФ, ФЗ-181, подзаконные акты)</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.5.2</span><span>Верификация актуальности редакций документов</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.5.3</span><span>Структурирование текста по статьям и пунктам</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.5.4</span><span>Передача подготовленных материалов backend-разработчику</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">3.6</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Подготовка авторских статей для RAG сервиса</div>
+                    <span class="role-badge role-expert">Expert</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">3.6.1</span><span>Определение перечня тем авторских статей</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.6.2</span><span>Написание авторских статей-систематизаций</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.6.3</span><span>Внутренняя проверка и редактура текстов</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.6.4</span><span>Передача материалов backend-разработчику</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">3.7</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Подготовка тестовых сценариев и ожидаемых ответов</div>
+                    <span class="role-badge role-expert">Expert</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">3.7.1</span><span>Формирование перечня тестовых вопросов для двух аудиторий</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.7.2</span><span>Формулирование эталонных (ожидаемых) ответов</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.7.3</span><span>Согласование тестового набора с QA</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">3.8</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Разработка интерфейса чата и интеграция на платформу (стартует после спецификации дизайнера)</div>
+                    <span class="role-badge role-fe">Frontend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">3.8.1</span><span>Реализация компонентов чата по спецификации UX-дизайнера с учётом стандартов доступности (accessibility-чек-лист)</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.8.2</span><span>Подключение к Agent Service: приём SSE-стриминга</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.8.3</span><span>Реализация состояний: загрузка, ошибка</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.8.4</span><span>Встраивание чата в навигацию платформы «Работа для всех»</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">3.9</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Написание автоматических тестов, юнит-тестирование</div>
+                    <span class="role-badge role-fe">Frontend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">3.9.1</span><span>Юнит-тесты компонентов чата</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.9.2</span><span>Тесты обработки стриминга и сценариев ошибок</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.9.3</span><span>Тесты сценариев доступности интерфейса</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.9.4</span><span>Фиксация результатов тестирования (покрытие, найденные дефекты)</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">3.10</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Документирование реализованной интеграции</div>
+                    <span class="role-badge role-fe">Frontend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">3.10.1</span><span>Описание архитектуры frontend-части чата</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.10.2</span><span>Инструкция по запуску и конфигурации</span></div>
+                <div class="wbs-item"><span class="wbs-num">3.10.3</span><span>Передача документации в общий репозиторий проекта</span></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ════════════════ ФАЗА 4 ════════════════ -->
+    <section class="phase-section">
+        <div class="phase-header">
+            <div class="phase-number">4</div>
+            <h2>Наполнение базы знаний</h2>
+        </div>
+        <div class="phase-dates">Август Н2</div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">4.1</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Запуск pipeline: загрузка, чанкинг, эмбеддинг и индексация документов в RAG Service (совместно с контент-экспертом)</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">4.1.1</span><span>Подготовка пакета документов к загрузке</span></div>
+                <div class="wbs-item"><span class="wbs-num">4.1.2</span><span>Запуск pipeline индексации в Qdrant</span></div>
+                <div class="wbs-item"><span class="wbs-num">4.1.3</span><span>Контроль качества чанкинга и заполнения метаданных</span></div>
+                <div class="wbs-item"><span class="wbs-num">4.1.4</span><span>Проверка результатов поиска по тестовым запросам</span></div>
+                <div class="wbs-item"><span class="wbs-num">4.1.5</span><span>Фиксация результатов индексации и проверки в отчёте</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">4.2</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Передача подготовленных материалов и участие в загрузке</div>
+                    <span class="role-badge role-expert">Expert</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">4.2.1</span><span>Передача нормативных актов и авторских статей backend-разработчику</span></div>
+                <div class="wbs-item"><span class="wbs-num">4.2.2</span><span>Совместная проверка корректности индексации</span></div>
+                <div class="wbs-item"><span class="wbs-num">4.2.3</span><span>Фиксация замечаний и повторная загрузка при необходимости</span></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ════════════════ ФАЗА 5 ════════════════ -->
+    <section class="phase-section">
+        <div class="phase-header">
+            <div class="phase-number">5</div>
+            <h2>Тестирование</h2>
+        </div>
+        <div class="phase-dates">Август Н2 — Август Н3</div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">5.1</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Проведение автоматизированных end-to-end тестов</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">5.1.1</span><span>Подготовка набора e2e сценариев по ключевым флоу</span></div>
+                <div class="wbs-item"><span class="wbs-num">5.1.2</span><span>Запуск автотестов на тестовом окружении</span></div>
+                <div class="wbs-item"><span class="wbs-num">5.1.3</span><span>Фиксация и разбор найденных ошибок</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">5.2</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Ручное тестирование функционала Веры по тестовым кейсам</div>
+                    <span class="role-badge role-qa">QA</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">5.2.1</span><span>Прогон тестовых кейсов, подготовленных контент-экспертом</span></div>
+                <div class="wbs-item"><span class="wbs-num">5.2.2</span><span>Фиксация дефектов в трекере задач</span></div>
+                <div class="wbs-item"><span class="wbs-num">5.2.3</span><span>Повторное тестирование после исправлений</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">5.3</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Проверка времени ответа: первый токен ≤ 5 секунд</div>
+                    <span class="role-badge role-qa">QA</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">5.3.1</span><span>Замер latency на наборе типовых запросов</span></div>
+                <div class="wbs-item"><span class="wbs-num">5.3.2</span><span>Фиксация отклонений от целевого значения</span></div>
+                <div class="wbs-item"><span class="wbs-num">5.3.3</span><span>Передача результатов замеров backend-разработчику</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">5.4</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Проверка корректности ответов (≥ 80%) совместно с контент-экспертом</div>
+                    <span class="role-badge role-qa">QA + Expert</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">5.4.1</span><span>Прогон тестовых вопросов с эталонными ответами</span></div>
+                <div class="wbs-item"><span class="wbs-num">5.4.2</span><span>Оценка соответствия ответов агента эталону</span></div>
+                <div class="wbs-item"><span class="wbs-num">5.4.3</span><span>Расчёт итогового процента релевантных ответов</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">5.5</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Оформление результатов в отчёты</div>
+                    <span class="role-badge role-qa">QA</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">5.5.1</span><span>Сводный отчёт по найденным дефектам</span></div>
+                <div class="wbs-item"><span class="wbs-num">5.5.2</span><span>Отчёт по метрикам latency и релевантности</span></div>
+                <div class="wbs-item"><span class="wbs-num">5.5.3</span><span>Передача итогового отчёта PM</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">5.6</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Оценка релевантности ответов</div>
+                    <span class="role-badge role-expert">Expert</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">5.6.1</span><span>Экспертная оценка качества и точности формулировок ответов</span></div>
+                <div class="wbs-item"><span class="wbs-num">5.6.2</span><span>Проверка корректности указанных источников</span></div>
+                <div class="wbs-item"><span class="wbs-num">5.6.3</span><span>Рекомендации по доработке базы знаний</span></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ════════════════ ФАЗА 6 ════════════════ -->
+    <section class="phase-section">
+        <div class="phase-header">
+            <div class="phase-number">6</div>
+            <h2>Запуск</h2>
+        </div>
+        <div class="phase-dates">Август Н3 — Август Н4</div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">6.1</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Развёртывание системы мониторинга</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">6.1.1</span><span>Развёртывание Arize Phoenix (Docker)</span></div>
+                <div class="wbs-item"><span class="wbs-num">6.1.2</span><span>Подключение OpenTelemetry / openinference во всех сервисах</span></div>
+                <div class="wbs-item"><span class="wbs-num">6.1.3</span><span>Проверка корректности сбора трейсов end-to-end</span></div>
+                <div class="wbs-item"><span class="wbs-num">6.1.4</span><span>Документирование конфигурации мониторинга</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">6.2</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Настройка алёртинга</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">6.2.1</span><span>Определение пороговых значений ключевых метрик</span></div>
+                <div class="wbs-item"><span class="wbs-num">6.2.2</span><span>Настройка уведомлений при сбоях и деградации сервисов</span></div>
+                <div class="wbs-item"><span class="wbs-num">6.2.3</span><span>Тестирование срабатывания алёртов</span></div>
+                <div class="wbs-item"><span class="wbs-num">6.2.4</span><span>Документирование пороговых значений и правил алёртинга</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">6.3</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Документирование сервисов, подготовка пользовательской документации, документации для службы поддержки пользователей сервиса</div>
+                    <span class="role-badge role-be">Backend</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">6.3.1</span><span>Эксплуатационная документация трёх сервисов</span></div>
+                <div class="wbs-item"><span class="wbs-num">6.3.2</span><span>Пользовательская инструкция по работе с Верой</span></div>
+                <div class="wbs-item"><span class="wbs-num">6.3.3</span><span>Документация для службы поддержки (FAQ, типовые проблемы)</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">6.4</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Реализация стратегии продвижения сервиса на рынке, фиксация результатов, корректировка стратегии</div>
+                    <span class="role-badge role-mkt">MKT</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">6.4.1</span><span>Запуск пилотной коммуникационной кампании</span></div>
+                <div class="wbs-item"><span class="wbs-num">6.4.2</span><span>Сбор первичных метрик отклика аудитории</span></div>
+                <div class="wbs-item"><span class="wbs-num">6.4.3</span><span>Корректировка стратегии продвижения по результатам</span></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ════════════════ ФАЗА 7 ════════════════ -->
+    <section class="phase-section">
+        <div class="phase-header">
+            <div class="phase-number">7</div>
+            <h2>Закрытие</h2>
+        </div>
+        <div class="phase-dates">Август Н4</div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">7.1</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Организация приёмки результатов проекта заказчиком</div>
+                    <span class="role-badge role-pm">PM</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">7.1.1</span><span>Подготовка демонстрации результатов проекта</span></div>
+                <div class="wbs-item"><span class="wbs-num">7.1.2</span><span>Сбор обратной связи заказчика</span></div>
+                <div class="wbs-item"><span class="wbs-num">7.1.3</span><span>Подписание акта приёмки</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">7.2</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Формирование итоговой отчётности по проекту</div>
+                    <span class="role-badge role-pm">PM</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">7.2.1</span><span>Сводный отчёт по результатам и метрикам проекта</span></div>
+                <div class="wbs-item"><span class="wbs-num">7.2.2</span><span>Отчёт по срокам и бюджету</span></div>
+                <div class="wbs-item"><span class="wbs-num">7.2.3</span><span>Фиксация извлечённых уроков (lessons learned)</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">7.3</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Закрытие проекта</div>
+                    <span class="role-badge role-pm">PM</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">7.3.1</span><span>Архивирование проектной документации</span></div>
+                <div class="wbs-item"><span class="wbs-num">7.3.2</span><span>Высвобождение ресурсов команды</span></div>
+                <div class="wbs-item"><span class="wbs-num">7.3.3</span><span>Официальное объявление о закрытии проекта</span></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ════════════════ СКВОЗНЫЕ ════════════════ -->
+    <section class="phase-section">
+        <div class="phase-header">
+            <div class="phase-number">8</div>
+            <h2>Сквозные задачи (все фазы)</h2>
+        </div>
+        <div class="phase-dates">Июнь Н1 — Август Н4 (весь проект)</div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">8.1</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Взаимодействие со стейкхолдерами и заказчиком</div>
+                    <span class="role-badge role-pm">PM</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">8.1.1</span><span>Регулярные статус-встречи с заказчиком и командой</span></div>
+                <div class="wbs-item"><span class="wbs-num">8.1.2</span><span>Протоколирование решений и договорённостей по итогам встреч</span></div>
+                <div class="wbs-item"><span class="wbs-num">8.1.3</span><span>Коммуникация рисков и блокеров</span></div>
+                <div class="wbs-item"><span class="wbs-num">8.1.4</span><span>Сбор обратной связи на ключевых этапах проекта</span></div>
+                <div class="wbs-item"><span class="wbs-num">8.1.5</span><span>Фиксация собранной обратной связи и передача в работу ответственным</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">8.2</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Контроль сроков и результатов</div>
+                    <span class="role-badge role-pm">PM</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">8.2.1</span><span>Ведение дорожной карты и контроль исполнения по фазам</span></div>
+                <div class="wbs-item"><span class="wbs-num">8.2.2</span><span>Эскалация отклонений от плана</span></div>
+                <div class="wbs-item"><span class="wbs-num">8.2.3</span><span>Фиксация отклонений и решений по ним в реестре рисков/issues</span></div>
+            </div>
+        </div>
+
+        <div class="task-block">
+            <div class="task-head">
+                <span class="task-code">8.3</span>
+                <div class="task-title-wrap">
+                    <div class="task-title">Контроль бюджетов и расходования ресурсов</div>
+                    <span class="role-badge role-pm">PM</span>
+                </div>
+            </div>
+            <div class="wbs-list">
+                <div class="wbs-item"><span class="wbs-num">8.3.1</span><span>Учёт затрат по ролям и фазам проекта</span></div>
+                <div class="wbs-item"><span class="wbs-num">8.3.2</span><span>Контроль соответствия фактических расходов бюджету</span></div>
+                <div class="wbs-item"><span class="wbs-num">8.3.3</span><span>Формирование отчёта по расходованию бюджета</span></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <span>Работа для всех · Агент Вера · ИСР</span>
+        <span>Июнь 2026</span>
+    </footer>
+
+</div>
+</body>
+</html>

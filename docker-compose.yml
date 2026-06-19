@@ -1,0 +1,70 @@
+services:
+
+  # ── База данных ────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: project_dashboard_db
+    env_file: ./.env
+    restart: always
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5436:5432"
+    networks:
+      - dashboard_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend (FastAPI) ─────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: project_dashboard_backend
+    env_file: ./backend/.env.docker
+    restart: always
+    command: bash entrypoint.sh
+    networks:
+      - dashboard_network
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ── Frontend (Vite SPA, собранная статика отдаётся nginx внутри образа) ────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
+    container_name: project_dashboard_frontend
+    restart: unless-stopped
+    networks:
+      - dashboard_network
+    depends_on:
+      - backend
+
+  # ── Nginx — единая точка входа (статика + проксирование /api) ─────────────
+  nginx:
+    image: nginx:alpine
+    container_name: project_dashboard_nginx
+    ports:
+      - "93:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+    networks:
+      - dashboard_network
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  pg_data:
+
+networks:
+  dashboard_network:
+    driver: bridge
