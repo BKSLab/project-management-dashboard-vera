@@ -112,6 +112,17 @@ export interface TaskComment {
     created_at: string;
 }
 
+export interface TaskAttachment {
+    id: number;
+    task_id: number;
+    original_name: string;
+    content_type: string;
+    size: number;
+    created_at: string;
+    content_url: string;
+    previewable: boolean;
+}
+
 export interface LinkedTarget {
     link_id: number;
     kanban_task_id: number | null;

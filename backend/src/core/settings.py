@@ -24,6 +24,7 @@ class AppSettings(SettingsBase):
     api_v1_prefix: str = "/api/v1"
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
     logging_config_path: Path = BASE_DIR / "logging.ini"
+    uploads_path: Path = BASE_DIR / "uploads"
 
 
 class DBSettings(SettingsBase):

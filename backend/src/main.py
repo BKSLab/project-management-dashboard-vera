@@ -14,6 +14,7 @@ from src.api.v1.endpoints.documents import router as documents_router
 from src.api.v1.endpoints.kanban_stages import router as kanban_stages_router
 from src.api.v1.endpoints.kanban_tasks import router as kanban_tasks_router
 from src.api.v1.endpoints.task_activity import router as task_activity_router
+from src.api.v1.endpoints.task_attachments import router as task_attachments_router
 from src.api.v1.endpoints.task_comments import router as task_comments_router
 from src.api.v1.endpoints.wbs import router as wbs_router
 from src.core.config_logger import configure_logging
@@ -96,6 +97,7 @@ for api_router in (
     kanban_tasks_router,
     task_comments_router,
     task_activity_router,
+    task_attachments_router,
     wbs_router,
 ):
     app.include_router(api_router, prefix=settings.app.api_v1_prefix)

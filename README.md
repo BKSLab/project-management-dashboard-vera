@@ -10,7 +10,7 @@
 
 - главная страница со сводными показателями и «Пульсом канбана» в виде шкал прогресса;
 - канбан с drag-and-drop, сохранённым порядком карточек и центральным модальным окном задачи;
-- описание, срок, комментарии, история изменений и связанные документы внутри задачи;
+- описание, срок, файлы, комментарии, история изменений и связанные документы внутри задачи;
 - дерево ИСР с rollup-прогрессом и синхронизацией листовых работ с канбаном;
 - создание, редактирование, удаление и связывание Markdown-документов;
 - полнотекстовый поиск PostgreSQL по задачам, комментариям и документам;
@@ -24,6 +24,7 @@ Backend следует слоистой схеме:
 
 ```text
 HTTP endpoint → service → repository → PostgreSQL
+                       ↘ storage → локальный диск
 ```
 
 - `api/v1/endpoints` — HTTP-контракт, OpenAPI, преобразование доменных ошибок в ответы;
@@ -38,7 +39,7 @@ HTTP endpoint → service → repository → PostgreSQL
 
 Правила backend-архитектуры зафиксированы в [`FASTAPI_PATTERNS.md`](FASTAPI_PATTERNS.md).
 
-Frontend построен на React 19, TypeScript, Vite, Tailwind CSS v4, TanStack Query и `@dnd-kit`. Запросы собраны в `frontend/src/lib/api.ts`; URL backend задаётся через `VITE_API_URL`.
+Frontend построен на React 19, TypeScript, Vite, Tailwind CSS v4, TanStack Query и `@dnd-kit`. Запросы собраны в `frontend/src/lib/api.ts`: локально используется `http://localhost:8000`, а Docker-сборка обращается к API через относительный путь.
 
 ## Структура репозитория
 
@@ -64,6 +65,7 @@ backend/
 │   ├── repositories/
 │   ├── schemas/
 │   ├── services/
+│   ├── storage/
 │   └── utils/
 └── tests/
     ├── unit/services/
@@ -74,6 +76,7 @@ frontend/
 ├── src/components/
 │   ├── dashboard/
 │   ├── docs/
+│   ├── files/
 │   ├── kanban/
 │   ├── layout/
 │   ├── ui/
@@ -112,7 +115,6 @@ cd backend
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements-dev.txt
-Copy-Item .env.example .env
 ```
 
 Заполните `backend/.env`, затем выполните:
@@ -146,7 +148,6 @@ Get-NetTCPConnection -LocalPort 8000 -State Listen
 ```powershell
 cd frontend
 npm install
-Copy-Item .env.example .env
 npm run dev
 ```
 
@@ -156,19 +157,15 @@ Vite по умолчанию откроет `http://localhost:5173`. При не
 npm run dev -- --port 3000
 ```
 
-В `frontend/.env` для локальной разработки должно быть:
-
-```dotenv
-VITE_API_URL=http://localhost:8000
-```
+Frontend не требует `.env`: при локальном запуске backend ожидается на `http://localhost:8000`.
 
 ## Запуск через Docker Compose
 
 ```bash
-cp .env.example .env
-cp backend/.env.docker.example backend/.env.docker
 docker compose up -d --build
 ```
+
+PostgreSQL и backend используют единый файл `backend/.env`. Для Docker в нём должны быть активны `POSTGRES_HOST=db`, `POSTGRES_PORT=5432`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_NAME` и `POSTGRES_DB`.
 
 После запуска интерфейс доступен на `http://<хост>:93/`.
 
@@ -186,6 +183,14 @@ docker compose up -d --build
 3. запускает Hypercorn с access/error logs в stdout.
 
 Docker-конфигурация не выполняет отдельный импорт документов и не очищает существующую БД.
+
+Файлы задач сохраняются на хосте в `data/uploads` и монтируются в backend как `/app/uploads`. Каталог не входит в Git и сохраняется при пересоздании контейнера. Для полного резервного копирования нужны одновременно дамп PostgreSQL и каталог `data/uploads`.
+
+## Файлы задач
+
+К задаче можно прикрепить до 20 файлов размером до 10 МБ каждый. Поддерживаются изображения, PDF, документы Office, текстовые файлы и распространённые архивы. SVG, HTML и исполняемые файлы не принимаются.
+
+В PostgreSQL хранятся исходное имя, MIME-тип, размер и уникальный storage key. Физическое содержимое находится в `data/uploads/tasks/<task_id>/`; безопасное растровое изображение показывается inline, остальные типы выдаются для скачивания. При удалении задачи удаляются и её метаданные, и физический каталог файлов.
 
 ## ИСР и начальные данные
 
@@ -224,6 +229,8 @@ python scripts/export_wbs_json.py
 | `GET/PATCH/DELETE` | `/kanban/tasks/{id}` | просмотр, изменение и удаление ручной задачи |
 | `PATCH` | `/kanban/tasks/{id}/move` | перемещение карточки с сохранением позиции |
 | `GET/POST` | `/kanban/tasks/{id}/comments` | комментарии задачи |
+| `GET/POST` | `/kanban/tasks/{id}/attachments` | список и загрузка файлов задачи |
+| `GET/DELETE` | `/kanban/tasks/{id}/attachments/{attachment_id}...` | получение содержимого и удаление файла |
 | `GET` | `/kanban/tasks/{id}/activity` | история значимых изменений |
 | `GET` | `/kanban/tasks/{id}/links` | связанные документы |
 | `GET` | `/wbs/tree` | полное дерево ИСР с rollup-прогрессом |

@@ -151,6 +151,7 @@ activemq-data/
 .env
 .env.docker
 .envrc
+/data/uploads/
 .venv
 env/
 venv/

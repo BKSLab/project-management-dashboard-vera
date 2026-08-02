@@ -12,6 +12,7 @@ from .base import Base, TimestampMixin
 if TYPE_CHECKING:
     from .kanban_stages import KanbanStage
     from .task_activity import TaskActivity
+    from .task_attachments import TaskAttachment
     from .task_comments import TaskComment
     from .wbs import WbsItem
 
@@ -90,6 +91,12 @@ class KanbanTask(Base, TimestampMixin):
         "TaskActivity",
         back_populates="task",
         cascade="all, delete-orphan",
+    )
+    attachments: Mapped[list[TaskAttachment]] = relationship(
+        "TaskAttachment",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     def __repr__(self) -> str:

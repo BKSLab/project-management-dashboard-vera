@@ -13,6 +13,7 @@ from src.exceptions.kanban_tasks import (
     KanbanTasksServiceError,
 )
 from src.exceptions.task_activity import TaskActivityRepositoryError
+from src.exceptions.task_attachments import TaskAttachmentStorageError
 from src.exceptions.task_comments import TaskCommentsRepositoryError
 from src.exceptions.wbs import WbsRepositoryError
 from src.repositories.kanban_stages import KanbanStagesRepository
@@ -21,6 +22,7 @@ from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.wbs import WbsRepository
 from src.schemas.kanban_tasks import TaskSchema
+from src.storage.task_attachments import TaskAttachmentStorage
 from src.utils.fts import mark_literal_match
 
 logger = logging.getLogger(__name__)
@@ -44,12 +46,14 @@ class KanbanTasksService:
         comments_repository: TaskCommentsRepository,
         activity_repository: TaskActivityRepository,
         wbs_repository: WbsRepository,
+        attachment_storage: TaskAttachmentStorage | None = None,
     ):
         self.tasks_repository = tasks_repository
         self.stages_repository = stages_repository
         self.comments_repository = comments_repository
         self.activity_repository = activity_repository
         self.wbs_repository = wbs_repository
+        self.attachment_storage = attachment_storage
 
     # Блок подготовки контекста карточек
 
@@ -317,8 +321,22 @@ class KanbanTasksService:
             if task.wbs_item_id is not None:
                 raise KanbanTaskFromWbsDeleteError(task_id=task_id)
             await self.tasks_repository.delete(task=task)
+            await self._cleanup_deleted_task_files(task_id)
         except (KanbanTaskNotFoundError, KanbanTaskFromWbsDeleteError):
             raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка удаления задачи id=%s.", task_id, exc_info=True)
             raise KanbanTasksServiceError(str(error)) from error
+
+    async def _cleanup_deleted_task_files(self, task_id: int) -> None:
+        """Best-effort очищает физический каталог удалённой задачи."""
+        if self.attachment_storage is None:
+            return
+        try:
+            await self.attachment_storage.delete_task_directory(task_id)
+        except TaskAttachmentStorageError:
+            logger.warning(
+                "⚠️ Не удалось очистить каталог файлов удалённой задачи id=%s.",
+                task_id,
+                exc_info=True,
+            )

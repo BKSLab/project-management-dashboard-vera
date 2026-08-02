@@ -8,6 +8,7 @@ from src.repositories.documents import DocumentsRepository
 from src.repositories.kanban_stages import KanbanStagesRepository
 from src.repositories.kanban_tasks import KanbanTasksRepository
 from src.repositories.task_activity import TaskActivityRepository
+from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.wbs import WbsRepository
 
@@ -42,6 +43,11 @@ def get_task_activity_repository(session: DbSessionDep) -> TaskActivityRepositor
     return TaskActivityRepository(session)
 
 
+def get_task_attachments_repository(session: DbSessionDep) -> TaskAttachmentsRepository:
+    """Создаёт репозиторий файлов задач в рамках сессии запроса."""
+    return TaskAttachmentsRepository(session)
+
+
 def get_wbs_repository(session: DbSessionDep) -> WbsRepository:
     """Создаёт репозиторий ИСР в рамках сессии запроса."""
     return WbsRepository(session)
@@ -67,5 +73,9 @@ TaskCommentsRepositoryDep = Annotated[
 TaskActivityRepositoryDep = Annotated[
     TaskActivityRepository,
     Depends(get_task_activity_repository),
+]
+TaskAttachmentsRepositoryDep = Annotated[
+    TaskAttachmentsRepository,
+    Depends(get_task_attachments_repository),
 ]
 WbsRepositoryDep = Annotated[WbsRepository, Depends(get_wbs_repository)]

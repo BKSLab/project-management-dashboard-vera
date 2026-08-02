@@ -8,6 +8,7 @@ from src.exceptions.kanban_tasks import (
     KanbanTasksRepositoryError,
     KanbanTaskWbsLinkAlreadyExistsRepositoryError,
 )
+from src.exceptions.task_attachments import TaskAttachmentStorageError
 from src.exceptions.wbs import (
     WbsCodeAlreadyExistsRepositoryError,
     WbsCodeConflictError,
@@ -19,6 +20,7 @@ from src.repositories.kanban_stages import KanbanStagesRepository
 from src.repositories.kanban_tasks import KanbanTasksRepository
 from src.repositories.wbs import WbsRepository
 from src.schemas.wbs import WbsItemSchema, WbsNodeSchema, WbsProgressSchema, WbsTaskRefSchema
+from src.storage.task_attachments import TaskAttachmentStorage
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +33,12 @@ class WbsService:
         wbs_repository: WbsRepository,
         tasks_repository: KanbanTasksRepository,
         stages_repository: KanbanStagesRepository,
+        attachment_storage: TaskAttachmentStorage | None = None,
     ):
         self.wbs_repository = wbs_repository
         self.tasks_repository = tasks_repository
         self.stages_repository = stages_repository
+        self.attachment_storage = attachment_storage
 
     @staticmethod
     def _count_leaf_progress(
@@ -300,10 +304,24 @@ class WbsService:
             linked_task = await self.tasks_repository.get_by_wbs_item_id(wbs_item_id=item.id)
             if linked_task is not None:
                 await self.tasks_repository.delete(task=linked_task)
+                await self._cleanup_deleted_task_files(linked_task.id)
 
         children = await self.wbs_repository.get_children(item.id)
         for child in children:
             await self._delete_linked_tasks_recursively(child)
+
+    async def _cleanup_deleted_task_files(self, task_id: int) -> None:
+        """Best-effort очищает физический каталог удалённой WBS-задачи."""
+        if self.attachment_storage is None:
+            return
+        try:
+            await self.attachment_storage.delete_task_directory(task_id)
+        except TaskAttachmentStorageError:
+            logger.warning(
+                "⚠️ Не удалось очистить каталог файлов удалённой задачи id=%s.",
+                task_id,
+                exc_info=True,
+            )
 
     async def delete_item(self, item_id: int) -> None:
         """Удаляет узел ИСР, потомков и связанные карточки канбана.

@@ -8,14 +8,17 @@ from src.dependencies.repositories import (
     KanbanStagesRepositoryDep,
     KanbanTasksRepositoryDep,
     TaskActivityRepositoryDep,
+    TaskAttachmentsRepositoryDep,
     TaskCommentsRepositoryDep,
     WbsRepositoryDep,
 )
+from src.dependencies.storage import TaskAttachmentStorageDep
 from src.services.document_links import DocumentLinksService
 from src.services.documents import DocumentsService
 from src.services.kanban_stages import KanbanStagesService
 from src.services.kanban_tasks import KanbanTasksService
 from src.services.task_activity import TaskActivityService
+from src.services.task_attachments import TaskAttachmentsService
 from src.services.task_comments import TaskCommentsService
 from src.services.wbs import WbsService
 
@@ -57,6 +60,7 @@ def get_kanban_tasks_service(
     comments_repository: TaskCommentsRepositoryDep,
     activity_repository: TaskActivityRepositoryDep,
     wbs_repository: WbsRepositoryDep,
+    storage: TaskAttachmentStorageDep,
 ) -> KanbanTasksService:
     """Создаёт сервис задач канбана со всеми доменными зависимостями."""
     return KanbanTasksService(
@@ -65,6 +69,7 @@ def get_kanban_tasks_service(
         comments_repository=comments_repository,
         activity_repository=activity_repository,
         wbs_repository=wbs_repository,
+        attachment_storage=storage,
     )
 
 
@@ -92,16 +97,31 @@ def get_task_activity_service(
     )
 
 
+def get_task_attachments_service(
+    attachments_repository: TaskAttachmentsRepositoryDep,
+    tasks_repository: KanbanTasksRepositoryDep,
+    storage: TaskAttachmentStorageDep,
+) -> TaskAttachmentsService:
+    """Создаёт сервис файлов задач."""
+    return TaskAttachmentsService(
+        attachments_repository=attachments_repository,
+        tasks_repository=tasks_repository,
+        storage=storage,
+    )
+
+
 def get_wbs_service(
     wbs_repository: WbsRepositoryDep,
     tasks_repository: KanbanTasksRepositoryDep,
     stages_repository: KanbanStagesRepositoryDep,
+    storage: TaskAttachmentStorageDep,
 ) -> WbsService:
     """Создаёт сервис ИСР."""
     return WbsService(
         wbs_repository=wbs_repository,
         tasks_repository=tasks_repository,
         stages_repository=stages_repository,
+        attachment_storage=storage,
     )
 
 
@@ -125,5 +145,9 @@ TaskCommentsServiceDep = Annotated[
 TaskActivityServiceDep = Annotated[
     TaskActivityService,
     Depends(get_task_activity_service),
+]
+TaskAttachmentsServiceDep = Annotated[
+    TaskAttachmentsService,
+    Depends(get_task_attachments_service),
 ]
 WbsServiceDep = Annotated[WbsService, Depends(get_wbs_service)]

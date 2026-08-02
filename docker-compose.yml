@@ -4,7 +4,7 @@ services:
   db:
     image: postgres:16-alpine
     container_name: project_dashboard_db
-    env_file: ./.env
+    env_file: ./backend/.env
     restart: always
     volumes:
       - pg_data:/var/lib/postgresql/data
@@ -24,9 +24,11 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: project_dashboard_backend
-    env_file: ./backend/.env.docker
+    env_file: ./backend/.env
     restart: always
     command: bash entrypoint.sh
+    volumes:
+      - ./data/uploads:/app/uploads
     networks:
       - dashboard_network
     depends_on:
@@ -38,8 +40,6 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      args:
-        VITE_API_URL: ""
     container_name: project_dashboard_frontend
     restart: unless-stopped
     networks:

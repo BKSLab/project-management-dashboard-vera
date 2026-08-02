@@ -1,4 +1,8 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+const API_BASE_URL = import.meta.env.DEV ? "http://localhost:8000" : "";
+
+export function apiUrl(path: string): string {
+    return `${API_BASE_URL}${path}`;
+}
 
 export class ApiError extends Error {
     status: number;
@@ -10,10 +14,11 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${API_BASE_URL}${path}`, {
+    const isFormData = init?.body instanceof FormData;
+    const response = await fetch(apiUrl(path), {
         ...init,
         headers: {
-            "Content-Type": "application/json",
+            ...(!isFormData && { "Content-Type": "application/json" }),
             ...init?.headers,
         },
     });
@@ -37,6 +42,8 @@ export const api = {
     get: <T>(path: string) => request<T>(path),
     post: <T>(path: string, body?: unknown) =>
         request<T>(path, { method: "POST", body: body !== undefined ? JSON.stringify(body) : undefined }),
+    postForm: <T>(path: string, body: FormData) =>
+        request<T>(path, { method: "POST", body }),
     patch: <T>(path: string, body: unknown) =>
         request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
     delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),

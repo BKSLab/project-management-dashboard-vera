@@ -5,6 +5,7 @@ from .kanban_stages import KanbanStage
 from .kanban_tasks import KanbanTask
 from .seed_state import SeedState
 from .task_activity import TaskActivity
+from .task_attachments import TaskAttachment
 from .task_comments import TaskComment
 from .wbs import WbsItem
 
@@ -15,6 +16,7 @@ __all__ = [
     "KanbanStage",
     "KanbanTask",
     "TaskActivity",
+    "TaskAttachment",
     "TaskComment",
     "SeedState",
     "WbsItem",

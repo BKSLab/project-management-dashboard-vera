@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    String,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .base import Base
+
+if TYPE_CHECKING:
+    from .kanban_tasks import KanbanTask
+
+
+class TaskAttachment(Base):
+    """Метаданные файла, прикреплённого к задаче канбана."""
+
+    __tablename__ = "task_attachments"
+    __table_args__ = (
+        UniqueConstraint("storage_key", name="uq_task_attachments_storage_key"),
+        CheckConstraint("size > 0", name="ck_task_attachments_size_positive"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+        doc="Идентификатор файла задачи.",
+        comment="Уникальный идентификатор файла задачи.",
+    )
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("kanban_tasks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        doc="Задача-владелец файла.",
+        comment="Идентификатор задачи, к которой прикреплён файл.",
+    )
+    original_name: Mapped[str] = mapped_column(
+        String(length=512),
+        nullable=False,
+        doc="Исходное имя файла для отображения пользователю.",
+        comment="Исходное имя файла без компонентов пути.",
+    )
+    storage_key: Mapped[str] = mapped_column(
+        String(length=255),
+        nullable=False,
+        doc="Относительный уникальный ключ файла в локальном хранилище.",
+        comment="Относительный путь файла внутри каталога uploads.",
+    )
+    content_type: Mapped[str] = mapped_column(
+        String(length=255),
+        nullable=False,
+        doc="Нормализованный MIME-тип файла.",
+        comment="MIME-тип, используемый при выдаче содержимого файла.",
+    )
+    size: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        doc="Размер файла в байтах.",
+        comment="Положительный размер файла в байтах.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        doc="Дата и время загрузки файла.",
+        comment="Дата и время добавления файла к задаче.",
+    )
+
+    task: Mapped[KanbanTask] = relationship("KanbanTask", back_populates="attachments")
+
+    def __repr__(self) -> str:
+        return (
+            f"<TaskAttachment(id={self.id}, task_id={self.task_id}, "
+            f"original_name={self.original_name!r})>"
+        )
