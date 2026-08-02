@@ -11,6 +11,7 @@ import {
     type WbsRole,
 } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
+import { ErrorMessage } from "@/components/ui/ErrorMessage";
 
 const STAGE_COLORS: Record<string, string> = {
     "Бэклог": "#999999",
@@ -114,7 +115,7 @@ export function WbsNode({ node, depth }: WbsNodeProps) {
 
     const createMutation = useMutation({
         mutationFn: (data: { title: string; role: WbsRole | null }) =>
-            api.post<WbsItem>("/api/wbs/items", { parent_id: node.id, title: data.title, role: data.role }),
+            api.post<WbsItem>("/api/v1/wbs/items", { parent_id: node.id, title: data.title, role: data.role }),
         onSuccess: () => {
             invalidateAll();
             setIsAddingChild(false);
@@ -124,7 +125,7 @@ export function WbsNode({ node, depth }: WbsNodeProps) {
 
     const updateMutation = useMutation({
         mutationFn: (data: { title: string; role: WbsRole | null }) =>
-            api.patch<WbsItem>(`/api/wbs/items/${node.id}`, { title: data.title, role: data.role }),
+            api.patch<WbsItem>(`/api/v1/wbs/items/${node.id}`, { title: data.title, role: data.role }),
         onSuccess: () => {
             invalidateAll();
             setIsEditing(false);
@@ -132,9 +133,11 @@ export function WbsNode({ node, depth }: WbsNodeProps) {
     });
 
     const deleteMutation = useMutation({
-        mutationFn: () => api.delete(`/api/wbs/items/${node.id}`),
+        mutationFn: () => api.delete(`/api/v1/wbs/items/${node.id}`),
         onSuccess: () => invalidateAll(),
     });
+
+    const mutationError = createMutation.error ?? updateMutation.error ?? deleteMutation.error;
 
     const handleDelete = () => {
         const message = hasChildren
@@ -228,6 +231,12 @@ export function WbsNode({ node, depth }: WbsNodeProps) {
                     </button>
                 </div>
             </div>
+
+            {mutationError && (
+                <div style={{ paddingLeft: `${(depth + 1) * 1.25}rem` }} className="pb-2">
+                    <ErrorMessage message={(mutationError as Error).message} />
+                </div>
+            )}
 
             {isEditing && (
                 <div style={{ paddingLeft: `${(depth + 1) * 1.25}rem` }} className="pb-2">

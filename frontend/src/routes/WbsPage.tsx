@@ -16,7 +16,7 @@ export function WbsPage() {
 
     const { data, isPending, isError, error } = useQuery({
         queryKey: ["wbs", "tree"],
-        queryFn: () => api.get<WbsNodeType[]>("/api/wbs/tree"),
+        queryFn: () => api.get<WbsNodeType[]>("/api/v1/wbs/tree"),
     });
 
     const toggleWbsNode = useUiStore((state) => state.toggleWbsNode);
@@ -31,7 +31,7 @@ export function WbsPage() {
 
     const createPhaseMutation = useMutation({
         mutationFn: (vars: { title: string; role: WbsRole | null }) =>
-            api.post<WbsItem>("/api/wbs/items", {
+            api.post<WbsItem>("/api/v1/wbs/items", {
                 parent_id: null,
                 title: vars.title,
                 role: vars.role,
@@ -65,6 +65,11 @@ export function WbsPage() {
                         onSubmit={(title, role) => createPhaseMutation.mutate({ title, role })}
                         onCancel={() => setIsAddingPhase(false)}
                     />
+                    {createPhaseMutation.isError && (
+                        <div className="mt-2">
+                            <ErrorMessage message={(createPhaseMutation.error as Error).message} />
+                        </div>
+                    )}
                 </div>
             )}
 

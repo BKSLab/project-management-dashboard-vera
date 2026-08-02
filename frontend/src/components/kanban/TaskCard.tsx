@@ -1,6 +1,7 @@
 import { useDraggable } from "@dnd-kit/core";
 import type { KanbanTask } from "@/lib/types";
 import { cn } from "@/lib/cn";
+import { SearchHighlight } from "@/components/ui/SearchHighlight";
 
 interface TaskCardProps {
     task: KanbanTask;
@@ -28,6 +29,12 @@ interface TaskCardContentProps {
     task: KanbanTask;
 }
 
+const SEARCH_SOURCE_LABEL: Partial<Record<NonNullable<KanbanTask["search_match_source"]>, string>> = {
+    description: "В описании",
+    comment: "В комментарии",
+    comment_author: "Автор комментария",
+};
+
 /** Внутренняя разметка карточки — переиспользуется в DragOverlay (там нет dnd-kit-хуков). */
 export function TaskCardContent({ task }: TaskCardContentProps) {
     const dueState = dueDateState(task.due_date);
@@ -37,16 +44,25 @@ export function TaskCardContent({ task }: TaskCardContentProps) {
             <p className="font-mono text-xs text-muted">TASK-{task.id}</p>
 
             <p className="mt-1 line-clamp-2 text-[15px] font-semibold text-foreground">
-                {task.title}
+                <SearchHighlight text={task.search_title ?? task.title} />
             </p>
 
-            {task.description_md && (
+            {task.search_excerpt && task.search_match_source !== "wbs_code" ? (
+                <p className="mt-2 line-clamp-2 rounded-lg bg-accent/[0.07] px-2 py-1.5 text-xs leading-[1.45] text-[#cbd5e1] ring-1 ring-inset ring-accent/15">
+                    {SEARCH_SOURCE_LABEL[task.search_match_source ?? "title"] && (
+                        <span className="mr-1 font-semibold text-accent-secondary">
+                            {SEARCH_SOURCE_LABEL[task.search_match_source ?? "title"]}:
+                        </span>
+                    )}
+                    <SearchHighlight text={task.search_excerpt} />
+                </p>
+            ) : task.description_md ? (
                 <p className="mt-1 line-clamp-2 text-[13px] leading-[1.4] text-muted">
                     {task.description_md}
                 </p>
-            )}
+            ) : null}
 
-            {task.last_comment && (
+            {task.last_comment && !task.search_excerpt && (
                 <p className="mt-2 line-clamp-1 rounded-lg bg-white/[0.03] px-2 py-1 text-xs text-[#cbd5e1]">
                     💬 {task.last_comment}
                 </p>
@@ -54,7 +70,15 @@ export function TaskCardContent({ task }: TaskCardContentProps) {
 
             <div className="mt-2 flex items-center gap-3 text-xs text-muted">
                 {task.wbs_code && (
-                    <span className="font-mono text-accent-secondary">{task.wbs_code}</span>
+                    <span className="font-mono text-accent-secondary">
+                        <SearchHighlight
+                            text={
+                                task.search_match_source === "wbs_code" && task.search_excerpt
+                                    ? task.search_excerpt
+                                    : task.wbs_code
+                            }
+                        />
+                    </span>
                 )}
                 {task.due_date && (
                     <span className={dueState ? DUE_DATE_COLOR[dueState] : undefined}>

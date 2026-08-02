@@ -1,0 +1,70 @@
+from __future__ import annotations
+
+import enum
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import DateTime, Enum, ForeignKey, String, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .base import Base
+
+if TYPE_CHECKING:
+    from .kanban_tasks import KanbanTask
+
+
+class TaskActivityEventType(str, enum.Enum):
+    """Тип события в истории изменений задачи."""
+
+    STAGE_CHANGED = "STAGE_CHANGED"
+    DUE_DATE_CHANGED = "DUE_DATE_CHANGED"
+    DESCRIPTION_CHANGED = "DESCRIPTION_CHANGED"
+    COMMENT_ADDED = "COMMENT_ADDED"
+
+
+class TaskActivity(Base):
+    """Неизменяемая запись истории изменений задачи."""
+
+    __tablename__ = "task_activity"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+        doc="Идентификатор события истории задачи.",
+        comment="Уникальный идентификатор события.",
+    )
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("kanban_tasks.id", ondelete="CASCADE"),
+        nullable=False,
+        doc="Задача события.",
+        comment="Идентификатор задачи, к которой относится событие.",
+    )
+    event_type: Mapped[TaskActivityEventType] = mapped_column(
+        Enum(TaskActivityEventType, name="task_activity_event_type"),
+        nullable=False,
+        doc="Тип события.",
+        comment="Тип изменения задачи.",
+    )
+    from_value: Mapped[str | None] = mapped_column(
+        String(length=255),
+        nullable=True,
+        doc="Предыдущее значение.",
+        comment="Текстовое представление предыдущего значения.",
+    )
+    to_value: Mapped[str | None] = mapped_column(
+        String(length=255),
+        nullable=True,
+        doc="Новое значение.",
+        comment="Текстовое представление нового значения.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        doc="Дата события.",
+        comment="Дата и время фиксации события.",
+    )
+
+    task: Mapped[KanbanTask] = relationship("KanbanTask", back_populates="activity")
+
+    def __repr__(self) -> str:
+        return f"<TaskActivity(id={self.id}, task_id={self.task_id}, event_type={self.event_type})>"

@@ -19,13 +19,13 @@ export function DocumentDetailPage() {
 
     const { data, isPending, isError, error } = useQuery({
         queryKey: ["documents", slug],
-        queryFn: () => api.get<DocumentDetail>(`/api/documents/${slug}`),
+        queryFn: () => api.get<DocumentDetail>(`/api/v1/documents/${slug}`),
         enabled: !!slug,
     });
 
     const updateMutation = useMutation({
         mutationFn: (content_md: string) =>
-            api.patch<DocumentDetail>(`/api/documents/${slug}`, { content_md }),
+            api.patch<DocumentDetail>(`/api/v1/documents/${slug}`, { content_md }),
         onSuccess: (updated) => {
             queryClient.setQueryData(["documents", slug], updated);
             queryClient.invalidateQueries({ queryKey: ["documents"] });
@@ -34,7 +34,7 @@ export function DocumentDetailPage() {
     });
 
     const deleteMutation = useMutation({
-        mutationFn: () => api.delete(`/api/documents/${slug}`),
+        mutationFn: () => api.delete(`/api/v1/documents/${slug}`),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["documents"] });
             navigate("/docs");

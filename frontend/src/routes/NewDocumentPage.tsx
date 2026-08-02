@@ -20,12 +20,12 @@ export function NewDocumentPage() {
     const backTarget = returnToTask ? `/kanban?highlight=${returnToTask}` : "/docs";
 
     const createMutation = useMutation({
-        mutationFn: () => api.post<DocumentDetail>("/api/documents", { title: title.trim(), content_md: content }),
+        mutationFn: () => api.post<DocumentDetail>("/api/v1/documents", { title: title.trim(), content_md: content }),
         onSuccess: async (created) => {
             queryClient.invalidateQueries({ queryKey: ["documents"] });
             if (returnToTask) {
                 const taskId = Number(returnToTask);
-                await api.post("/api/document-links", { document_id: created.id, kanban_task_id: taskId });
+                await api.post("/api/v1/document-links", { document_id: created.id, kanban_task_id: taskId });
                 queryClient.invalidateQueries({ queryKey: ["kanban", "tasks", taskId, "links"] });
                 navigate(`/kanban?highlight=${taskId}`);
             } else {

@@ -8,6 +8,7 @@ seed_initial_data.py) и сохраняет результат в backend/script
 Запуск (из каталога backend, БД не требуется):
     PYTHONPATH=. venv/Scripts/python.exe scripts/export_wbs_json.py
 """
+
 import json
 import re
 import sys
@@ -19,10 +20,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WBS_TXT_PATH = PROJECT_ROOT / "docs" / "AGENT_VERA_WBS.txt"
 OUTPUT_PATH = Path(__file__).resolve().parent / "data" / "wbs_seed.json"
 
-PHASE_RE = re.compile(r'^ФАЗА\s+\d+\.\s+(.+)$')
-CROSS_CUTTING_RE = re.compile(r'^СКВОЗНЫЕ ЗАДАЧИ')
-ITEM2_RE = re.compile(r'^(\d+\.\d+)\s+(.+?)(?:\s*\[([\w-]+)\])?\s*$')
-ITEM3_RE = re.compile(r'^(\d+\.\d+\.\d+)\s+(.+?)\s*$')
+PHASE_RE = re.compile(r"^ФАЗА\s+\d+\.\s+(.+)$")
+CROSS_CUTTING_RE = re.compile(r"^СКВОЗНЫЕ ЗАДАЧИ")
+ITEM2_RE = re.compile(r"^(\d+\.\d+)\s+(.+?)(?:\s*\[([\w-]+)\])?\s*$")
+ITEM3_RE = re.compile(r"^(\d+\.\d+\.\d+)\s+(.+?)\s*$")
 
 ROLE_ALIASES = {
     "UX-R": "UXR",
@@ -67,50 +68,56 @@ def parse_wbs(text: str) -> list[dict]:
             current_item2_code = None
             item2_order = 0
             phase_name = phase_match.group(1) if phase_match else line
-            nodes.append({
-                "code": current_phase_code,
-                "parent_code": None,
-                "phase_name": phase_name,
-                "title": phase_name,
-                "role": None,
-                "order_index": phase_order,
-                "is_leaf": False,
-            })
+            nodes.append(
+                {
+                    "code": current_phase_code,
+                    "parent_code": None,
+                    "phase_name": phase_name,
+                    "title": phase_name,
+                    "role": None,
+                    "order_index": phase_order,
+                    "is_leaf": False,
+                }
+            )
             phase_order += 1
             continue
 
-        if raw_line.startswith('    ') and not raw_line.startswith('     '):
+        if raw_line.startswith("    ") and not raw_line.startswith("     "):
             item3_match = ITEM3_RE.match(line)
             if item3_match and current_item2_code:
                 code, title = item3_match.groups()
-                nodes.append({
-                    "code": code,
-                    "parent_code": current_item2_code,
-                    "phase_name": None,
-                    "title": title,
-                    "role": None,
-                    "order_index": item3_order,
-                    "is_leaf": True,
-                })
+                nodes.append(
+                    {
+                        "code": code,
+                        "parent_code": current_item2_code,
+                        "phase_name": None,
+                        "title": title,
+                        "role": None,
+                        "order_index": item3_order,
+                        "is_leaf": True,
+                    }
+                )
                 item3_order += 1
             continue
 
         item2_match = ITEM2_RE.match(line)
         if item2_match and current_phase_code:
             code, title, role = item2_match.groups()
-            if not re.match(r'^\d+\.\d+$', code):
+            if not re.match(r"^\d+\.\d+$", code):
                 continue
             current_item2_code = code
             item3_order = 0
-            nodes.append({
-                "code": code,
-                "parent_code": current_phase_code,
-                "phase_name": None,
-                "title": title.strip(),
-                "role": resolve_role(role),
-                "order_index": item2_order,
-                "is_leaf": False,
-            })
+            nodes.append(
+                {
+                    "code": code,
+                    "parent_code": current_phase_code,
+                    "phase_name": None,
+                    "title": title.strip(),
+                    "role": resolve_role(role),
+                    "order_index": item2_order,
+                    "is_leaf": False,
+                }
+            )
             item2_order += 1
 
     return nodes

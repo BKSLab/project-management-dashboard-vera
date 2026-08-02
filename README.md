@@ -1,170 +1,275 @@
-# project-management-dashboard-vera
+# Project Management Dashboard Vera
 
-Внутренний дашборд управления проектом «Агент Вера» — документация, иерархическая структура работ (ИСР) и канбан-доска в одном инструменте, с живым редактированием прямо в браузере.
+Персональный таск-трекер проекта «Агент Вера»: канбан-доска, иерархическая структура работ (ИСР), проектные документы и сводка состояния проекта в одном интерфейсе.
 
-Подробный архитектурный план: [`docs/PROJECT_DASHBOARD_PLAN.md`](docs/PROJECT_DASHBOARD_PLAN.md). Дизайн-система: [`docs/DESIGN_GUIDE.md`](docs/DESIGN_GUIDE.md) и [`DESIGN_REDESIGN_PLAN.md`](DESIGN_REDESIGN_PLAN.md).
+Проект рассчитан на первоначальную загрузку базовой ИСР из версионированного JSON-снэпшота. После этого данные живут в PostgreSQL и изменяются через интерфейс таск-трекера. Авторизации в текущем контуре нет — это осознанное ограничение проекта.
 
----
+## Текущее состояние
 
-## Зачем это нужно
+Реализованы и работают:
 
-Проектная документация, ИСР и статус задач изначально существовали как статичные файлы (`.txt`/`.html`) в репозитории — их нельзя было редактировать интерактивно, двигать задачи между стадиями или видеть прогресс по фазам. Этот дашборд решает это: документы редактируются прямо в браузере, ИСР — раскрывающееся дерево с rollup-прогрессом, канбан синхронизирован с ИСР 1:1 (каждый листовой пункт ИСР — это карточка канбана).
+- главная страница со сводными показателями и «Пульсом канбана» в виде шкал прогресса;
+- канбан с drag-and-drop, сохранённым порядком карточек и центральным модальным окном задачи;
+- описание, срок, комментарии, история изменений и связанные документы внутри задачи;
+- дерево ИСР с rollup-прогрессом и синхронизацией листовых работ с канбаном;
+- создание, редактирование, удаление и связывание Markdown-документов;
+- полнотекстовый поиск PostgreSQL по задачам, комментариям и документам;
+- поиск по началу русского слова и подсветка найденных фрагментов;
+- миграции Alembic, проверяемая предзагрузка ИСР и подробное логирование backend-запросов;
+- API v1 с OpenAPI/Swagger по адресу `/docs`.
 
-Авторизации нет — дашборд публичный, используется как открытая отчётность по ходу проекта.
+## Архитектура
 
----
+Backend следует слоистой схеме:
 
-## Экраны
+```text
+HTTP endpoint → service → repository → PostgreSQL
+```
 
-- **Главная** (`/`) — сводка: % готовности ИСР, количество документов, ближайшие сроки, пульс канбана (donut-чарт), последние задачи по стадиям, превью бэклога.
-- **Документы** (`/docs`) — список, просмотр (рендер markdown), создание/редактирование/удаление.
-- **ИСР** (`/wbs`) — дерево фаз → разделов → задач с прогресс-барами, бейджами ролей, инлайн-CRUD узлов.
-- **Канбан** (`/kanban`) — drag&drop-доска (`@dnd-kit`), карточки сгруппированы и отсортированы по коду ИСР в бэклоге, поиск, панель деталей задачи (описание, срок, комментарии, история изменений, связанные документы).
+- `api/v1/endpoints` — HTTP-контракт, OpenAPI, преобразование доменных ошибок в ответы;
+- `services` — бизнес-сценарии и сборка данных из нескольких репозиториев;
+- `repositories` — SQLAlchemy-запросы, транзакции и преобразование ошибок БД;
+- `db/models` — одна SQLAlchemy-модель на файл;
+- `schemas` — Pydantic-схемы запросов и ответов;
+- `dependencies` — трёхуровневый граф FastAPI Depends;
+- `exceptions` — отдельная иерархия ошибок для каждого домена;
+- `src/main.py` — FastAPI-приложение, lifespan, CORS и системные обработчики ошибок;
+- `main.py` — совместимая точка входа для `hypercorn main:app`.
 
----
+Правила backend-архитектуры зафиксированы в [`FASTAPI_PATTERNS.md`](FASTAPI_PATTERNS.md).
 
-## Стек
-
-**Backend:** FastAPI · PostgreSQL · SQLAlchemy (async) · Alembic · Pydantic v2 · Hypercorn.
-Слои: `api → services → repositories → db`, плюс `schemas` (Pydantic) и `dependencies` (DI-фабрики).
-
-**Frontend:** Vite · React 19 · TypeScript · Tailwind CSS v4 (CSS-токены, без `tailwind.config.*`) · TanStack Query (server state) · Zustand (client state) · `@dnd-kit` (drag&drop) · `react-aria-components` (доступные примитивы) · `remark`/`rehype` + DOMPurify (markdown-пайплайн для документов).
-
-Дизайн — тёмная тема «Dark Developer Workspace» (сине-фиолетовый/бирюзовый акцент, многоуровневые поверхности, точечный glassmorphism), без сторонних UI-библиотек.
-
----
+Frontend построен на React 19, TypeScript, Vite, Tailwind CSS v4, TanStack Query и `@dnd-kit`. Запросы собраны в `frontend/src/lib/api.ts`; URL backend задаётся через `VITE_API_URL`.
 
 ## Структура репозитория
 
-```
+```text
 backend/
-├── main.py                  # FastAPI app
-├── entrypoint.sh             # alembic upgrade head → seed_from_json.py → hypercorn
-├── alembic.ini
+├── main.py                         # совместимая точка входа
+├── logging.ini                     # единая конфигурация логирования
+├── entrypoint.sh                   # миграции → проверка ИСР → Hypercorn
 ├── requirements.txt
+├── requirements-dev.txt
 ├── scripts/
-│   ├── data/wbs_seed.json    # базовый снэпшот ИСР (247 узлов / 195 листьев)
-│   ├── export_wbs_json.py    # парсит docs/AGENT_VERA_WBS.txt → обновляет wbs_seed.json
-│   ├── seed_from_json.py     # сидирует ИСР+стадии из wbs_seed.json, если БД пустая (идемпотентно)
-│   └── seed_initial_data.py  # альтернативный сидинг: документы из site_work_for_everyone + ИСР из .txt
-└── src/
-    ├── core/        # настройки (pydantic-settings), логирование
-    ├── db/          # модели SQLAlchemy, сессия, миграции Alembic
-    ├── repositories/
-    ├── services/
-    ├── schemas/
-    ├── dependencies/
-    └── api/
+│   ├── data/wbs_seed.json          # базовая ИСР: 247 узлов
+│   ├── export_wbs_json.py          # экспорт ИСР в JSON
+│   ├── seed_from_json.py           # идемпотентная загрузка ИСР
+│   └── seed_initial_data.py        # опциональная загрузка документов
+├── src/
+│   ├── api/v1/endpoints/
+│   ├── core/
+│   ├── db/alembic/versions/
+│   ├── db/models/
+│   ├── dependencies/
+│   ├── exceptions/
+│   ├── repositories/
+│   ├── schemas/
+│   ├── services/
+│   └── utils/
+└── tests/
+    ├── unit/services/
+    ├── api/endpoints/
+    └── integration/repositories/
 
 frontend/
-├── index.html
-├── vite.config.ts
-└── src/
-    ├── app.css                # дизайн-токены, тени, типографика
-    ├── lib/                    # api-клиент, markdown-пайплайн, типы
-    ├── components/             # ui/, layout/, docs/, wbs/, kanban/, dashboard/
-    ├── routes/                 # HomePage, DocumentsPage, WbsPage, KanbanPage и др.
-    └── stores/                 # Zustand (UI state)
+├── src/components/
+│   ├── dashboard/
+│   ├── docs/
+│   ├── kanban/
+│   ├── layout/
+│   ├── ui/
+│   └── wbs/
+├── src/lib/
+├── src/routes/
+└── src/stores/
 
-docs/                # документация проекта «Агент Вера» (паспорт, ИСР, риски, дизайн-гайд)
-nginx/               # конфиг единой точки входа для docker-compose
-docker-compose.yml   # db + backend + frontend + nginx
+docs/                               # планы, дизайн-гайд и материалы проекта
+docker-compose.yml                  # PostgreSQL + backend + frontend + nginx
+nginx/nginx.conf                    # единая точка входа в Docker
 ```
 
----
+## Поиск
 
-## Запуск локально без Docker
+Векторный поиск хранится непосредственно в PostgreSQL в вычисляемых `tsvector`-полях:
 
-### Backend
+| Сущность | Поля поиска | Приоритет |
+|---|---|---|
+| Задача | `title`, `description_md` | заголовок выше описания |
+| Комментарий | `body_md`, `author_name` | текст выше автора |
+| Документ | `title`, `content_md` | заголовок выше содержимого |
 
-```bash
+Для каждого вектора создан GIN-индекс. Запрос строится через `websearch_to_tsquery`; для обычного текста дополнительно поддерживается безопасный префиксный поиск от трёх символов, поэтому `пользова` находит формы слова «пользователь». Спецсимволы не приводят к синтаксическим ошибкам. Backend формирует фрагменты через `ts_headline`, а frontend выделяет совпадения жёлтым цветом.
+
+По коду ИСР выполняется отдельный безопасный поиск по подстроке. Результаты канбана сохраняют предметный порядок карточек, а не сортируются по релевантности.
+
+## Локальный запуск
+
+### PostgreSQL и backend
+
+Требуется Python 3.12 и доступный PostgreSQL 16.
+
+```powershell
 cd backend
 python -m venv venv
-venv/Scripts/activate          # Windows; на Linux/macOS — source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env           # заполнить креды локального Postgres (POSTGRES_HOST=localhost)
+.\venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+Copy-Item .env.example .env
+```
+
+Заполните `backend/.env`, затем выполните:
+
+```powershell
 alembic upgrade head
-python scripts/seed_from_json.py   # один раз — заполнит ИСР+стадии, если БД пустая
+python scripts/seed_from_json.py
 hypercorn main:app
 ```
 
-Backend поднимется на `http://localhost:8000`.
+Backend доступен на `http://127.0.0.1:8000`:
+
+- Swagger UI: `http://127.0.0.1:8000/docs`;
+- OpenAPI: `http://127.0.0.1:8000/openapi.json`;
+- API: `http://127.0.0.1:8000/api/v1`.
+
+Проверка после запуска:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/kanban/stages
+```
+
+Каждый вызов endpoint-а пишет в консоль начало и успешное завершение запроса. Если сервер стартовал, но запросов в логах нет, проверьте, какой процесс занимает порт:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000 -State Listen
+```
 
 ### Frontend
 
-```bash
+```powershell
 cd frontend
 npm install
-cp .env.example .env            # VITE_API_URL=http://localhost:8000
+Copy-Item .env.example .env
+npm run dev
+```
+
+Vite по умолчанию откроет `http://localhost:5173`. При необходимости фиксированного порта:
+
+```powershell
 npm run dev -- --port 3000
 ```
 
-Frontend — на `http://localhost:3000`.
+В `frontend/.env` для локальной разработки должно быть:
 
----
+```dotenv
+VITE_API_URL=http://localhost:8000
+```
 
 ## Запуск через Docker Compose
 
 ```bash
-cp .env.example .env                              # креды Postgres для контейнера db
-cp backend/.env.docker.example backend/.env.docker # креды + POSTGRES_HOST=db для контейнера backend
+cp .env.example .env
+cp backend/.env.docker.example backend/.env.docker
 docker compose up -d --build
 ```
 
-Дашборд будет доступен на `http://<хост>:93/` (порт выбран, чтобы не конфликтовать с другими внутренними сервисами на том же сервере — см. `docs/PROJECT_DASHBOARD_PLAN.md`, раздел 10.7).
+После запуска интерфейс доступен на `http://<хост>:93/`.
 
-Сервисы:
-
-| Сервис | Назначение | Порт на хосте |
+| Сервис | Назначение | Порт хоста |
 |---|---|---|
-| `db` | PostgreSQL 16 | `5436` → `5432` |
-| `backend` | FastAPI (только внутренняя сеть) | — |
-| `frontend` | Статика Vite-бандла (nginx внутри образа, только внутренняя сеть) | — |
-| `nginx` | Единая точка входа: `/` → frontend, `/api/` → backend | `93` → `80` |
+| `db` | PostgreSQL 16 | `5436` |
+| `backend` | FastAPI/Hypercorn | только внутренняя сеть |
+| `frontend` | собранная Vite-статика | только внутренняя сеть |
+| `nginx` | frontend и proxy `/api/` | `93` |
 
-`entrypoint.sh` backend-контейнера сам прогоняет `alembic upgrade head`, затем `scripts/seed_from_json.py` (идемпотентно — если ИСР уже загружена, ничего не делает) перед стартом сервера.
+`backend/entrypoint.sh` последовательно:
 
-### Переменные окружения — где что лежит
+1. применяет `alembic upgrade head`;
+2. запускает `scripts/seed_from_json.py`;
+3. запускает Hypercorn с access/error logs в stdout.
 
-| Файл | Используется | Ключевые переменные |
-|---|---|---|
-| `.env` (корень) | `docker-compose.yml` → сервис `db` | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` |
-| `backend/.env` | Локальный запуск backend без Docker | `POSTGRES_HOST=localhost`, `POSTGRES_*` |
-| `backend/.env.docker` | `docker-compose.yml` → сервис `backend` | `POSTGRES_HOST=db`, `POSTGRES_*` (значения должны совпадать с корневым `.env`) |
-| `frontend/.env` | Локальный запуск frontend (`npm run dev`) | `VITE_API_URL` |
+Docker-конфигурация не выполняет отдельный импорт документов и не очищает существующую БД.
 
-Каждый файл — самостоятельный (`env_file:` без подстановки переменных между сервисами); при смене пароля/имени БД нужно обновить и `.env`, и `backend/.env.docker` вручную.
+## ИСР и начальные данные
 
----
+Канонический снэпшот находится в `backend/scripts/data/wbs_seed.json` и содержит 247 узлов. `InitialDataService` проверяет:
 
-## Сидинг данных
+- наличие пяти базовых стадий канбана;
+- наличие всех ожидаемых кодов ИСР;
+- наличие связанной задачи у каждого листового узла;
+- версионированный маркер `vera_wbs_v1` в таблице `seed_state`.
 
-- **ИСР + стадии канбана** — `backend/scripts/seed_from_json.py`, запускается автоматически при старте контейнера (через `entrypoint.sh`) и вручную при локальном запуске. Источник — `backend/scripts/data/wbs_seed.json`, сгенерированный из `docs/AGENT_VERA_WBS.txt`. Идемпотентен: если в БД уже есть хотя бы один узел ИСР — пропускает.
-- Чтобы обновить базовый снэпшот после изменения `docs/AGENT_VERA_WBS.txt`:
-  ```bash
-  cd backend
-  python scripts/export_wbs_json.py
-  ```
-  и закоммитить обновлённый `wbs_seed.json`.
-- **Документы** — не сидируются автоматически. Создаются и редактируются прямо в дашборде (`/docs` → «+ Новый документ»).
+Повторный запуск не перезаписывает названия, статусы, сроки и пользовательские задачи. Если базовый узел или его листовая задача отсутствуют, загрузчик восстановит недостающую запись. Пользовательские узлы сверх базового набора сохраняются.
 
----
+Миграции содержат только изменения схемы. Импорт и восстановление данных выполняются отдельными скриптами.
 
-## Полезные команды (backend)
+Чтобы сформировать снэпшот заново:
 
-```bash
-alembic revision --autogenerate -m "описание"   # новая миграция
-alembic upgrade head                             # применить миграции
-python scripts/export_wbs_json.py                # обновить wbs_seed.json из AGENT_VERA_WBS.txt
-python scripts/seed_from_json.py                 # засеять ИСР+стадии (no-op, если уже есть)
+```powershell
+cd backend
+python scripts/export_wbs_json.py
 ```
 
----
+Документы по умолчанию создаются через интерфейс. Опциональный импорт документов и ИСР доступен через `scripts/seed_initial_data.py`.
 
-## Связанные документы
+## Основные API-маршруты
 
-- [`docs/PROJECT_DASHBOARD_PLAN.md`](docs/PROJECT_DASHBOARD_PLAN.md) — архитектурный план, модель данных, API, статус реализации по разделам.
-- [`docs/DESIGN_GUIDE.md`](docs/DESIGN_GUIDE.md) — актуальная дизайн-система.
-- [`DESIGN_REDESIGN_PLAN.md`](DESIGN_REDESIGN_PLAN.md) — план перехода со старой золотой темы на текущий стиль.
-- [`docs/AGENT_VERA_RISK_MANAGEMENT_PLAN.md`](docs/AGENT_VERA_RISK_MANAGEMENT_PLAN.md) — реестр рисков проекта «Агент Вера» с планами реагирования.
-- [`docs/AGENT_VERA_WBS.txt`](docs/AGENT_VERA_WBS.txt) — канонический источник ИСР.
+Все маршруты имеют префикс `/api/v1`.
+
+| Метод | Маршрут | Назначение |
+|---|---|---|
+| `GET/POST` | `/documents` | список/поиск и создание документов |
+| `GET/PATCH/DELETE` | `/documents/{slug}` | просмотр, изменение и удаление документа |
+| `GET` | `/documents/{slug}/links` | связи документа с задачами и ИСР |
+| `GET/POST` | `/kanban/stages` | список и создание стадий |
+| `PATCH/DELETE` | `/kanban/stages/{id}` | изменение и удаление пустой стадии |
+| `GET/POST` | `/kanban/tasks` | список/поиск и создание задач |
+| `GET/PATCH/DELETE` | `/kanban/tasks/{id}` | просмотр, изменение и удаление ручной задачи |
+| `PATCH` | `/kanban/tasks/{id}/move` | перемещение карточки с сохранением позиции |
+| `GET/POST` | `/kanban/tasks/{id}/comments` | комментарии задачи |
+| `GET` | `/kanban/tasks/{id}/activity` | история значимых изменений |
+| `GET` | `/kanban/tasks/{id}/links` | связанные документы |
+| `GET` | `/wbs/tree` | полное дерево ИСР с rollup-прогрессом |
+| `POST/PATCH/DELETE` | `/wbs/items...` | управление узлами ИСР |
+| `POST/DELETE` | `/document-links...` | управление связями документов |
+
+Полный контракт с примерами ответов доступен в Swagger UI.
+
+## Проверки перед коммитом
+
+Backend:
+
+```powershell
+cd backend
+ruff check .
+ruff format --check .
+flake8 .
+pytest -q
+alembic check
+```
+
+Интеграционные repository-тесты используют настоящий PostgreSQL через Testcontainers и требуют запущенный Docker. При локально недоступном Docker они пропускаются; обычные unit/API-тесты продолжают выполняться.
+
+Frontend:
+
+```powershell
+cd frontend
+npm run lint
+npm run build
+```
+
+CI в репозитории пока не настроен: проверки запускаются локально перед commit/push.
+
+## Документация
+
+- [`FASTAPI_PATTERNS.md`](FASTAPI_PATTERNS.md) — обязательные backend-паттерны;
+- [`docs/PROJECT_DASHBOARD_PLAN.md`](docs/PROJECT_DASHBOARD_PLAN.md) — актуальная архитектура и принятые решения;
+- [`docs/DESIGN_GUIDE.md`](docs/DESIGN_GUIDE.md) — дизайн-система интерфейса;
+- [`DESIGN_REDESIGN_PLAN.md`](DESIGN_REDESIGN_PLAN.md) — выполненный план редизайна;
+- [`docs/AGENT_VERA_RISK_MANAGEMENT_PLAN.md`](docs/AGENT_VERA_RISK_MANAGEMENT_PLAN.md) — риски проекта;
+- `docs/AGENT_VERA_WBS.txt` — исходный текст ИСР, если файл присутствует в рабочем наборе проекта.
+
+## Осознанные ограничения
+
+- авторизация пока не реализуется;
+- внешние API и LLM-клиенты отсутствуют;
+- списки канбана, стадий и дерево ИСР возвращаются целиком, поскольку frontend строит полное состояние доски и иерархии;
+- Hunspell и автоматическое исправление опечаток через `pg_trgm` пока не подключены;
+- frontend production bundle требует дальнейшего code splitting, но собирается корректно.

@@ -232,17 +232,22 @@ border border-accent/30
 
 ---
 
-## Панель деталей задачи (TaskDrawer)
+## Модальное окно задачи (TaskModal)
 
-Стиль Postman/Linear side panel:
+Детали задачи показываются в центральном модальном окне, а не в правом sidebar. Внешний контейнер:
 ```
-background: rgba(26,31,46,0.85)
-backdrop-filter: blur(20px)   /* через backdrop-blur-xl */
-border-left: 1px solid rgba(255,255,255,0.06)
-box-shadow: var(--shadow-panel)
+max-width: 48rem
+max-height: calc(100dvh - 2rem)
+background: var(--surface) / 95%
+border: 1px solid rgba(255,255,255,0.15)
+border-radius: 1rem
+backdrop-filter: blur(12px)
+box-shadow: 0 24px 64px rgba(0,0,0,0.65)
 ```
 
-Секции внутри панели — карточки `rounded-xl bg-surface-elevated border border-white/[0.05] p-4`.
+Overlay использует `bg-black/75 backdrop-blur-md`. Секции внутри модального окна — карточки `rounded-xl bg-surface-elevated border border-white/[0.05] p-4`.
+
+Вертикальная прокрутка оформляется общей утилитой `scrollbar-thin`: узкий прозрачный track и скруглённый thumb на токенах темы. Нативная светлая полоса прокрутки внутри тёмной модалки не допускается.
 
 Комментарии — стиль чат-сообщений:
 ```

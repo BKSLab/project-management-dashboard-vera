@@ -24,22 +24,22 @@ function sumProgress(nodes: WbsNode[]): { done: number; total: number } {
 export function HomePage() {
     const documentsQuery = useQuery({
         queryKey: ["documents"],
-        queryFn: () => api.get<DocumentListItem[]>("/api/documents"),
+        queryFn: () => api.get<DocumentListItem[]>("/api/v1/documents"),
     });
 
     const wbsQuery = useQuery({
         queryKey: ["wbs", "tree"],
-        queryFn: () => api.get<WbsNode[]>("/api/wbs/tree"),
+        queryFn: () => api.get<WbsNode[]>("/api/v1/wbs/tree"),
     });
 
     const stagesQuery = useQuery({
         queryKey: ["kanban", "stages"],
-        queryFn: () => api.get<KanbanStage[]>("/api/kanban/stages"),
+        queryFn: () => api.get<KanbanStage[]>("/api/v1/kanban/stages"),
     });
 
     const tasksQuery = useQuery({
         queryKey: ["kanban", "tasks"],
-        queryFn: () => api.get<KanbanTask[]>("/api/kanban/tasks"),
+        queryFn: () => api.get<KanbanTask[]>("/api/v1/kanban/tasks"),
     });
 
     const progress = wbsQuery.data ? sumProgress(wbsQuery.data) : null;

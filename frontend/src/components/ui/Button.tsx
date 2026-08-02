@@ -10,12 +10,7 @@ const variants = {
         "rounded-md bg-surface-hover px-3 py-1.5 text-sm font-medium text-foreground transition-colors duration-150 hover:bg-surface-active focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60",
 } as const;
 
-export type ButtonVariant = keyof typeof variants;
-
-/** Возвращает строку классов для использования на <a> / <Link> */
-export function btnClass(variant: ButtonVariant = "secondary", extra?: string) {
-    return cn(variants[variant], extra);
-}
+type ButtonVariant = keyof typeof variants;
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
     variant?: ButtonVariant;

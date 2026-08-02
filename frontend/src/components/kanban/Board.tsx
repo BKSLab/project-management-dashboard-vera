@@ -14,6 +14,7 @@ import type { KanbanStage, KanbanTask } from "@/lib/types";
 import { compareWbsCode } from "@/lib/sortCode";
 import { Column } from "@/components/kanban/Column";
 import { TaskCardContent } from "@/components/kanban/TaskCard";
+import { ErrorMessage } from "@/components/ui/ErrorMessage";
 
 interface BoardProps {
     stages: KanbanStage[];
@@ -64,7 +65,7 @@ export function Board({ stages, tasks, highlightedTaskId, onTaskClick }: BoardPr
 
     const moveMutation = useMutation({
         mutationFn: ({ taskId, stageId, position }: MoveVariables) =>
-            api.patch<KanbanTask>(`/api/kanban/tasks/${taskId}/move`, { stage_id: stageId, position }),
+            api.patch<KanbanTask>(`/api/v1/kanban/tasks/${taskId}/move`, { stage_id: stageId, position }),
         onMutate: async (variables) => {
             const previous = queryClient.getQueryData<KanbanTask[]>(["kanban", "tasks"]);
             queryClient.setQueryData<KanbanTask[]>(["kanban", "tasks"], (old) =>
@@ -118,17 +119,27 @@ export function Board({ stages, tasks, highlightedTaskId, onTaskClick }: BoardPr
             onDragEnd={handleDragEnd}
             onDragCancel={() => setActiveTask(null)}
         >
-            <div className="scrollbar-thin flex justify-center gap-4 overflow-x-auto pb-4">
-                {stages.map((stage) => (
-                    <Column
-                        key={stage.id}
-                        stage={stage}
-                        tasks={tasksByStage.get(stage.id) ?? []}
-                        highlightedTaskId={highlightedTaskId}
-                        onTaskClick={onTaskClick}
-                        groupByPhase={stage.id === backlogStageId}
+            {moveMutation.isError && (
+                <div className="mb-4">
+                    <ErrorMessage
+                        title="Не удалось переместить задачу"
+                        message={(moveMutation.error as Error).message}
                     />
-                ))}
+                </div>
+            )}
+            <div className="scrollbar-thin overflow-x-auto pb-4">
+                <div className="flex w-max min-w-full justify-start gap-4">
+                    {stages.map((stage) => (
+                        <Column
+                            key={stage.id}
+                            stage={stage}
+                            tasks={tasksByStage.get(stage.id) ?? []}
+                            highlightedTaskId={highlightedTaskId}
+                            onTaskClick={onTaskClick}
+                            groupByPhase={stage.id === backlogStageId}
+                        />
+                    ))}
+                </div>
             </div>
             <DragOverlay>
                 {activeTask && (

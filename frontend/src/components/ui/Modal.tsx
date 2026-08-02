@@ -48,7 +48,7 @@ export function Modal({
                                 <div className="mb-5 flex items-center justify-between gap-4">
                                     <Heading
                                         slot="title"
-                                        className="text-xl font-bold text-foreground"
+                                        className="min-w-0 break-words text-xl font-bold text-foreground"
                                     >
                                         {title}
                                     </Heading>

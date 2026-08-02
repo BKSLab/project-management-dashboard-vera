@@ -11,10 +11,10 @@ import { KanbanPage } from "@/routes/KanbanPage";
 
 function App() {
     return (
-        <div className="flex min-h-screen flex-col">
+        <div className="flex min-h-screen min-w-0 flex-col overflow-x-hidden">
             <SkipLink />
             <Header />
-            <main id="main-content" className="w-full flex-1 px-4 py-8">
+            <main id="main-content" className="min-w-0 w-full flex-1 px-4 py-8">
                 <Routes>
                     <Route path="/" element={<HomePage />} />
                     <Route path="/docs" element={<DocumentsPage />} />

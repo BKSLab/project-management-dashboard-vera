@@ -41,7 +41,9 @@ export function Column({ stage, tasks, highlightedTaskId, onTaskClick, groupByPh
         data: { type: "column" },
     });
 
-    const widthClass = tasks.length > 50 ? "w-[26rem]" : "w-80";
+    const widthClass = tasks.length > 50
+        ? "w-[calc(100vw-2rem)] sm:w-[26rem]"
+        : "w-[calc(100vw-2rem)] sm:w-80";
     const renderItems = buildRenderItems(tasks, groupByPhase);
 
     return (
