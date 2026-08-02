@@ -1,5 +1,5 @@
 import type { DialogProps } from "react-aria-components";
-import { Modal as RACModal, Dialog, Heading } from "react-aria-components";
+import { Modal as RACModal, ModalOverlay, Dialog, Heading } from "react-aria-components";
 import { cn } from "@/lib/cn";
 
 interface ModalProps extends DialogProps {
@@ -8,6 +8,7 @@ interface ModalProps extends DialogProps {
     isOpen?: boolean;
     onOpenChange?: (isOpen: boolean) => void;
     containerClassName?: string;
+    overlayClassName?: string;
 }
 
 export function Modal({
@@ -16,17 +17,20 @@ export function Modal({
     isOpen,
     onOpenChange,
     containerClassName,
+    overlayClassName,
     ...props
 }: ModalProps) {
     return (
-        <RACModal
+        <ModalOverlay
             isOpen={isOpen}
             onOpenChange={onOpenChange}
             isDismissable
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md"
+            className={cn(
+                "fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md",
+                overlayClassName,
+            )}
         >
-            <Dialog
-                {...props}
+            <RACModal
                 className={cn(
                     "relative w-full max-w-md overflow-hidden rounded-2xl",
                     "border border-white/15",
@@ -36,53 +40,55 @@ export function Modal({
                     containerClassName
                 )}
             >
-                {({ close }) => (
-                    <>
-                        <div
-                            aria-hidden="true"
-                            className="h-px bg-gradient-to-r from-transparent via-accent to-transparent"
-                        />
+                <Dialog {...props} className="outline-none">
+                    {({ close }) => (
+                        <>
+                            <div
+                                aria-hidden="true"
+                                className="h-px bg-gradient-to-r from-transparent via-accent to-transparent"
+                            />
 
-                        <div className="p-6">
-                            {title && (
-                                <div className="mb-5 flex items-center justify-between gap-4">
-                                    <Heading
-                                        slot="title"
-                                        className="min-w-0 break-words text-xl font-bold text-foreground"
-                                    >
-                                        {title}
-                                    </Heading>
-                                    <button
-                                        onClick={close}
-                                        aria-label="Закрыть"
-                                        className="shrink-0 rounded-lg p-1.5 text-muted transition-colors hover:bg-white/10 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-                                    >
-                                        <svg
-                                            width="16"
-                                            height="16"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            strokeWidth="2.5"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            aria-hidden="true"
+                            <div className="p-6">
+                                {title && (
+                                    <div className="mb-5 flex items-center justify-between gap-4">
+                                        <Heading
+                                            slot="title"
+                                            className="min-w-0 break-words text-xl font-bold text-foreground"
                                         >
-                                            <path d="M18 6L6 18M6 6l12 12" />
-                                        </svg>
-                                    </button>
-                                </div>
-                            )}
-                            {children}
-                        </div>
+                                            {title}
+                                        </Heading>
+                                        <button
+                                            onClick={close}
+                                            aria-label="Закрыть"
+                                            className="shrink-0 rounded-lg p-1.5 text-muted transition-colors hover:bg-white/10 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                                        >
+                                            <svg
+                                                width="16"
+                                                height="16"
+                                                viewBox="0 0 24 24"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                strokeWidth="2.5"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                                aria-hidden="true"
+                                            >
+                                                <path d="M18 6L6 18M6 6l12 12" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                )}
+                                {children}
+                            </div>
 
-                        <div
-                            aria-hidden="true"
-                            className="h-px bg-gradient-to-r from-transparent via-white/8 to-transparent"
-                        />
-                    </>
-                )}
-            </Dialog>
-        </RACModal>
+                            <div
+                                aria-hidden="true"
+                                className="h-px bg-gradient-to-r from-transparent via-white/8 to-transparent"
+                            />
+                        </>
+                    )}
+                </Dialog>
+            </RACModal>
+        </ModalOverlay>
     );
 }

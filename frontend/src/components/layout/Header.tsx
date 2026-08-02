@@ -9,7 +9,7 @@ const navItems = [
 export function Header() {
     return (
         <header
-            className="sticky top-0 z-40 border-b border-white/[0.06] backdrop-blur-md backdrop-saturate-150"
+            className="sticky top-0 z-40 w-full min-w-0 overflow-hidden border-b border-white/[0.06] backdrop-blur-md backdrop-saturate-150"
             style={{ backgroundColor: "rgba(36,43,61,0.65)" }}
         >
             <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-3 px-4">
@@ -17,12 +17,12 @@ export function Header() {
                     <span className="whitespace-nowrap">Агент Вера</span>
                     <span className="hidden sm:inline"> · Дашборд</span>
                 </NavLink>
-                <nav className="flex shrink-0 items-center gap-3 sm:gap-6" aria-label="Основная навигация">
+                <nav className="flex min-w-0 shrink items-center gap-2 sm:shrink-0 sm:gap-6" aria-label="Основная навигация">
                     {navItems.map((item) => (
                         <NavLink
                             key={item.to}
                             to={item.to}
-                            className="text-xs text-muted transition-colors hover:text-foreground sm:text-sm"
+                            className="whitespace-nowrap text-[11px] text-muted transition-colors hover:text-foreground sm:text-sm"
                         >
                             {item.label}
                         </NavLink>

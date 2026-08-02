@@ -14,16 +14,19 @@ export function FilePreviewModal({
     const previewKey = `${file?.key ?? ""}:${file?.url ?? ""}`;
     const loadFailed = failedPreviewKey === previewKey;
 
+    if (!file) return null;
+
     return (
         <Modal
-            isOpen={Boolean(file)}
+            isOpen
             onOpenChange={(isOpen) => {
                 if (!isOpen) onClose();
             }}
-            title={file?.name ?? "Изображение"}
+            title={file.name}
             containerClassName="max-h-[calc(100dvh-2rem)] max-w-5xl overflow-y-auto bg-surface/95"
+            overlayClassName="z-[60]"
         >
-            {file?.url && (
+            {file.url && (
                 <div className="flex flex-col gap-3">
                     <div className="flex min-h-52 items-center justify-center overflow-hidden rounded-xl border border-white/[0.07] bg-background">
                         {!loadFailed ? (
@@ -42,7 +45,29 @@ export function FilePreviewModal({
                             </div>
                         )}
                     </div>
-                    <div className="flex justify-end">
+                    <div className="flex flex-wrap justify-end gap-2">
+                        <a
+                            href={file.url}
+                            download={file.name}
+                            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-colors hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                        >
+                            Скачать
+                            <svg
+                                width="12"
+                                height="12"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                aria-hidden="true"
+                            >
+                                <path d="M12 3v12" />
+                                <path d="m7 10 5 5 5-5" />
+                                <path d="M5 21h14" />
+                            </svg>
+                        </a>
                         <a
                             href={file.url}
                             target="_blank"

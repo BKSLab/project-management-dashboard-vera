@@ -21,7 +21,7 @@ export function FileTile({
     );
     const formattedSize = formatFileSize(file.size);
     const contentClassName = cn(
-        "flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left",
+        "group flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left",
         "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
         file.url && "hover:text-accent-hover",
     );
@@ -29,13 +29,21 @@ export function FileTile({
     const content = (
         <>
             {canPreview ? (
-                <img
-                    src={file.url!}
-                    alt=""
-                    loading="lazy"
-                    className="h-11 w-11 shrink-0 rounded-lg border border-white/10 bg-surface object-cover"
-                    onError={() => setFailedPreviewKey(previewKey)}
-                />
+                <span className="relative h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-surface">
+                    <img
+                        src={file.url!}
+                        alt=""
+                        loading="lazy"
+                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                        onError={() => setFailedPreviewKey(previewKey)}
+                    />
+                    <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <circle cx="11" cy="11" r="7" />
+                            <path d="m20 20-3.5-3.5M11 8v6M8 11h6" />
+                        </svg>
+                    </span>
+                </span>
             ) : (
                 <FileTypeIcon file={file} />
             )}
