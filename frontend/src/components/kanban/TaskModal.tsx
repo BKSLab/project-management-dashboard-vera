@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiUrl } from "@/lib/api";
 import type {
     DocumentListItem,
+    KanbanStage,
     KanbanTask,
     LinkedDocument,
     TaskActivity,
@@ -41,6 +42,11 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
     const [selectedDocId, setSelectedDocId] = useState("");
     const [attachmentError, setAttachmentError] = useState<string | null>(null);
 
+    const stagesQuery = useQuery({
+        queryKey: ["kanban", "stages"],
+        queryFn: () => api.get<KanbanStage[]>("/api/v1/kanban/stages"),
+    });
+
     const invalidateTask = () => {
         queryClient.invalidateQueries({ queryKey: ["kanban", "tasks"] });
         queryClient.invalidateQueries({ queryKey: ["kanban", "tasks", task.id, "activity"] });
@@ -53,6 +59,20 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
         onSuccess: () => {
             invalidateTask();
             setIsEditingDescription(false);
+        },
+    });
+
+    const moveMutation = useMutation({
+        mutationFn: (stageId: number) =>
+            api.patch<KanbanTask>(`/api/v1/kanban/tasks/${task.id}/move`, {
+                stage_id: stageId,
+            }),
+        onSuccess: (movedTask) => {
+            queryClient.setQueryData(
+                ["kanban", "tasks", "detail", task.id],
+                movedTask,
+            );
+            invalidateTask();
         },
     });
 
@@ -165,6 +185,7 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
 
     const mutationError =
         updateMutation.error ??
+        moveMutation.error ??
         linkMutation.error ??
         unlinkMutation.error ??
         addCommentMutation.error;
@@ -191,6 +212,37 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                         Открыть в ИСР →
                     </Link>
                 )}
+
+                <section className="mb-4 rounded-xl border border-white/[0.05] bg-surface-elevated p-4">
+                    <label
+                        htmlFor={`task-stage-${task.id}`}
+                        className="mb-2 block text-sm font-semibold text-muted"
+                    >
+                        Стадия
+                    </label>
+                    <select
+                        id={`task-stage-${task.id}`}
+                        value={task.stage_id}
+                        disabled={stagesQuery.isPending || stagesQuery.isError || moveMutation.isPending}
+                        aria-busy={moveMutation.isPending}
+                        onChange={(event) => {
+                            const stageId = Number(event.target.value);
+                            if (stageId !== task.stage_id) moveMutation.mutate(stageId);
+                        }}
+                        className="w-full rounded border border-border bg-surface px-3 py-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        {stagesQuery.data?.map((stage) => (
+                            <option key={stage.id} value={stage.id}>
+                                {stage.name}
+                            </option>
+                        ))}
+                    </select>
+                    {stagesQuery.isError && (
+                        <p className="mt-2 text-sm text-danger" role="alert">
+                            Не удалось загрузить список стадий.
+                        </p>
+                    )}
+                </section>
 
                 <section className="mb-4 rounded-xl border border-white/[0.05] bg-surface-elevated p-4">
                     <div className="mb-2 flex items-center justify-between">

@@ -258,13 +258,19 @@ class KanbanTasksService:
             logger.error("❌ Ошибка обновления задачи id=%s.", task_id, exc_info=True)
             raise KanbanTasksServiceError(str(error)) from error
 
-    async def move_task(self, task_id: int, stage_id: int, position: float) -> TaskSchema:
+    async def move_task(
+        self,
+        task_id: int,
+        stage_id: int,
+        position: float | None = None,
+    ) -> TaskSchema:
         """Перемещает задачу и фиксирует смену стадии в истории.
 
         Args:
             task_id: Идентификатор задачи.
             stage_id: Идентификатор целевой стадии.
-            position: Позиция задачи внутри стадии.
+            position: Позиция задачи внутри стадии. Если не указана, задача
+                помещается в конец целевой стадии.
 
         Returns:
             Перемещённая карточка задачи.
@@ -281,6 +287,14 @@ class KanbanTasksService:
             target_stage = await self.stages_repository.get_by_id(stage_id=stage_id)
             if target_stage is None:
                 raise KanbanStageNotFoundError(stage_id=stage_id)
+            if task.stage_id == stage_id and position is None:
+                return TaskSchema.model_validate(task)
+            target_position = position
+            if target_position is None:
+                max_position = await self.tasks_repository.get_max_position_by_stage(
+                    stage_id=stage_id
+                )
+                target_position = max_position + 1000.0
             if task.stage_id != stage_id:
                 current_stage = await self.stages_repository.get_by_id(stage_id=task.stage_id)
                 await self.activity_repository.save(
@@ -291,7 +305,7 @@ class KanbanTasksService:
                 )
             updated = await self.tasks_repository.update(
                 task=task,
-                data={"stage_id": stage_id, "position": position},
+                data={"stage_id": stage_id, "position": target_position},
             )
             return TaskSchema.model_validate(updated)
         except (KanbanTaskNotFoundError, KanbanStageNotFoundError):

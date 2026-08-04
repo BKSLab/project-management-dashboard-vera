@@ -181,7 +181,10 @@ async def update_task(
     path="/{task_id}/move",
     status_code=status.HTTP_200_OK,
     summary="Переместить задачу канбана",
-    description="Изменяет стадию и позицию задачи с записью истории перехода.",
+    description=(
+        "Изменяет стадию и позицию задачи с записью истории перехода. "
+        "Если позиция не указана, задача помещается в конец целевой стадии."
+    ),
     operation_id="moveKanbanTask",
     response_description="Перемещённая задача канбана.",
     responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},

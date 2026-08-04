@@ -201,6 +201,36 @@ class KanbanTasksRepository:
                 f"Ошибка подсчёта задач стадии id={stage_id}."
             ) from error
 
+    async def get_max_position_by_stage(self, stage_id: int) -> float:
+        """Возвращает наибольшую позицию задачи в указанной стадии.
+
+        Args:
+            stage_id: Идентификатор стадии.
+
+        Returns:
+            Наибольшая позиция или ``0.0`` для пустой стадии.
+
+        Raises:
+            KanbanTasksRepositoryError: Если запрос завершился ошибкой.
+        """
+        try:
+            result: Result = await self.db_session.execute(
+                select(func.coalesce(func.max(KanbanTask.position), 0.0)).where(
+                    KanbanTask.stage_id == stage_id
+                )
+            )
+            return float(result.scalar_one())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось получить максимальную позицию стадии id=%s.",
+                stage_id,
+                exc_info=True,
+            )
+            raise KanbanTasksRepositoryError(
+                f"Ошибка получения позиции задач стадии id={stage_id}."
+            ) from error
+
     async def get_search_highlights(
         self,
         task_ids: list[int],

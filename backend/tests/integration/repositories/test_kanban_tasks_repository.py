@@ -87,3 +87,33 @@ async def test_save_on_real_postgres_rejects_duplicate_wbs_link(
 
     with pytest.raises(KanbanTaskWbsLinkAlreadyExistsRepositoryError):
         await tasks_repository.save(data=task_data)
+
+
+@pytest.mark.asyncio
+async def test_get_max_position_by_stage_on_real_postgres(
+    db_session: AsyncSession,
+) -> None:
+    stages_repository = KanbanStagesRepository(db_session)
+    tasks_repository = KanbanTasksRepository(db_session)
+    stage = await stages_repository.save(
+        data={
+            "name": "В работе",
+            "order_index": 2,
+            "color": "#F5B800",
+            "is_done_stage": False,
+        }
+    )
+    assert await tasks_repository.get_max_position_by_stage(stage_id=stage.id) == 0.0
+
+    for position in (1000.0, 2500.0, 1200.0):
+        await tasks_repository.save(
+            data={
+                "stage_id": stage.id,
+                "title": f"Задача {position}",
+                "position": position,
+            }
+        )
+
+    max_position = await tasks_repository.get_max_position_by_stage(stage_id=stage.id)
+
+    assert max_position == 2500.0

@@ -137,7 +137,12 @@ class TaskUpdateSchema(BaseModel):
 class TaskMoveSchema(BaseModel):
     """Тело запроса для перемещения задачи."""
 
-    model_config = ConfigDict(json_schema_extra={"example": {"stage_id": 3, "position": 2.0}})
+    model_config = ConfigDict(json_schema_extra={"example": {"stage_id": 3}})
 
     stage_id: int = Field(..., gt=0, description="Целевая стадия.", examples=[3])
-    position: float = Field(..., ge=0, description="Новая позиция внутри стадии.", examples=[2.0])
+    position: float | None = Field(
+        None,
+        ge=0,
+        description="Новая позиция внутри стадии; без значения задача ставится в конец.",
+        examples=[2.0],
+    )
