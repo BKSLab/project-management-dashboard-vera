@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiUrl } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import type {
     DocumentListItem,
     KanbanStage,
@@ -13,7 +14,7 @@ import type {
 } from "@/lib/types";
 import type { FileDescriptor } from "@/lib/files";
 import { Button } from "@/components/ui/Button";
-import { Spinner } from "@/components/ui/Spinner";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { Modal } from "@/components/ui/Modal";
 import { FileList } from "@/components/files/FileList";
@@ -31,10 +32,58 @@ const EVENT_LABELS: Record<TaskActivity["event_type"], string> = {
     COMMENT_ADDED: "Добавлен комментарий",
 };
 
+type TaskSection = "description" | "comments" | "files" | "documents" | "history";
+
+function AttachmentsSkeleton() {
+    return (
+        <div role="status" aria-live="polite" aria-label="Загрузка файлов..." className="flex flex-wrap gap-2">
+            {Array.from({ length: 3 }).map((_, index) => (
+                <div
+                    key={index}
+                    className="flex w-[220px] max-w-full items-center gap-2.5 rounded-xl border border-white/[0.07] bg-surface p-2"
+                >
+                    <Skeleton className="h-11 w-11 shrink-0 rounded-lg" />
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                        <Skeleton className="h-3 w-4/5" />
+                        <Skeleton className="h-2.5 w-1/3" />
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function CommentsSkeleton() {
+    return (
+        <ul role="status" aria-live="polite" aria-label="Загрузка комментариев..." className="mb-3 space-y-2">
+            {Array.from({ length: 3 }).map((_, index) => (
+                <li key={index} className="space-y-2 rounded-xl bg-white/[0.04] p-3">
+                    <Skeleton className="h-3 w-32" />
+                    <Skeleton className="h-3 w-full" />
+                    <Skeleton className="h-3 w-2/3" />
+                </li>
+            ))}
+        </ul>
+    );
+}
+
+function HistorySkeleton() {
+    return (
+        <ul role="status" aria-live="polite" aria-label="Загрузка истории..." className="space-y-1">
+            {Array.from({ length: 4 }).map((_, index) => (
+                <li key={index}>
+                    <Skeleton className="h-3 w-4/5" />
+                </li>
+            ))}
+        </ul>
+    );
+}
+
 export function TaskModal({ task, onClose }: TaskModalProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const attachmentSectionRef = useRef<HTMLElement>(null);
+    const [activeSection, setActiveSection] = useState<TaskSection>("description");
     const [isEditingDescription, setIsEditingDescription] = useState(false);
     const [descriptionDraft, setDescriptionDraft] = useState(task.description_md ?? "");
     const [commentDraft, setCommentDraft] = useState("");
@@ -190,6 +239,14 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
         unlinkMutation.error ??
         addCommentMutation.error;
 
+    const navItems: { key: TaskSection; label: string; count: number | null }[] = [
+        { key: "description", label: "Описание", count: null },
+        { key: "comments", label: "Комментарии", count: commentsQuery.data?.length ?? null },
+        { key: "files", label: "Файлы", count: attachmentsQuery.data?.length ?? null },
+        { key: "documents", label: "Документы", count: linksQuery.data?.length ?? null },
+        { key: "history", label: "История", count: activityQuery.data?.length ?? null },
+    ];
+
     return (
         <Modal
             title={task.title}
@@ -197,7 +254,7 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
             onOpenChange={(isOpen) => {
                 if (!isOpen) onClose();
             }}
-            containerClassName="scrollbar-thin max-h-[calc(100dvh-2rem)] max-w-3xl overflow-x-hidden overflow-y-auto bg-surface/95"
+            containerClassName="scrollbar-thin max-h-[calc(100dvh-2rem)] w-full max-w-4xl overflow-x-hidden overflow-y-auto bg-surface/95"
         >
                 <p className="mb-3 font-mono text-xs text-muted">TASK-{task.id}</p>
 
@@ -213,38 +270,80 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                     </Link>
                 )}
 
-                <section className="mb-4 rounded-xl border border-white/[0.05] bg-surface-elevated p-4">
-                    <label
-                        htmlFor={`task-stage-${task.id}`}
-                        className="mb-2 block text-sm font-semibold text-muted"
-                    >
-                        Стадия
-                    </label>
-                    <select
-                        id={`task-stage-${task.id}`}
-                        value={task.stage_id}
-                        disabled={stagesQuery.isPending || stagesQuery.isError || moveMutation.isPending}
-                        aria-busy={moveMutation.isPending}
-                        onChange={(event) => {
-                            const stageId = Number(event.target.value);
-                            if (stageId !== task.stage_id) moveMutation.mutate(stageId);
-                        }}
-                        className="w-full rounded border border-border bg-surface px-3 py-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                        {stagesQuery.data?.map((stage) => (
-                            <option key={stage.id} value={stage.id}>
-                                {stage.name}
-                            </option>
-                        ))}
-                    </select>
-                    {stagesQuery.isError && (
-                        <p className="mt-2 text-sm text-danger" role="alert">
-                            Не удалось загрузить список стадий.
-                        </p>
-                    )}
+                <section className="mb-4 grid gap-4 rounded-xl border border-white/[0.05] bg-surface-elevated p-4 sm:grid-cols-2">
+                    <div>
+                        <label
+                            htmlFor={`task-stage-${task.id}`}
+                            className="mb-2 block text-sm font-semibold text-muted"
+                        >
+                            Стадия
+                        </label>
+                        <select
+                            id={`task-stage-${task.id}`}
+                            value={task.stage_id}
+                            disabled={stagesQuery.isPending || stagesQuery.isError || moveMutation.isPending}
+                            aria-busy={moveMutation.isPending}
+                            onChange={(event) => {
+                                const stageId = Number(event.target.value);
+                                if (stageId !== task.stage_id) moveMutation.mutate(stageId);
+                            }}
+                            className="w-full rounded border border-border bg-surface px-3 py-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {stagesQuery.data?.map((stage) => (
+                                <option key={stage.id} value={stage.id}>
+                                    {stage.name}
+                                </option>
+                            ))}
+                        </select>
+                        {stagesQuery.isError && (
+                            <p className="mt-2 text-sm text-danger" role="alert">
+                                Не удалось загрузить список стадий.
+                            </p>
+                        )}
+                    </div>
+
+                    <div>
+                        <h3 className="mb-2 text-sm font-semibold text-muted">Срок</h3>
+                        <input
+                            type="date"
+                            value={task.due_date ?? ""}
+                            onChange={(event) =>
+                                updateMutation.mutate({ due_date: event.target.value || null })
+                            }
+                            className="w-full rounded border border-border bg-surface px-3 py-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                        />
+                    </div>
                 </section>
 
-                <section className="mb-4 rounded-xl border border-white/[0.05] bg-surface-elevated p-4">
+                <div className="flex flex-col gap-4 md:flex-row md:items-start">
+                    <nav
+                        aria-label="Разделы задачи"
+                        className="flex shrink-0 gap-1 overflow-x-auto pb-1 md:w-40 md:flex-col md:overflow-visible md:pb-0"
+                    >
+                        {navItems.map((item) => (
+                            <button
+                                key={item.key}
+                                type="button"
+                                onClick={() => setActiveSection(item.key)}
+                                aria-current={activeSection === item.key ? "true" : undefined}
+                                className={cn(
+                                    "flex shrink-0 items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+                                    activeSection === item.key
+                                        ? "bg-surface-active text-foreground shadow-[var(--shadow-card)]"
+                                        : "text-muted hover:bg-white/5 hover:text-foreground",
+                                )}
+                            >
+                                <span>{item.label}</span>
+                                {item.count !== null && (
+                                    <span className="font-mono text-xs opacity-70">{item.count}</span>
+                                )}
+                            </button>
+                        ))}
+                    </nav>
+
+                    <div className="min-w-0 flex-1">
+                    {activeSection === "description" && (
+                <section className="rounded-xl border border-white/[0.05] bg-surface-elevated p-4">
                     <div className="mb-2 flex items-center justify-between">
                         <h3 className="text-sm font-semibold text-muted">Описание</h3>
                         {!isEditingDescription && (
@@ -287,22 +386,12 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                         <p className="text-sm text-muted">Описание не задано.</p>
                     )}
                 </section>
+                    )}
 
-                <section className="mb-4 rounded-xl border border-white/[0.05] bg-surface-elevated p-4">
-                    <h3 className="mb-2 text-sm font-semibold text-muted">Срок</h3>
-                    <input
-                        type="date"
-                        value={task.due_date ?? ""}
-                        onChange={(event) =>
-                            updateMutation.mutate({ due_date: event.target.value || null })
-                        }
-                        className="rounded border border-border bg-surface px-3 py-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-                    />
-                </section>
-
+                    {activeSection === "files" && (
                 <section
                     ref={attachmentSectionRef}
-                    className="mb-4 rounded-xl border border-white/[0.05] bg-surface-elevated p-4"
+                    className="rounded-xl border border-white/[0.05] bg-surface-elevated p-4"
                 >
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                         <h3 className="text-sm font-semibold text-muted">
@@ -325,7 +414,7 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                         />
                     </div>
 
-                    {attachmentsQuery.isPending && <Spinner />}
+                    {attachmentsQuery.isPending && <AttachmentsSkeleton />}
                     {attachmentsQuery.isError && (
                         <ErrorMessage message={(attachmentsQuery.error as Error).message} />
                     )}
@@ -354,8 +443,10 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                         </p>
                     )}
                 </section>
+                    )}
 
-                <section className="mb-4 rounded-xl border border-white/[0.05] bg-surface-elevated p-4">
+                    {activeSection === "documents" && (
+                <section className="rounded-xl border border-white/[0.05] bg-surface-elevated p-4">
                     <h3 className="mb-2 text-sm font-semibold text-muted">
                         Связанные документы
                     </h3>
@@ -409,10 +500,12 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                         </Button>
                     </div>
                 </section>
+                    )}
 
-                <section className="mb-4 rounded-xl border border-white/[0.05] bg-surface-elevated p-4">
+                    {activeSection === "comments" && (
+                <section className="rounded-xl border border-white/[0.05] bg-surface-elevated p-4">
                     <h3 className="mb-2 text-sm font-semibold text-muted">Комментарии</h3>
-                    {commentsQuery.isPending && <Spinner />}
+                    {commentsQuery.isPending && <CommentsSkeleton />}
                     <ul className="mb-3 space-y-2">
                         {commentsQuery.data?.map((comment) => (
                             <li key={comment.id} className="rounded-xl bg-white/[0.04] p-3 text-sm">
@@ -449,10 +542,12 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                         </Button>
                     </div>
                 </section>
+                    )}
 
+                    {activeSection === "history" && (
                 <section className="rounded-xl border border-white/[0.05] bg-surface-elevated p-4">
                     <h3 className="mb-2 text-sm font-semibold text-muted">История</h3>
-                    {activityQuery.isPending && <Spinner />}
+                    {activityQuery.isPending && <HistorySkeleton />}
                     <ul className="space-y-1">
                         {activityQuery.data?.map((activity) => (
                             <li key={activity.id} className="text-xs text-muted">
@@ -466,6 +561,9 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                         ))}
                     </ul>
                 </section>
+                    )}
+                    </div>
+                </div>
         </Modal>
     );
 }

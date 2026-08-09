@@ -4,10 +4,50 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { KanbanStage, KanbanTask } from "@/lib/types";
 import { FocusHeading } from "@/components/ui/FocusHeading";
-import { Spinner } from "@/components/ui/Spinner";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { Board } from "@/components/kanban/Board";
 import { TaskModal } from "@/components/kanban/TaskModal";
+
+const BOARD_SKELETON_COLUMNS = [3, 4, 2, 3, 5];
+
+function BoardSkeleton() {
+    return (
+        <div
+            role="status"
+            aria-live="polite"
+            aria-label="Загрузка канбана..."
+            className="scrollbar-thin overflow-x-auto pb-4"
+        >
+            <div className="flex w-max min-w-full justify-start gap-4">
+                {BOARD_SKELETON_COLUMNS.map((cardCount, columnIndex) => (
+                    <div
+                        key={columnIndex}
+                        className="flex h-[75vh] w-[calc(100vw-2rem)] shrink-0 flex-col rounded-2xl border border-white/[0.05] bg-surface sm:w-80"
+                    >
+                        <div className="flex items-center justify-between gap-2 border-b-2 border-white/10 px-4 py-3">
+                            <Skeleton className="h-4 w-24" />
+                            <Skeleton className="h-3 w-10" />
+                        </div>
+                        <div className="flex flex-1 flex-col gap-3 p-4">
+                            {Array.from({ length: cardCount }).map((_, cardIndex) => (
+                                <div
+                                    key={cardIndex}
+                                    className="space-y-2 rounded-xl border border-white/[0.05] bg-surface-elevated p-3"
+                                >
+                                    <Skeleton className="h-3 w-16" />
+                                    <Skeleton className="h-4 w-4/5" />
+                                    <Skeleton className="h-3 w-full" />
+                                    <Skeleton className="h-3 w-2/3" />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
 
 export function KanbanPage() {
     const [searchParams] = useSearchParams();
@@ -60,7 +100,7 @@ export function KanbanPage() {
                 />
             </div>
 
-            {isPending && <Spinner />}
+            {isPending && <BoardSkeleton />}
             {error && <ErrorMessage message={(error as Error).message} />}
 
             {stagesQuery.data && tasksQuery.data && (

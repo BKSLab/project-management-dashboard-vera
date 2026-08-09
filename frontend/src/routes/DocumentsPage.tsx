@@ -4,11 +4,32 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { DocumentListItem } from "@/lib/types";
 import { FocusHeading } from "@/components/ui/FocusHeading";
-import { Spinner } from "@/components/ui/Spinner";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
 import { DocumentList } from "@/components/docs/DocumentList";
+
+function DocumentsSkeleton() {
+    return (
+        <ul
+            role="status"
+            aria-live="polite"
+            aria-label="Загрузка документов..."
+            className="divide-y divide-white/8 rounded-lg border border-white/20 bg-surface"
+        >
+            {Array.from({ length: 6 }).map((_, index) => (
+                <li key={index} className="flex items-center justify-between gap-4 px-6 py-4">
+                    <div className="min-w-0 flex-1 space-y-2">
+                        <Skeleton className="h-4 w-2/5" />
+                        <Skeleton className="h-3 w-4/5" />
+                    </div>
+                    <Skeleton className="h-3 w-14 shrink-0" />
+                </li>
+            ))}
+        </ul>
+    );
+}
 
 export function DocumentsPage() {
     const navigate = useNavigate();
@@ -43,7 +64,7 @@ export function DocumentsPage() {
                 </div>
             </div>
 
-            {isPending && <Spinner />}
+            {isPending && <DocumentsSkeleton />}
             {isError && <ErrorMessage message={(error as Error).message} />}
             {data && data.length === 0 && (
                 <EmptyState

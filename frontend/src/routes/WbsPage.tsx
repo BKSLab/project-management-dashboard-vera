@@ -10,7 +10,7 @@ import type {
     WbsRole,
 } from "@/lib/types";
 import { FocusHeading } from "@/components/ui/FocusHeading";
-import { Spinner } from "@/components/ui/Spinner";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
@@ -18,6 +18,56 @@ import { ItemForm, WbsNode } from "@/components/wbs/WbsNode";
 import { WbsMap } from "@/components/wbs/WbsMap";
 import { TaskModal } from "@/components/kanban/TaskModal";
 import { useUiStore } from "@/stores/ui";
+
+const WBS_TREE_SKELETON_ROWS = [
+    { depth: 0, width: "w-56" },
+    { depth: 1, width: "w-48" },
+    { depth: 2, width: "w-40" },
+    { depth: 2, width: "w-36" },
+    { depth: 1, width: "w-44" },
+    { depth: 2, width: "w-40" },
+    { depth: 0, width: "w-52" },
+    { depth: 1, width: "w-40" },
+];
+
+function WbsTreeSkeleton() {
+    return (
+        <ul
+            role="status"
+            aria-live="polite"
+            aria-label="Загрузка ИСР..."
+            className="rounded-lg border border-white/20 bg-surface p-2"
+        >
+            {WBS_TREE_SKELETON_ROWS.map((row, index) => (
+                <li
+                    key={index}
+                    className="flex items-center gap-2 rounded px-2 py-2"
+                    style={{ paddingLeft: `${row.depth * 1.25 + 0.5}rem` }}
+                >
+                    <Skeleton className="h-3 w-3 shrink-0 rounded-sm" />
+                    <Skeleton className={`h-4 ${row.width}`} />
+                </li>
+            ))}
+        </ul>
+    );
+}
+
+function WbsMapSkeleton() {
+    return (
+        <div
+            role="status"
+            aria-live="polite"
+            aria-label="Загрузка карты ИСР..."
+            className="overflow-hidden rounded-2xl border border-white/[0.08] bg-surface"
+        >
+            <div className="space-y-3 border-b border-white/[0.06] bg-surface-elevated/80 p-4">
+                <Skeleton className="h-3 w-32" />
+                <Skeleton className="h-7 w-24" />
+            </div>
+            <Skeleton className="h-[68dvh] min-h-[560px] max-h-[880px] w-full rounded-none" />
+        </div>
+    );
+}
 
 export function WbsPage() {
     const queryClient = useQueryClient();
@@ -144,7 +194,7 @@ export function WbsPage() {
                 </div>
             )}
 
-            {isPending && <Spinner />}
+            {isPending && (view === "tree" ? <WbsTreeSkeleton /> : <WbsMapSkeleton />)}
             {error && <ErrorMessage message={(error as Error).message} />}
             {treeQuery.data && treeQuery.data.length === 0 && <EmptyState message="Дерево ИСР пусто." />}
             {view === "map" && treeQuery.data && treeQuery.data.length > 0 && stagesQuery.data && (

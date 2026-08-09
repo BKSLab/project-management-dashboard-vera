@@ -2,13 +2,35 @@ import { useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import type { DocumentDetail } from "@/lib/types";
 import { FocusHeading } from "@/components/ui/FocusHeading";
-import { Spinner } from "@/components/ui/Spinner";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { Button } from "@/components/ui/Button";
 import { MarkdownEditor } from "@/components/docs/MarkdownEditor";
 import { useRenderedMarkdown } from "@/lib/useRenderedMarkdown";
+
+const PARAGRAPH_WIDTHS = ["w-full", "w-11/12", "w-4/5", "w-full", "w-3/5", "w-full", "w-2/3"];
+
+function DocumentDetailSkeleton() {
+    return (
+        <div className="mx-auto max-w-6xl" role="status" aria-live="polite" aria-label="Загрузка документа...">
+            <div className="mb-6 flex items-center justify-between gap-4">
+                <Skeleton className="h-8 w-72" />
+                <div className="flex gap-2">
+                    <Skeleton className="h-8 w-28 rounded-md" />
+                    <Skeleton className="h-8 w-24 rounded-md" />
+                </div>
+            </div>
+            <div className="space-y-3">
+                {PARAGRAPH_WIDTHS.map((width, index) => (
+                    <Skeleton key={index} className={cn("h-4", width)} />
+                ))}
+            </div>
+        </div>
+    );
+}
 
 export function DocumentDetailPage() {
     const { slug } = useParams<{ slug: string }>();
@@ -49,7 +71,7 @@ export function DocumentDetailPage() {
 
     const previewHtml = useRenderedMarkdown(data?.content_md ?? "");
 
-    if (isPending) return <Spinner />;
+    if (isPending) return <DocumentDetailSkeleton />;
     if (isError) return <ErrorMessage message={(error as Error).message} />;
     if (!data) return null;
 

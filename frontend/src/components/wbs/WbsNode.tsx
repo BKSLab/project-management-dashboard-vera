@@ -30,12 +30,18 @@ interface WbsNodeProps {
 
 function ProgressBar({ done, total }: { done: number; total: number }) {
     const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+    const completed = total > 0 && done === total;
     return (
         <div className="flex items-center gap-2">
             <div className="h-1.5 w-24 overflow-hidden rounded-full bg-border">
-                <div className="h-full rounded-full bg-accent" style={{ width: `${percent}%` }} />
+                <div
+                    className={cn("h-full rounded-full", completed ? "bg-success" : "bg-accent")}
+                    style={{ width: `${percent}%` }}
+                />
             </div>
-            <span className="text-xs text-muted">{done}/{total}</span>
+            <span className={cn("text-xs", completed ? "font-semibold text-success" : "text-muted")}>
+                {done}/{total}
+            </span>
         </div>
     );
 }
@@ -155,11 +161,18 @@ export function WbsNode({ node, depth }: WbsNodeProps) {
         <li>
             <div
                 className={cn(
-                    "group flex items-center gap-2 rounded px-2 py-1.5 hover:bg-surface-hover",
+                    "group relative flex items-center gap-2 rounded px-2 py-1.5 hover:bg-surface-hover",
                     isPhase && "mt-2 border-t border-border pt-2 first:mt-0 first:border-t-0"
                 )}
                 style={{ paddingLeft: `${depth * 1.25}rem` }}
             >
+                {isLeaf && node.task && (
+                    <span
+                        aria-hidden="true"
+                        className="absolute inset-y-1 left-0 w-[3px] rounded-full"
+                        style={{ backgroundColor: stageColor }}
+                    />
+                )}
                 {hasChildren ? (
                     <button
                         onClick={() => toggle(node.id)}
