@@ -254,8 +254,10 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
             onOpenChange={(isOpen) => {
                 if (!isOpen) onClose();
             }}
-            containerClassName="scrollbar-thin max-h-[calc(100dvh-2rem)] w-full max-w-4xl overflow-x-hidden overflow-y-auto bg-surface/95"
+            containerClassName="h-[82dvh] min-h-[520px] max-h-[860px] w-full max-w-5xl bg-surface/95"
         >
+            <div className="flex h-full min-h-0 flex-col">
+                <div className="shrink-0">
                 <p className="mb-3 font-mono text-xs text-muted">TASK-{task.id}</p>
 
                 {mutationError && (
@@ -314,8 +316,9 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                         />
                     </div>
                 </section>
+                </div>
 
-                <div className="flex flex-col gap-4 md:flex-row md:items-start">
+                <div className="flex min-h-0 flex-1 flex-col gap-4 md:flex-row">
                     <nav
                         aria-label="Разделы задачи"
                         className="flex shrink-0 gap-1 overflow-x-auto pb-1 md:w-40 md:flex-col md:overflow-visible md:pb-0"
@@ -341,7 +344,7 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                         ))}
                     </nav>
 
-                    <div className="min-w-0 flex-1">
+                    <div className="scrollbar-thin min-h-0 min-w-0 flex-1 overflow-y-auto pr-1">
                     {activeSection === "description" && (
                 <section className="rounded-xl border border-white/[0.05] bg-surface-elevated p-4">
                     <div className="mb-2 flex items-center justify-between">
@@ -564,6 +567,7 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                     )}
                     </div>
                 </div>
+            </div>
         </Modal>
     );
 }

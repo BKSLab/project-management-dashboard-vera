@@ -32,7 +32,7 @@ export function Modal({
         >
             <RACModal
                 className={cn(
-                    "relative w-full max-w-md overflow-hidden rounded-2xl",
+                    "relative flex w-full max-w-md flex-col overflow-hidden rounded-2xl",
                     "border border-white/15",
                     "bg-[linear-gradient(160deg,rgba(255,255,255,0.07),rgba(255,255,255,0.03))]",
                     "shadow-[0_24px_64px_rgba(0,0,0,0.65),inset_0_0_0_1px_rgba(255,255,255,0.05)]",
@@ -40,17 +40,17 @@ export function Modal({
                     containerClassName
                 )}
             >
-                <Dialog {...props} className="outline-none">
+                <Dialog {...props} className="flex min-h-0 flex-1 flex-col outline-none">
                     {({ close }) => (
                         <>
                             <div
                                 aria-hidden="true"
-                                className="h-px bg-gradient-to-r from-transparent via-accent to-transparent"
+                                className="h-px shrink-0 bg-gradient-to-r from-transparent via-accent to-transparent"
                             />
 
-                            <div className="p-6">
+                            <div className="flex min-h-0 flex-1 flex-col p-6">
                                 {title && (
-                                    <div className="mb-5 flex items-center justify-between gap-4">
+                                    <div className="mb-5 flex shrink-0 items-center justify-between gap-4">
                                         <Heading
                                             slot="title"
                                             className="min-w-0 break-words text-xl font-bold text-foreground"
@@ -78,12 +78,14 @@ export function Modal({
                                         </button>
                                     </div>
                                 )}
-                                {children}
+                                <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
+                                    {children}
+                                </div>
                             </div>
 
                             <div
                                 aria-hidden="true"
-                                className="h-px bg-gradient-to-r from-transparent via-white/8 to-transparent"
+                                className="h-px shrink-0 bg-gradient-to-r from-transparent via-white/8 to-transparent"
                             />
                         </>
                     )}
