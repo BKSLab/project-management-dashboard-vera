@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiUrl } from "@/lib/api";
@@ -90,6 +90,12 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
     const [authorDraft, setAuthorDraft] = useState("");
     const [selectedDocId, setSelectedDocId] = useState("");
     const [attachmentError, setAttachmentError] = useState<string | null>(null);
+    const [stageSavedState, setStageSavedState] = useState<"hidden" | "visible" | "fading">("hidden");
+    const stageSavedTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+    useEffect(() => () => {
+        stageSavedTimeoutsRef.current.forEach(clearTimeout);
+    }, []);
 
     const stagesQuery = useQuery({
         queryKey: ["kanban", "stages"],
@@ -122,6 +128,12 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                 movedTask,
             );
             invalidateTask();
+            stageSavedTimeoutsRef.current.forEach(clearTimeout);
+            setStageSavedState("visible");
+            stageSavedTimeoutsRef.current = [
+                setTimeout(() => setStageSavedState("fading"), 1200),
+                setTimeout(() => setStageSavedState("hidden"), 1500),
+            ];
         },
     });
 
@@ -274,12 +286,25 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
 
                 <section className="mb-4 grid gap-4 rounded-xl border border-white/[0.05] bg-surface-elevated p-4 sm:grid-cols-2">
                     <div>
-                        <label
-                            htmlFor={`task-stage-${task.id}`}
-                            className="mb-2 block text-sm font-semibold text-muted"
-                        >
-                            Стадия
-                        </label>
+                        <div className="mb-2 flex items-center gap-2">
+                            <label
+                                htmlFor={`task-stage-${task.id}`}
+                                className="block text-sm font-semibold text-muted"
+                            >
+                                Стадия
+                            </label>
+                            {stageSavedState !== "hidden" && (
+                                <span
+                                    role="status"
+                                    className={cn(
+                                        "inline-flex items-center gap-1 text-xs font-semibold text-success transition-opacity duration-300",
+                                        stageSavedState === "fading" ? "opacity-0" : "opacity-100",
+                                    )}
+                                >
+                                    ✓ Сохранено
+                                </span>
+                            )}
+                        </div>
                         <select
                             id={`task-stage-${task.id}`}
                             value={task.stage_id}
@@ -566,6 +591,12 @@ export function TaskModal({ task, onClose }: TaskModalProps) {
                 </section>
                     )}
                     </div>
+                </div>
+
+                <div className="mt-4 flex shrink-0 justify-end border-t border-white/[0.06] pt-4">
+                    <Button variant="secondary" onClick={onClose}>
+                        Закрыть
+                    </Button>
                 </div>
             </div>
         </Modal>
