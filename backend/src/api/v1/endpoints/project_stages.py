@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from src.api.v1.responses import (
     CONFLICT_RESPONSE,
@@ -9,6 +9,7 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
+from src.dependencies.access import get_accessible_project, get_accessible_stage
 from src.dependencies.services import ProjectStagesServiceDep
 from src.exceptions.project_stages import ProjectStagesServiceError
 from src.exceptions.projects import ProjectsServiceError
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 @router.get(
     path="/projects/{project_id}/stages",
+    dependencies=[Depends(get_accessible_project)],
     status_code=status.HTTP_200_OK,
     summary="Получить стадии проекта",
     description="Возвращает колонки канбан-доски проекта в порядке отображения.",
@@ -56,6 +58,7 @@ async def get_stages(
 
 @router.post(
     path="/projects/{project_id}/stages",
+    dependencies=[Depends(get_accessible_project)],
     status_code=status.HTTP_201_CREATED,
     summary="Создать стадию проекта",
     description="Добавляет новую колонку в конец канбан-доски проекта.",
@@ -99,6 +102,7 @@ async def create_stage(
 
 @router.patch(
     path="/stages/{stage_id}",
+    dependencies=[Depends(get_accessible_stage)],
     status_code=status.HTTP_200_OK,
     summary="Изменить стадию",
     description="Частично обновляет название, цвет, порядок или признак завершения стадии.",
@@ -145,6 +149,7 @@ async def update_stage(
 
 @router.delete(
     path="/stages/{stage_id}",
+    dependencies=[Depends(get_accessible_stage)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить стадию",
     description="Удаляет пустую стадию проекта. Последнюю стадию удалить нельзя.",

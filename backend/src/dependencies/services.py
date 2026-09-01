@@ -5,15 +5,18 @@ from fastapi import Depends
 from src.dependencies.repositories import (
     DocumentLinksRepositoryDep,
     DocumentsRepositoryDep,
+    ProjectMembersRepositoryDep,
     ProjectsRepositoryDep,
     ProjectStagesRepositoryDep,
     TaskActivityRepositoryDep,
     TaskAttachmentsRepositoryDep,
     TaskCommentsRepositoryDep,
     TasksRepositoryDep,
+    UsersRepositoryDep,
     WbsNodesRepositoryDep,
 )
-from src.dependencies.storage import TaskAttachmentStorageDep
+from src.dependencies.storage import AvatarStorageDep, TaskAttachmentStorageDep
+from src.services.auth import AuthService
 from src.services.dashboard import DashboardService
 from src.services.document_links import DocumentLinksService
 from src.services.documents import DocumentsService
@@ -23,11 +26,26 @@ from src.services.task_activity import TaskActivityService
 from src.services.task_attachments import TaskAttachmentsService
 from src.services.task_comments import TaskCommentsService
 from src.services.tasks import TasksService
+from src.services.users import UsersService
 from src.services.wbs_nodes import WbsNodesService
+
+
+def get_auth_service(users_repository: UsersRepositoryDep) -> AuthService:
+    """Создаёт сервис регистрации и входа."""
+    return AuthService(users_repository=users_repository)
+
+
+def get_users_service(
+    users_repository: UsersRepositoryDep,
+    avatar_storage: AvatarStorageDep,
+) -> UsersService:
+    """Создаёт сервис профиля пользователя."""
+    return UsersService(users_repository=users_repository, avatar_storage=avatar_storage)
 
 
 def get_projects_service(
     projects_repository: ProjectsRepositoryDep,
+    members_repository: ProjectMembersRepositoryDep,
     stages_repository: ProjectStagesRepositoryDep,
     tasks_repository: TasksRepositoryDep,
     storage: TaskAttachmentStorageDep,
@@ -35,6 +53,7 @@ def get_projects_service(
     """Создаёт сервис проектов."""
     return ProjectsService(
         projects_repository=projects_repository,
+        members_repository=members_repository,
         stages_repository=stages_repository,
         tasks_repository=tasks_repository,
         attachment_storage=storage,
@@ -94,12 +113,14 @@ def get_wbs_nodes_service(
 
 def get_dashboard_service(
     projects_repository: ProjectsRepositoryDep,
+    members_repository: ProjectMembersRepositoryDep,
     stages_repository: ProjectStagesRepositoryDep,
     tasks_repository: TasksRepositoryDep,
 ) -> DashboardService:
     """Создаёт сервис общей сводки по проектам."""
     return DashboardService(
         projects_repository=projects_repository,
+        members_repository=members_repository,
         stages_repository=stages_repository,
         tasks_repository=tasks_repository,
     )
@@ -121,6 +142,7 @@ def get_document_links_service(
     documents_repository: DocumentsRepositoryDep,
     tasks_repository: TasksRepositoryDep,
     projects_repository: ProjectsRepositoryDep,
+    members_repository: ProjectMembersRepositoryDep,
 ) -> DocumentLinksService:
     """Создаёт сервис связей документов."""
     return DocumentLinksService(
@@ -128,6 +150,7 @@ def get_document_links_service(
         documents_repository=documents_repository,
         tasks_repository=tasks_repository,
         projects_repository=projects_repository,
+        members_repository=members_repository,
     )
 
 
@@ -168,6 +191,8 @@ def get_task_attachments_service(
     )
 
 
+AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+UsersServiceDep = Annotated[UsersService, Depends(get_users_service)]
 ProjectsServiceDep = Annotated[ProjectsService, Depends(get_projects_service)]
 ProjectStagesServiceDep = Annotated[
     ProjectStagesService,

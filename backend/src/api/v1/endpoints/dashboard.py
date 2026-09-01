@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from src.api.v1.responses import SERVER_ERROR_RESPONSE
+from src.dependencies.auth import CurrentUserDep
 from src.dependencies.services import DashboardServiceDep
 from src.exceptions.dashboard import DashboardServiceError
 from src.schemas.dashboard import DashboardSchema
@@ -21,10 +22,11 @@ logger = logging.getLogger(__name__)
     responses={500: SERVER_ERROR_RESPONSE},
     response_model=DashboardSchema,
 )
-async def get_dashboard(service: DashboardServiceDep) -> DashboardSchema:
+async def get_dashboard(user: CurrentUserDep, service: DashboardServiceDep) -> DashboardSchema:
     """Получает сводку по всем проектам.
 
     Args:
+        user: Пользователь текущей сессии.
         service: Сервис сводки по проектам.
 
     Returns:
@@ -35,7 +37,7 @@ async def get_dashboard(service: DashboardServiceDep) -> DashboardSchema:
     """
     logger.info("🚀 Запрос GET /dashboard.")
     try:
-        result = await service.get_overview()
+        result = await service.get_overview(user_id=user.id)
         logger.info(
             "✅ Сводка собрана. Проектов: %s, задач: %s.",
             result.totals.total_projects,

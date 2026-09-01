@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.db.models.project_members import ProjectRole
 from src.exceptions.projects import (
     ProjectKeyAlreadyExistsRepositoryError,
     ProjectKeyConflictError,
@@ -11,12 +12,14 @@ from src.exceptions.projects import (
     ProjectsRepositoryError,
     ProjectsServiceError,
 )
+from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
 from src.services.projects import DEFAULT_STAGES, ProjectsService, build_project_stats
 
 TODAY = date(2026, 9, 1)
+OWNER_ID = 1
 
 
 def stage(stage_id: int, name: str, order_index: int, is_done: bool = False) -> SimpleNamespace:
@@ -68,10 +71,15 @@ def build_service(
     projects_repository: AsyncMock | None = None,
     stages_repository: AsyncMock | None = None,
     tasks_repository: AsyncMock | None = None,
+    members_repository: AsyncMock | None = None,
 ) -> ProjectsService:
     """Собирает сервис проектов с подменёнными репозиториями."""
+    members = members_repository or AsyncMock(spec=ProjectMembersRepository)
+    if members_repository is None:
+        members.get_project_ids_for_user.return_value = {7}
     return ProjectsService(
         projects_repository=projects_repository or AsyncMock(spec=ProjectsRepository),
+        members_repository=members,
         stages_repository=stages_repository or AsyncMock(spec=ProjectStagesRepository),
         tasks_repository=tasks_repository or AsyncMock(spec=TasksRepository),
     )
@@ -83,11 +91,19 @@ async def test_create_project_adds_default_stages() -> None:
     projects_repository.get_max_order_index.return_value = 2
     projects_repository.save.return_value = make_project()
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
-    service = build_service(projects_repository, stages_repository)
+    members_repository = AsyncMock(spec=ProjectMembersRepository)
+    service = build_service(
+        projects_repository, stages_repository, members_repository=members_repository
+    )
 
-    await service.create_project(data={"key": "VERA", "name": "Агент Вера"})
+    await service.create_project(data={"key": "VERA", "name": "Агент Вера"}, owner_id=OWNER_ID)
 
-    assert projects_repository.save.await_args.kwargs["data"]["order_index"] == 3
+    saved = projects_repository.save.await_args.kwargs["data"]
+    assert saved["order_index"] == 3
+    assert saved["owner_id"] == OWNER_ID
+    membership = members_repository.save.await_args.kwargs["data"]
+    assert membership["user_id"] == OWNER_ID
+    assert membership["role"] is ProjectRole.OWNER
     created_stages = stages_repository.save_many.await_args.kwargs["items"]
     assert len(created_stages) == len(DEFAULT_STAGES)
     assert [item["order_index"] for item in created_stages] == list(range(len(DEFAULT_STAGES)))
@@ -104,7 +120,10 @@ async def test_create_project_with_busy_key_raises_conflict() -> None:
     service = build_service(projects_repository, stages_repository)
 
     with pytest.raises(ProjectKeyConflictError) as exc_info:
-        await service.create_project(data={"key": "VERA", "name": "Агент Вера"})
+        await service.create_project(
+            data={"key": "VERA", "name": "Агент Вера"},
+            owner_id=OWNER_ID,
+        )
 
     assert exc_info.value.status_code == 409
     stages_repository.save_many.assert_not_awaited()
@@ -130,6 +149,7 @@ async def test_delete_project_removes_attachment_directories() -> None:
     storage = AsyncMock()
     service = ProjectsService(
         projects_repository=projects_repository,
+        members_repository=AsyncMock(spec=ProjectMembersRepository),
         stages_repository=AsyncMock(spec=ProjectStagesRepository),
         tasks_repository=tasks_repository,
         attachment_storage=storage,
@@ -147,7 +167,7 @@ async def test_get_project_list_wraps_repository_error() -> None:
     projects_repository.get_all.side_effect = ProjectsRepositoryError("БД недоступна")
 
     with pytest.raises(ProjectsServiceError) as exc_info:
-        await build_service(projects_repository).get_project_list()
+        await build_service(projects_repository).get_project_list(user_id=OWNER_ID)
 
     assert exc_info.value.status_code == 500
 

@@ -15,9 +15,12 @@ from src.exceptions.documents import DocumentNotFoundError
 from src.exceptions.tasks import TaskNotFoundError
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
+from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
 from src.services.document_links import DocumentLinksService
+
+USER_ID = 1
 
 
 def build_service(
@@ -28,11 +31,14 @@ def build_service(
     """Собирает сервис связей документов с подменёнными репозиториями."""
     projects_repository = AsyncMock(spec=ProjectsRepository)
     projects_repository.get_by_id.return_value = SimpleNamespace(id=1, key="VERA")
+    members_repository = AsyncMock(spec=ProjectMembersRepository)
+    members_repository.get.return_value = SimpleNamespace(project_id=1, user_id=USER_ID)
     return DocumentLinksService(
         document_links_repository=links_repository or AsyncMock(spec=DocumentLinksRepository),
         documents_repository=documents_repository or AsyncMock(spec=DocumentsRepository),
         tasks_repository=tasks_repository or AsyncMock(spec=TasksRepository),
         projects_repository=projects_repository,
+        members_repository=members_repository,
     )
 
 
@@ -46,7 +52,7 @@ async def test_create_link_rejects_objects_from_different_projects() -> None:
     service = build_service(links_repository, documents_repository, tasks_repository)
 
     with pytest.raises(DocumentLinkProjectMismatchError) as exc_info:
-        await service.create_link(document_id=1, task_id=2)
+        await service.create_link(document_id=1, task_id=2, user_id=USER_ID)
 
     assert exc_info.value.status_code == 409
     links_repository.create.assert_not_awaited()
@@ -61,6 +67,7 @@ async def test_create_link_with_missing_document_raises_not_found() -> None:
         await build_service(documents_repository=documents_repository).create_link(
             document_id=1,
             task_id=2,
+            user_id=USER_ID,
         )
 
 
@@ -75,7 +82,7 @@ async def test_create_link_with_missing_task_raises_not_found() -> None:
     )
 
     with pytest.raises(TaskNotFoundError):
-        await service.create_link(document_id=1, task_id=999)
+        await service.create_link(document_id=1, task_id=999, user_id=USER_ID)
 
 
 @pytest.mark.asyncio
@@ -89,7 +96,7 @@ async def test_create_link_when_duplicate_races_raises_conflict() -> None:
     service = build_service(links_repository, documents_repository, tasks_repository)
 
     with pytest.raises(DocumentLinkAlreadyExistsError) as exc_info:
-        await service.create_link(document_id=1, task_id=2)
+        await service.create_link(document_id=1, task_id=2, user_id=USER_ID)
 
     assert exc_info.value.status_code == 409
 

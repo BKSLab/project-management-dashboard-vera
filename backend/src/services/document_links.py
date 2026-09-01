@@ -13,6 +13,7 @@ from src.exceptions.projects import ProjectsRepositoryError
 from src.exceptions.tasks import TaskNotFoundError, TasksRepositoryError
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
+from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
 from src.schemas.document_links import (
@@ -41,18 +42,29 @@ class DocumentLinksService:
         documents_repository: DocumentsRepository,
         tasks_repository: TasksRepository,
         projects_repository: ProjectsRepository,
+        members_repository: ProjectMembersRepository,
     ):
         self.document_links_repository = document_links_repository
         self.documents_repository = documents_repository
         self.tasks_repository = tasks_repository
         self.projects_repository = projects_repository
+        self.members_repository = members_repository
 
-    async def create_link(self, document_id: int, task_id: int) -> DocumentLinkSchema:
+    async def create_link(
+        self,
+        document_id: int,
+        task_id: int,
+        user_id: int,
+    ) -> DocumentLinkSchema:
         """Связывает документ с задачей одного проекта.
+
+        У маршрута нет идентификатора проекта в пути, поэтому доступ здесь
+        проверяет сервис, а не Depends-слой.
 
         Args:
             document_id: Идентификатор документа.
             task_id: Идентификатор задачи.
+            user_id: Идентификатор пользователя.
 
         Returns:
             Созданная связь.
@@ -67,6 +79,15 @@ class DocumentLinksService:
         try:
             document = await self.documents_repository.get_by_id(document_id=document_id)
             if document is None:
+                raise DocumentNotFoundError(document_id=document_id)
+            # Недоступный документ неотличим от отсутствующего.
+            if (
+                await self.members_repository.get(
+                    project_id=document.project_id,
+                    user_id=user_id,
+                )
+                is None
+            ):
                 raise DocumentNotFoundError(document_id=document_id)
             task = await self.tasks_repository.get_by_id(task_id=task_id)
             if task is None:

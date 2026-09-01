@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from src.api.v1.responses import (
     CONFLICT_RESPONSE,
@@ -9,6 +9,7 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
+from src.dependencies.access import get_accessible_project, get_accessible_task
 from src.dependencies.services import DocumentLinksServiceDep, TasksServiceDep
 from src.exceptions.document_links import DocumentLinksServiceError
 from src.exceptions.project_stages import ProjectStagesServiceError
@@ -31,6 +32,7 @@ TaskErrors = (
 
 @router.get(
     path="/projects/{project_id}/tasks",
+    dependencies=[Depends(get_accessible_project)],
     status_code=status.HTTP_200_OK,
     summary="Получить задачи проекта",
     description="Возвращает задачи проекта с фильтром по стадии и поиском по тексту и номеру.",
@@ -86,6 +88,7 @@ async def get_tasks(
 
 @router.post(
     path="/projects/{project_id}/tasks",
+    dependencies=[Depends(get_accessible_project)],
     status_code=status.HTTP_201_CREATED,
     summary="Создать задачу",
     description="Создаёт задачу в проекте и выдаёт ей сквозной номер вида KEY-42.",
@@ -129,6 +132,7 @@ async def create_task(
 
 @router.get(
     path="/tasks/{task_id}",
+    dependencies=[Depends(get_accessible_task)],
     status_code=status.HTTP_200_OK,
     summary="Получить задачу",
     description="Возвращает карточку задачи по идентификатору.",
@@ -165,6 +169,7 @@ async def get_task(
 
 @router.patch(
     path="/tasks/{task_id}",
+    dependencies=[Depends(get_accessible_task)],
     status_code=status.HTTP_200_OK,
     summary="Изменить задачу",
     description="Частично обновляет поля задачи и фиксирует значимые изменения в истории.",
@@ -206,6 +211,7 @@ async def update_task(
 
 @router.patch(
     path="/tasks/{task_id}/move",
+    dependencies=[Depends(get_accessible_task)],
     status_code=status.HTTP_200_OK,
     summary="Переместить задачу",
     description="Переносит задачу в другую стадию доски с сохранением позиции.",
@@ -253,6 +259,7 @@ async def move_task(
 
 @router.delete(
     path="/tasks/{task_id}",
+    dependencies=[Depends(get_accessible_task)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить задачу",
     description="Удаляет задачу вместе с комментариями, историей и файлами.",
@@ -287,6 +294,7 @@ async def delete_task(
 
 @router.get(
     path="/tasks/{task_id}/links",
+    dependencies=[Depends(get_accessible_task)],
     status_code=status.HTTP_200_OK,
     summary="Получить документы задачи",
     description="Возвращает документы, связанные с задачей.",

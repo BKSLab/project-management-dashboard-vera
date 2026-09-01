@@ -27,6 +27,22 @@ class AppSettings(SettingsBase):
     uploads_path: Path = BASE_DIR / "uploads"
 
 
+class AuthSettings(SettingsBase):
+    """Настройки аутентификации.
+
+    Секрет подписи не имеет значения по умолчанию намеренно: приложение
+    должно падать на старте, а не уезжать в прод с общеизвестным ключом.
+    """
+
+    jwt_secret: SecretStr
+    jwt_algorithm: str = "HS256"
+    access_token_ttl_hours: int = 24 * 14
+    registration_invite_code: SecretStr
+    session_cookie_name: str = "tracker_session"
+    session_cookie_secure: bool = False
+    avatars_path: Path = BASE_DIR / "uploads" / "avatars"
+
+
 class DBSettings(SettingsBase):
     """Настройки подключения к PostgreSQL."""
 
@@ -51,6 +67,7 @@ class Settings(BaseSettings):
 
     db: DBSettings = Field(default_factory=DBSettings)
     app: AppSettings = Field(default_factory=AppSettings)
+    auth: AuthSettings = Field(default_factory=AuthSettings)
 
 
 @lru_cache

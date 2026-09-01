@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from src.api.v1.responses import (
     CONFLICT_RESPONSE,
@@ -9,6 +9,8 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
+from src.dependencies.access import get_accessible_link
+from src.dependencies.auth import CurrentUserDep
 from src.dependencies.services import DocumentLinksServiceDep
 from src.exceptions.document_links import DocumentLinksServiceError
 from src.exceptions.documents import DocumentsServiceError
@@ -38,12 +40,14 @@ LinkErrors = (DocumentLinksServiceError, DocumentsServiceError, TasksServiceErro
 )
 async def create_document_link(
     data: DocumentLinkCreateSchema,
+    user: CurrentUserDep,
     service: DocumentLinksServiceDep,
 ) -> DocumentLinkSchema:
     """Создаёт связь документа с задачей.
 
     Args:
         data: Идентификаторы документа и задачи.
+        user: Пользователь текущей сессии.
         service: Сервис связей документов.
 
     Returns:
@@ -62,6 +66,7 @@ async def create_document_link(
         result = await service.create_link(
             document_id=data.document_id,
             task_id=data.task_id,
+            user_id=user.id,
         )
         logger.info("✅ Связь документа создана. id=%s.", result.id)
         return result
@@ -72,6 +77,7 @@ async def create_document_link(
 
 @router.delete(
     path="/{link_id}",
+    dependencies=[Depends(get_accessible_link)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить связь документа",
     description="Удаляет связь документа с задачей. Сами объекты не удаляются.",

@@ -8,6 +8,7 @@ from src.exceptions.dashboard import DashboardServiceError
 from src.exceptions.project_stages import ProjectStagesRepositoryError
 from src.exceptions.projects import ProjectsRepositoryError
 from src.exceptions.tasks import TasksRepositoryError
+from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
@@ -38,21 +39,24 @@ class DashboardService:
     def __init__(
         self,
         projects_repository: ProjectsRepository,
+        members_repository: ProjectMembersRepository,
         stages_repository: ProjectStagesRepository,
         tasks_repository: TasksRepository,
     ):
         self.projects_repository = projects_repository
+        self.members_repository = members_repository
         self.stages_repository = stages_repository
         self.tasks_repository = tasks_repository
 
-    async def get_overview(self) -> DashboardSchema:
-        """Собирает сводку состояния всех проектов.
+    async def get_overview(self, user_id: int) -> DashboardSchema:
+        """Собирает сводку по проектам пользователя.
 
         Показатели считаются агрегатными запросами по всему портфелю, поэтому
-        количество проектов не влияет на число обращений к БД.
+        количество проектов не влияет на число обращений к БД; отбор по
+        доступности выполняется уже в памяти.
 
         Args:
-            Нет дополнительных аргументов.
+            user_id: Идентификатор пользователя.
 
         Returns:
             Сводка портфеля с карточками проектов и задачами, требующими внимания.
@@ -64,7 +68,12 @@ class DashboardService:
             today = date.today()
             soon_until = today + timedelta(days=DUE_SOON_DAYS)
 
-            projects = await self.projects_repository.get_all()
+            allowed_ids = await self.members_repository.get_project_ids_for_user(user_id=user_id)
+            projects = [
+                project
+                for project in await self.projects_repository.get_all()
+                if project.id in allowed_ids
+            ]
             stages = await self.stages_repository.get_all()
             counters = await self.tasks_repository.get_portfolio_counters(
                 today=today,
@@ -75,8 +84,12 @@ class DashboardService:
                 today=today,
                 soon_until=soon_until,
                 limit=ATTENTION_TASKS_LIMIT,
+                project_ids=allowed_ids,
             )
-            recent_tasks = await self.tasks_repository.get_recent(limit=RECENT_TASKS_LIMIT)
+            recent_tasks = await self.tasks_repository.get_recent(
+                limit=RECENT_TASKS_LIMIT,
+                project_ids=allowed_ids,
+            )
 
             projects_by_id = {project.id: project for project in projects}
             stages_by_id = {stage.id: stage for stage in stages}

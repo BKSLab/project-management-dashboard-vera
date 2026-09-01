@@ -8,12 +8,14 @@ from src.db.models.projects import ProjectStatus
 from src.db.models.tasks import TaskPriority
 from src.exceptions.dashboard import DashboardServiceError
 from src.exceptions.projects import ProjectsRepositoryError
+from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
 from src.services.dashboard import DashboardService
 
 TODAY = date.today()
+USER_ID = 1
 
 
 def project(project_id: int, key: str, status: ProjectStatus) -> SimpleNamespace:
@@ -73,6 +75,8 @@ def build_service(
     """Собирает сервис дашборда с подменёнными репозиториями."""
     projects_repository = AsyncMock(spec=ProjectsRepository)
     projects_repository.get_all.return_value = projects
+    members_repository = AsyncMock(spec=ProjectMembersRepository)
+    members_repository.get_project_ids_for_user.return_value = {project.id for project in projects}
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
     stages_repository.get_all.return_value = stages
     tasks_repository = AsyncMock(spec=TasksRepository)
@@ -82,6 +86,7 @@ def build_service(
     tasks_repository.get_recent.return_value = recent_tasks or []
     return DashboardService(
         projects_repository=projects_repository,
+        members_repository=members_repository,
         stages_repository=stages_repository,
         tasks_repository=tasks_repository,
     )
@@ -114,7 +119,7 @@ async def test_overview_aggregates_projects_and_totals() -> None:
         ],
     )
 
-    result = await service.get_overview()
+    result = await service.get_overview(user_id=USER_ID)
 
     assert result.totals.total_projects == 2
     assert result.totals.active_projects == 1
@@ -140,7 +145,7 @@ async def test_overview_handles_project_without_tasks() -> None:
         stage_counts=[],
     )
 
-    result = await service.get_overview()
+    result = await service.get_overview(user_id=USER_ID)
 
     assert result.projects[0].total_tasks == 0
     assert result.projects[0].completion_rate == 0.0
@@ -163,7 +168,7 @@ async def test_overview_marks_overdue_attention_tasks() -> None:
         ],
     )
 
-    result = await service.get_overview()
+    result = await service.get_overview(user_id=USER_ID)
 
     overdue, upcoming = result.attention_tasks
     assert overdue.key == "VERA-11"
@@ -176,13 +181,16 @@ async def test_overview_marks_overdue_attention_tasks() -> None:
 async def test_overview_wraps_repository_error() -> None:
     projects_repository = AsyncMock(spec=ProjectsRepository)
     projects_repository.get_all.side_effect = ProjectsRepositoryError("БД недоступна")
+    members_repository = AsyncMock(spec=ProjectMembersRepository)
+    members_repository.get_project_ids_for_user.return_value = {1}
     service = DashboardService(
         projects_repository=projects_repository,
+        members_repository=members_repository,
         stages_repository=AsyncMock(spec=ProjectStagesRepository),
         tasks_repository=AsyncMock(spec=TasksRepository),
     )
 
     with pytest.raises(DashboardServiceError) as exc_info:
-        await service.get_overview()
+        await service.get_overview(user_id=USER_ID)
 
     assert exc_info.value.status_code == 500

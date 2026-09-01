@@ -3,15 +3,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.project_stages import ProjectStage
 from src.db.models.projects import Project
+from src.db.models.users import User
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
+from src.repositories.users import UsersRepository
 
 
 @pytest_asyncio.fixture
-async def project(db_session: AsyncSession) -> Project:
+async def user(db_session: AsyncSession) -> User:
+    """Создаёт владельца, без которого проект существовать не может."""
+    return await UsersRepository(db_session).save(
+        data={
+            "username": "owner",
+            "password_hash": "hash",
+            "last_name": "Владельцев",
+            "first_name": "Виктор",
+            "is_active": True,
+        }
+    )
+
+
+@pytest_asyncio.fixture
+async def project(db_session: AsyncSession, user: User) -> Project:
     """Создаёт проект, от которого зависят остальные сущности трекера."""
     return await ProjectsRepository(db_session).save(
         data={
+            "owner_id": user.id,
             "key": "VERA",
             "name": "Агент Вера",
             "status": "PLANNING",

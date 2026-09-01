@@ -1,6 +1,7 @@
 import logging
 from datetime import date, timedelta
 
+from src.db.models.project_members import ProjectRole
 from src.db.models.project_stages import ProjectStage
 from src.db.models.tasks import Task
 from src.exceptions.project_stages import ProjectStagesRepositoryError
@@ -13,6 +14,7 @@ from src.exceptions.projects import (
 )
 from src.exceptions.task_attachments import TaskAttachmentStorageError
 from src.exceptions.tasks import TasksRepositoryError
+from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
@@ -44,30 +46,37 @@ class ProjectsService:
     def __init__(
         self,
         projects_repository: ProjectsRepository,
+        members_repository: ProjectMembersRepository,
         stages_repository: ProjectStagesRepository,
         tasks_repository: TasksRepository,
         attachment_storage: TaskAttachmentStorage | None = None,
     ):
         self.projects_repository = projects_repository
+        self.members_repository = members_repository
         self.stages_repository = stages_repository
         self.tasks_repository = tasks_repository
         self.attachment_storage = attachment_storage
 
-    async def get_project_list(self) -> list[ProjectSchema]:
-        """Возвращает все проекты в порядке отображения.
+    async def get_project_list(self, user_id: int) -> list[ProjectSchema]:
+        """Возвращает проекты, доступные пользователю.
 
         Args:
-            Нет дополнительных аргументов.
+            user_id: Идентификатор пользователя.
 
         Returns:
-            Список проектов.
+            Список проектов пользователя в порядке отображения.
 
         Raises:
             ProjectsServiceError: Если получить проекты не удалось.
         """
         try:
+            allowed_ids = await self.members_repository.get_project_ids_for_user(user_id=user_id)
             projects = await self.projects_repository.get_all()
-            return [ProjectSchema.model_validate(project) for project in projects]
+            return [
+                ProjectSchema.model_validate(project)
+                for project in projects
+                if project.id in allowed_ids
+            ]
         except RepositoryErrors as error:
             logger.error("❌ Ошибка получения списка проектов.", exc_info=True)
             raise ProjectsServiceError(str(error)) from error
@@ -82,7 +91,7 @@ class ProjectsService:
             Карточка проекта.
 
         Raises:
-            ProjectNotFoundError: Если проект не найден.
+            ProjectNotFoundError: Если проект не найден или недоступен.
             ProjectsServiceError: Если получить проект не удалось.
         """
         try:
@@ -96,11 +105,15 @@ class ProjectsService:
             logger.error("❌ Ошибка получения проекта id=%s.", project_id, exc_info=True)
             raise ProjectsServiceError(str(error)) from error
 
-    async def create_project(self, data: dict) -> ProjectSchema:
-        """Создаёт проект и наполняет его стадиями по умолчанию.
+    async def create_project(self, data: dict, owner_id: int) -> ProjectSchema:
+        """Создаёт проект, делает автора владельцем и добавляет стадии.
+
+        Владелец сразу получает участие с ролью OWNER, поэтому доступ к проекту
+        проверяется одинаково и для него, и для будущих приглашённых.
 
         Args:
             data: Поля нового проекта.
+            owner_id: Идентификатор пользователя-владельца.
 
         Returns:
             Созданный проект.
@@ -111,7 +124,16 @@ class ProjectsService:
         """
         try:
             order_index = await self.projects_repository.get_max_order_index() + 1
-            project = await self.projects_repository.save(data={**data, "order_index": order_index})
+            project = await self.projects_repository.save(
+                data={**data, "owner_id": owner_id, "order_index": order_index}
+            )
+            await self.members_repository.save(
+                data={
+                    "project_id": project.id,
+                    "user_id": owner_id,
+                    "role": ProjectRole.OWNER,
+                }
+            )
             await self.stages_repository.save_many(
                 items=[
                     {**stage, "project_id": project.id, "order_index": index}
@@ -138,7 +160,7 @@ class ProjectsService:
             Обновлённый проект.
 
         Raises:
-            ProjectNotFoundError: Если проект не найден.
+            ProjectNotFoundError: Если проект не найден или недоступен.
             ProjectKeyConflictError: Если новый код проекта уже занят.
             ProjectsServiceError: Если обновить проект не удалось.
         """
@@ -195,7 +217,7 @@ class ProjectsService:
             Показатели проекта с распределением по стадиям.
 
         Raises:
-            ProjectNotFoundError: Если проект не найден.
+            ProjectNotFoundError: Если проект не найден или недоступен.
             ProjectsServiceError: Если собрать показатели не удалось.
         """
         try:

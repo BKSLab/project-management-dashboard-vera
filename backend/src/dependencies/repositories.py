@@ -5,13 +5,25 @@ from fastapi import Depends
 from src.dependencies.db_session import DbSessionDep
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
+from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.users import UsersRepository
 from src.repositories.wbs_nodes import WbsNodesRepository
+
+
+def get_users_repository(session: DbSessionDep) -> UsersRepository:
+    """Создаёт репозиторий пользователей в рамках сессии запроса."""
+    return UsersRepository(session)
+
+
+def get_project_members_repository(session: DbSessionDep) -> ProjectMembersRepository:
+    """Создаёт репозиторий участников проекта в рамках сессии запроса."""
+    return ProjectMembersRepository(session)
 
 
 def get_projects_repository(session: DbSessionDep) -> ProjectsRepository:
@@ -59,6 +71,11 @@ def get_task_attachments_repository(session: DbSessionDep) -> TaskAttachmentsRep
     return TaskAttachmentsRepository(session)
 
 
+UsersRepositoryDep = Annotated[UsersRepository, Depends(get_users_repository)]
+ProjectMembersRepositoryDep = Annotated[
+    ProjectMembersRepository,
+    Depends(get_project_members_repository),
+]
 ProjectsRepositoryDep = Annotated[ProjectsRepository, Depends(get_projects_repository)]
 ProjectStagesRepositoryDep = Annotated[
     ProjectStagesRepository,

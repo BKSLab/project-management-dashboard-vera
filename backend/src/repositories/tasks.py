@@ -354,13 +354,18 @@ class TasksRepository:
         today: date,
         soon_until: date,
         limit: int,
+        project_ids: set[int] | None = None,
     ) -> list[Task]:
         """Возвращает незавершённые задачи с просроченным или ближайшим сроком.
+
+        Отбор по проектам выполняется в запросе, а не после него: иначе лимит
+        мог бы целиком уйти на чужие задачи и вернуть пустую ленту.
 
         Args:
             today: Текущая дата.
             soon_until: Верхняя граница окна ближайших сроков.
             limit: Максимальное количество задач.
+            project_ids: Проекты, доступные пользователю.
 
         Returns:
             Задачи, отсортированные по возрастанию срока.
@@ -368,8 +373,10 @@ class TasksRepository:
         Raises:
             TasksRepositoryError: Если запрос к БД завершился ошибкой.
         """
+        if project_ids is not None and not project_ids:
+            return []
         try:
-            result: Result = await self.db_session.execute(
+            stmt = (
                 select(Task)
                 .join(ProjectStage, ProjectStage.id == Task.stage_id)
                 .where(
@@ -386,18 +393,25 @@ class TasksRepository:
                 )
                 .limit(limit)
             )
+            if project_ids is not None:
+                stmt = stmt.where(Task.project_id.in_(project_ids))
+            result: Result = await self.db_session.execute(stmt)
             return list(result.scalars().all())
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось получить задачи с ближайшими сроками.", exc_info=True)
             raise TasksRepositoryError("Ошибка получения задач с ближайшими сроками.") from error
 
-    async def get_recent(self, limit: int, project_id: int | None = None) -> list[Task]:
+    async def get_recent(
+        self,
+        limit: int,
+        project_ids: set[int] | None = None,
+    ) -> list[Task]:
         """Возвращает недавно изменённые задачи.
 
         Args:
             limit: Максимальное количество задач.
-            project_id: Опциональный фильтр по проекту.
+            project_ids: Проекты, доступные пользователю.
 
         Returns:
             Задачи, отсортированные по убыванию даты обновления.
@@ -405,10 +419,12 @@ class TasksRepository:
         Raises:
             TasksRepositoryError: Если запрос к БД завершился ошибкой.
         """
+        if project_ids is not None and not project_ids:
+            return []
         try:
             stmt = select(Task).order_by(Task.updated_at.desc(), Task.id.desc()).limit(limit)
-            if project_id is not None:
-                stmt = stmt.where(Task.project_id == project_id)
+            if project_ids is not None:
+                stmt = stmt.where(Task.project_id.in_(project_ids))
             result: Result = await self.db_session.execute(stmt)
             return list(result.scalars().all())
         except (SQLAlchemyError, Exception) as error:

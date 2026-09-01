@@ -2,6 +2,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.projects import Project
+from src.db.models.users import User
 from src.exceptions.projects import ProjectKeyAlreadyExistsRepositoryError
 from src.repositories.projects import ProjectsRepository
 
@@ -10,13 +11,16 @@ from src.repositories.projects import ProjectsRepository
 async def test_duplicate_key_raises_domain_error(
     db_session: AsyncSession,
     project: Project,
+    user: User,
 ) -> None:
     repository = ProjectsRepository(db_session)
     busy_key = project.key
+    owner_id = user.id
 
     with pytest.raises(ProjectKeyAlreadyExistsRepositoryError) as exc_info:
         await repository.save(
             data={
+                "owner_id": owner_id,
                 "key": busy_key,
                 "name": "Другой проект",
                 "status": "PLANNING",

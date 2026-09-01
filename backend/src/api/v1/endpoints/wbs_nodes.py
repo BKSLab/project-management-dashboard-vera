@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from src.api.v1.responses import (
     CONFLICT_RESPONSE,
@@ -9,6 +9,7 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
+from src.dependencies.access import get_accessible_project
 from src.dependencies.services import WbsNodesServiceDep
 from src.exceptions.projects import ProjectsServiceError
 from src.exceptions.tasks import TasksServiceError
@@ -36,6 +37,7 @@ TaskIdPath = Annotated[int, Path(gt=0, description="Идентификатор �
 
 @router.get(
     path="",
+    dependencies=[Depends(get_accessible_project)],
     status_code=status.HTTP_200_OK,
     summary="Получить структуру ИСР",
     description=(
@@ -80,6 +82,7 @@ async def get_structure(
 
 @router.post(
     path="/nodes",
+    dependencies=[Depends(get_accessible_project)],
     status_code=status.HTTP_201_CREATED,
     summary="Создать раздел ИСР",
     description="Создаёт структурный раздел в конце выбранного уровня.",
@@ -132,6 +135,7 @@ async def create_node(
 
 @router.patch(
     path="/nodes/{node_id}",
+    dependencies=[Depends(get_accessible_project)],
     status_code=status.HTTP_200_OK,
     summary="Переименовать раздел ИСР",
     description="Изменяет название структурного раздела.",
@@ -186,6 +190,7 @@ async def update_node(
 
 @router.post(
     path="/nodes/{node_id}/move",
+    dependencies=[Depends(get_accessible_project)],
     status_code=status.HTTP_200_OK,
     summary="Переместить раздел ИСР",
     description=("Меняет родителя и порядок раздела. Позицию внутри уровня рассчитывает backend."),
@@ -247,6 +252,7 @@ async def move_node(
 
 @router.delete(
     path="/nodes/{node_id}",
+    dependencies=[Depends(get_accessible_project)],
     status_code=status.HTTP_200_OK,
     summary="Удалить раздел ИСР",
     description=(
@@ -297,6 +303,7 @@ async def delete_node(
 
 @router.post(
     path="/tasks/{task_id}/assign",
+    dependencies=[Depends(get_accessible_project)],
     status_code=status.HTTP_200_OK,
     summary="Назначить задачу в раздел",
     description="Помещает задачу проекта в указанный раздел ИСР.",
@@ -356,6 +363,7 @@ async def assign_task(
 
 @router.delete(
     path="/tasks/{task_id}/assignment",
+    dependencies=[Depends(get_accessible_project)],
     status_code=status.HTTP_200_OK,
     summary="Убрать задачу из структуры",
     description="Снимает привязку задачи к разделу. Сама задача остаётся в проекте.",

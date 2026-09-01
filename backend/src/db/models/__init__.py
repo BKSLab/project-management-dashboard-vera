@@ -1,12 +1,14 @@
 from .base import Base
 from .document_links import DocumentLink
 from .documents import Document
+from .project_members import ProjectMember, ProjectRole
 from .project_stages import ProjectStage
 from .projects import Project, ProjectStatus
 from .task_activity import TaskActivity, TaskActivityEventType
 from .task_attachments import TaskAttachment
 from .task_comments import TaskComment
 from .tasks import Task, TaskPriority, TaskRole
+from .users import User
 from .wbs_nodes import WbsNode
 
 __all__ = [
@@ -14,6 +16,8 @@ __all__ = [
     "Document",
     "DocumentLink",
     "Project",
+    "ProjectMember",
+    "ProjectRole",
     "ProjectStage",
     "ProjectStatus",
     "Task",
@@ -23,5 +27,6 @@ __all__ = [
     "TaskComment",
     "TaskPriority",
     "TaskRole",
+    "User",
     "WbsNode",
 ]

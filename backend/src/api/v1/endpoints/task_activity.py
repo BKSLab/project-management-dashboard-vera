@@ -1,9 +1,10 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from src.api.v1.responses import NOT_FOUND_RESPONSE, SERVER_ERROR_RESPONSE, VALIDATION_RESPONSE
+from src.dependencies.access import get_accessible_task
 from src.dependencies.services import TaskActivityServiceDep
 from src.exceptions.task_activity import TaskActivityServiceError
 from src.exceptions.tasks import TasksServiceError
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 @router.get(
     path="/{task_id}/activity",
+    dependencies=[Depends(get_accessible_task)],
     status_code=status.HTTP_200_OK,
     summary="Получить историю задачи",
     description="Возвращает неизменяемую историю значимых изменений задачи.",

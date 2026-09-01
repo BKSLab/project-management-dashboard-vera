@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.v1.endpoints.auth import router as auth_router
 from src.api.v1.endpoints.dashboard import router as dashboard_router
 from src.api.v1.endpoints.document_links import router as document_links_router
 from src.api.v1.endpoints.documents import router as documents_router
@@ -18,6 +19,7 @@ from src.api.v1.endpoints.task_activity import router as task_activity_router
 from src.api.v1.endpoints.task_attachments import router as task_attachments_router
 from src.api.v1.endpoints.task_comments import router as task_comments_router
 from src.api.v1.endpoints.tasks import router as tasks_router
+from src.api.v1.endpoints.users import router as users_router
 from src.api.v1.endpoints.wbs_nodes import router as wbs_nodes_router
 from src.core.config_logger import configure_logging
 from src.core.settings import get_settings
@@ -57,6 +59,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.app.cors_origins,
+    # Сессия живёт в cookie, поэтому браузеру нужно разрешение слать её кросс-origin.
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -90,6 +94,8 @@ async def validation_exception_handler(
 
 
 for api_router in (
+    auth_router,
+    users_router,
     dashboard_router,
     projects_router,
     project_stages_router,

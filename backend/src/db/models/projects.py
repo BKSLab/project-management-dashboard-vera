@@ -4,7 +4,7 @@ import enum
 from datetime import date
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Computed, Date, Enum, Index, Integer, String, Text
+from sqlalchemy import Computed, Date, Enum, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -12,8 +12,10 @@ from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .documents import Document
+    from .project_members import ProjectMember
     from .project_stages import ProjectStage
     from .tasks import Task
+    from .users import User
     from .wbs_nodes import WbsNode
 
 
@@ -37,6 +39,13 @@ class Project(Base, TimestampMixin):
         primary_key=True,
         doc="Идентификатор проекта.",
         comment="Уникальный идентификатор проекта.",
+    )
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        doc="Владелец проекта: единственный, кто может его удалить.",
+        comment="Идентификатор пользователя-владельца проекта.",
     )
     key: Mapped[str] = mapped_column(
         String(length=10),
@@ -108,6 +117,13 @@ class Project(Base, TimestampMixin):
         comment="Взвешенный FTS-вектор названия и описания проекта.",
     )
 
+    owner: Mapped[User] = relationship("User", back_populates="owned_projects")
+    members: Mapped[list[ProjectMember]] = relationship(
+        "ProjectMember",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     stages: Mapped[list[ProjectStage]] = relationship(
         "ProjectStage",
         back_populates="project",
