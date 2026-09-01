@@ -1,6 +1,7 @@
 import { Suspense, lazy } from "react";
 import { Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
+import { AuthGuard } from "@/components/layout/AuthGuard";
 import { ProjectLayout } from "@/components/projects/ProjectLayout";
 import { DashboardPage } from "@/routes/DashboardPage";
 import { ProjectsPage } from "@/routes/ProjectsPage";
@@ -11,6 +12,9 @@ import { TasksListPage } from "@/routes/TasksListPage";
 import { ProjectDocumentsPage } from "@/routes/ProjectDocumentsPage";
 import { DocumentDetailPage } from "@/routes/DocumentDetailPage";
 import { ProjectSettingsPage } from "@/routes/ProjectSettingsPage";
+import { ProfilePage } from "@/routes/ProfilePage";
+import { LoginPage } from "@/routes/LoginPage";
+import { RegisterPage } from "@/routes/RegisterPage";
 import { NotFoundPage } from "@/routes/NotFoundPage";
 import { Skeleton } from "@/components/ui/States";
 
@@ -31,32 +35,46 @@ function StructureFallback() {
     );
 }
 
+/** Приложение за стеной входа: всё внутри требует действительной сессии. */
+function ProtectedApp() {
+    return (
+        <AuthGuard>
+            <AppShell>
+                <Routes>
+                    <Route path="/" element={<DashboardPage />} />
+                    <Route path="/projects" element={<ProjectsPage />} />
+                    <Route path="/projects/new" element={<NewProjectPage />} />
+                    <Route path="/profile" element={<ProfilePage />} />
+                    <Route path="/projects/:projectKey" element={<ProjectLayout />}>
+                        <Route index element={<ProjectOverviewPage />} />
+                        <Route path="board" element={<BoardPage />} />
+                        <Route path="tasks" element={<TasksListPage />} />
+                        <Route
+                            path="structure"
+                            element={
+                                <Suspense fallback={<StructureFallback />}>
+                                    <StructurePage />
+                                </Suspense>
+                            }
+                        />
+                        <Route path="docs" element={<ProjectDocumentsPage />} />
+                        <Route path="docs/:slug" element={<DocumentDetailPage />} />
+                        <Route path="settings" element={<ProjectSettingsPage />} />
+                    </Route>
+                    <Route path="*" element={<NotFoundPage />} />
+                </Routes>
+            </AppShell>
+        </AuthGuard>
+    );
+}
+
 function App() {
     return (
-        <AppShell>
-            <Routes>
-                <Route path="/" element={<DashboardPage />} />
-                <Route path="/projects" element={<ProjectsPage />} />
-                <Route path="/projects/new" element={<NewProjectPage />} />
-                <Route path="/projects/:projectKey" element={<ProjectLayout />}>
-                    <Route index element={<ProjectOverviewPage />} />
-                    <Route path="board" element={<BoardPage />} />
-                    <Route path="tasks" element={<TasksListPage />} />
-                    <Route
-                        path="structure"
-                        element={
-                            <Suspense fallback={<StructureFallback />}>
-                                <StructurePage />
-                            </Suspense>
-                        }
-                    />
-                    <Route path="docs" element={<ProjectDocumentsPage />} />
-                    <Route path="docs/:slug" element={<DocumentDetailPage />} />
-                    <Route path="settings" element={<ProjectSettingsPage />} />
-                </Route>
-                <Route path="*" element={<NotFoundPage />} />
-            </Routes>
-        </AppShell>
+        <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+            <Route path="*" element={<ProtectedApp />} />
+        </Routes>
     );
 }
 

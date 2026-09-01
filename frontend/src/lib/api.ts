@@ -13,15 +13,32 @@ export class ApiError extends Error {
     }
 }
 
+/** Слушатели, которым нужно узнать о протухшей сессии. */
+const unauthorizedHandlers = new Set<() => void>();
+
+export function onUnauthorized(handler: () => void): () => void {
+    unauthorizedHandlers.add(handler);
+    return () => unauthorizedHandlers.delete(handler);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const isFormData = init?.body instanceof FormData;
     const response = await fetch(apiUrl(path), {
         ...init,
+        // Сессия живёт в httpOnly cookie, поэтому её нужно слать с каждым запросом.
+        credentials: "include",
         headers: {
             ...(!isFormData && { "Content-Type": "application/json" }),
             ...init?.headers,
         },
     });
+
+    if (response.status === 401) {
+        // Токен протух в открытой вкладке: сообщаем приложению, чтобы увело на вход.
+        for (const handler of unauthorizedHandlers) {
+            handler();
+        }
+    }
 
     if (!response.ok) {
         const body = await response.json().catch(() => null);
@@ -54,6 +71,16 @@ export const api = {
 };
 
 const V1 = "/api/v1";
+
+export const authEndpoints = {
+    register: () => `${V1}/auth/register`,
+    login: () => `${V1}/auth/login`,
+    logout: () => `${V1}/auth/logout`,
+    me: () => `${V1}/auth/me`,
+    profile: () => `${V1}/users/me`,
+    password: () => `${V1}/users/me/password`,
+    avatar: () => `${V1}/users/me/avatar`,
+};
 
 /** Единый источник правды по адресам API — маршруты не разъезжаются по экранам. */
 export const endpoints = {
@@ -90,6 +117,7 @@ export const endpoints = {
 
 /** Ключи кэша TanStack Query: всё, что относится к проекту, инвалидируется вместе. */
 export const queryKeys = {
+    currentUser: ["auth", "me"] as const,
     dashboard: ["dashboard"] as const,
     projects: ["projects"] as const,
     project: (projectId: number) => ["projects", projectId] as const,

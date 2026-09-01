@@ -7,6 +7,8 @@ import { cn } from "@/lib/cn";
 import { useUiStore } from "@/stores/ui";
 import { IconButton } from "@/components/ui/Button";
 import { StatusDot } from "@/components/ui/Badge";
+import { UserMenu } from "@/components/users/UserMenu";
+import { useCurrentUser } from "@/lib/useAuth";
 
 const GLOBAL_ITEMS = [
     { to: "/", label: "Дашборд", icon: LayoutDashboard, end: true },
@@ -27,6 +29,8 @@ function navLinkClass(isActive: boolean, collapsed: boolean): string {
 export function Sidebar() {
     const collapsed = useUiStore((state) => state.sidebarCollapsed);
     const toggleSidebar = useUiStore((state) => state.toggleSidebar);
+
+    const { data: user } = useCurrentUser();
 
     const projectsQuery = useQuery({
         queryKey: queryKeys.projects,
@@ -108,6 +112,8 @@ export function Sidebar() {
                     {!collapsed && <span className="truncate">Новый проект</span>}
                 </NavLink>
             </div>
+
+            {user && <UserMenu user={user} collapsed={collapsed} />}
         </aside>
     );
 }

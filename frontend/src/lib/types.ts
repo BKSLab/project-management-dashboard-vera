@@ -1,3 +1,49 @@
+export interface User {
+    id: number;
+    username: string;
+    last_name: string;
+    first_name: string;
+    middle_name: string | null;
+    email: string | null;
+    phone: string | null;
+    telegram: string | null;
+    has_avatar: boolean;
+    created_at: string;
+}
+
+export interface RegisterPayload {
+    username: string;
+    password: string;
+    password_confirm: string;
+    last_name: string;
+    first_name: string;
+    middle_name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    telegram?: string | null;
+    invite_code: string;
+}
+
+export interface LoginPayload {
+    username: string;
+    password: string;
+}
+
+export interface UserUpdatePayload {
+    last_name?: string;
+    first_name?: string;
+    middle_name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    telegram?: string | null;
+}
+
+export interface PasswordChangePayload {
+    current_password: string;
+    password: string;
+    password_confirm: string;
+}
+
 export type ProjectStatus = "PLANNING" | "ACTIVE" | "PAUSED" | "COMPLETED" | "ARCHIVED";
 
 export type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
@@ -314,6 +360,16 @@ export const ROLE_LABELS: Record<TaskRole, string> = {
     BA: "Аналитика",
     MKT: "Маркетинг",
 };
+
+/** Полное имя: отчество есть не у всех, поэтому склеиваем через фильтр. */
+export function fullName(user: User): string {
+    return [user.last_name, user.first_name, user.middle_name].filter(Boolean).join(" ");
+}
+
+/** Инициалы для аватара-заглушки. */
+export function initials(user: User): string {
+    return `${user.last_name.charAt(0)}${user.first_name.charAt(0)}`.toUpperCase();
+}
 
 export const PROJECT_COLORS = [
     "#58a6ff",
