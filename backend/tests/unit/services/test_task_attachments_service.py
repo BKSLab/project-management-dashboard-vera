@@ -4,15 +4,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.exceptions.kanban_tasks import KanbanTaskNotFoundError
 from src.exceptions.task_attachments import (
     TaskAttachmentsRepositoryError,
     TaskAttachmentsServiceError,
     TaskAttachmentTooLargeError,
     TaskAttachmentUnsupportedTypeError,
 )
-from src.repositories.kanban_tasks import KanbanTasksRepository
+from src.exceptions.tasks import TaskNotFoundError
 from src.repositories.task_attachments import TaskAttachmentsRepository
+from src.repositories.tasks import TasksRepository
 from src.services.task_attachments import TaskAttachmentsService
 from src.storage.task_attachments import TaskAttachmentStorage
 
@@ -25,7 +25,7 @@ def create_service() -> tuple[
 ]:
     """Создаёт сервис с типизированными дублёрами зависимостей."""
     attachments_repository = AsyncMock(spec=TaskAttachmentsRepository)
-    tasks_repository = AsyncMock(spec=KanbanTasksRepository)
+    tasks_repository = AsyncMock(spec=TasksRepository)
     storage = AsyncMock(spec=TaskAttachmentStorage)
     service = TaskAttachmentsService(
         attachments_repository=attachments_repository,
@@ -40,7 +40,7 @@ async def test_upload_attachment_when_task_missing_raises_not_found() -> None:
     service, attachments_repository, tasks_repository, storage = create_service()
     tasks_repository.get_by_id.return_value = None
 
-    with pytest.raises(KanbanTaskNotFoundError) as exc_info:
+    with pytest.raises(TaskNotFoundError) as exc_info:
         await service.upload_attachment(
             task_id=999,
             file_name="report.pdf",

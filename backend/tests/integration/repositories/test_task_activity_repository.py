@@ -1,30 +1,28 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db.models.project_stages import ProjectStage
 from src.db.models.task_activity import TaskActivityEventType
-from src.repositories.kanban_stages import KanbanStagesRepository
-from src.repositories.kanban_tasks import KanbanTasksRepository
 from src.repositories.task_activity import TaskActivityRepository
+from src.repositories.tasks import TasksRepository
 
 
 @pytest.mark.asyncio
 async def test_save_and_get_for_task_on_real_postgres(
     db_session: AsyncSession,
+    stage: ProjectStage,
 ) -> None:
-    stages_repository = KanbanStagesRepository(db_session)
-    tasks_repository = KanbanTasksRepository(db_session)
-    activity_repository = TaskActivityRepository(db_session)
-    stage = await stages_repository.save(
+    task = await TasksRepository(db_session).save(
         data={
-            "name": "Бэклог",
-            "order_index": 0,
-            "color": "#999999",
-            "is_done_stage": False,
+            "project_id": stage.project_id,
+            "stage_id": stage.id,
+            "number": 1,
+            "title": "Работа",
+            "priority": "MEDIUM",
+            "position": 0.0,
         }
     )
-    task = await tasks_repository.save(
-        data={"stage_id": stage.id, "title": "Работа", "position": 0.0}
-    )
+    activity_repository = TaskActivityRepository(db_session)
 
     event = await activity_repository.save(
         task_id=task.id,

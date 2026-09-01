@@ -17,7 +17,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
 
 if TYPE_CHECKING:
-    from .kanban_tasks import KanbanTask
+    from .tasks import Task
 
 
 class TaskAttachment(Base):
@@ -35,7 +35,7 @@ class TaskAttachment(Base):
         comment="Уникальный идентификатор файла задачи.",
     )
     task_id: Mapped[int] = mapped_column(
-        ForeignKey("kanban_tasks.id", ondelete="CASCADE"),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
         doc="Задача-владелец файла.",
@@ -73,7 +73,7 @@ class TaskAttachment(Base):
         comment="Дата и время добавления файла к задаче.",
     )
 
-    task: Mapped[KanbanTask] = relationship("KanbanTask", back_populates="attachments")
+    task: Mapped[Task] = relationship("Task", back_populates="attachments")
 
     def __repr__(self) -> str:
         return (

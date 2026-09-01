@@ -5,11 +5,11 @@ from fastapi import APIRouter, HTTPException, Path, status
 
 from src.api.v1.responses import NOT_FOUND_RESPONSE, SERVER_ERROR_RESPONSE, VALIDATION_RESPONSE
 from src.dependencies.services import TaskActivityServiceDep
-from src.exceptions.kanban_tasks import KanbanTasksServiceError
 from src.exceptions.task_activity import TaskActivityServiceError
+from src.exceptions.tasks import TasksServiceError
 from src.schemas.task_activity import ActivitySchema
 
-router = APIRouter(prefix="/kanban/tasks", tags=["task-activity"])
+router = APIRouter(prefix="/tasks", tags=["task-activity"])
 logger = logging.getLogger(__name__)
 
 
@@ -39,11 +39,11 @@ async def get_activity(
     Raises:
         HTTPException: Если задача не найдена или получить историю не удалось.
     """
-    logger.info("🚀 Запрос GET /kanban/tasks/%s/activity.", task_id)
+    logger.info("🚀 Запрос GET /tasks/%s/activity.", task_id)
     try:
         result = await service.get_activity(task_id=task_id)
         logger.info("✅ История задачи id=%s получена. Событий: %s.", task_id, len(result))
         return result
-    except (TaskActivityServiceError, KanbanTasksServiceError) as error:
+    except (TaskActivityServiceError, TasksServiceError) as error:
         logger.exception("❌ Ошибка получения истории задачи id=%s. Детали: %s", task_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error

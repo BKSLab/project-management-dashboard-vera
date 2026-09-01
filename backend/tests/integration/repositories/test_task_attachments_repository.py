@@ -1,24 +1,26 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.repositories.kanban_stages import KanbanStagesRepository
-from src.repositories.kanban_tasks import KanbanTasksRepository
+from src.db.models.project_stages import ProjectStage
 from src.repositories.task_attachments import TaskAttachmentsRepository
+from src.repositories.tasks import TasksRepository
 
 
 @pytest.mark.asyncio
-async def test_save_list_and_cascade_delete_task_attachment(db_session: AsyncSession) -> None:
-    stage = await KanbanStagesRepository(db_session).save(
-        data={
-            "name": "В работе",
-            "order_index": 1,
-            "color": "#6366F1",
-            "is_done_stage": False,
-        }
-    )
-    tasks_repository = KanbanTasksRepository(db_session)
+async def test_save_list_and_cascade_delete_task_attachment(
+    db_session: AsyncSession,
+    stage: ProjectStage,
+) -> None:
+    tasks_repository = TasksRepository(db_session)
     task = await tasks_repository.save(
-        data={"stage_id": stage.id, "title": "Задача с файлом", "position": 1.0}
+        data={
+            "project_id": stage.project_id,
+            "stage_id": stage.id,
+            "number": 1,
+            "title": "Задача с файлом",
+            "priority": "MEDIUM",
+            "position": 1.0,
+        }
     )
     attachments_repository = TaskAttachmentsRepository(db_session)
     attachment = await attachments_repository.save(

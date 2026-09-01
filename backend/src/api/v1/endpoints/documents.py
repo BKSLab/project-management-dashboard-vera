@@ -11,8 +11,9 @@ from src.api.v1.responses import (
 )
 from src.dependencies.services import DocumentLinksServiceDep, DocumentsServiceDep
 from src.exceptions.document_links import DocumentLinksServiceError
-from src.exceptions.documents import DocumentNotFoundError, DocumentsServiceError
-from src.schemas.document_links import LinkedTargetSchema
+from src.exceptions.documents import DocumentsServiceError
+from src.exceptions.projects import ProjectsServiceError
+from src.schemas.document_links import LinkedTaskSchema
 from src.schemas.documents import (
     DocumentCreateSchema,
     DocumentDetailSchema,
@@ -20,231 +21,248 @@ from src.schemas.documents import (
     DocumentUpdateSchema,
 )
 
-router = APIRouter(prefix="/documents", tags=["documents"])
+router = APIRouter(tags=["documents"])
 logger = logging.getLogger(__name__)
+
+DocumentErrors = (DocumentsServiceError, ProjectsServiceError)
 
 
 @router.get(
-    path="",
+    path="/projects/{project_id}/documents",
     status_code=status.HTTP_200_OK,
-    summary="Получить документы",
-    description="Возвращает документы, при необходимости отфильтрованные полнотекстовым поиском.",
-    operation_id="getDocuments",
-    response_description="Список документов с фрагментами поисковых совпадений.",
-    responses={422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
+    summary="Получить документы проекта",
+    description="Возвращает документы проекта с опциональным полнотекстовым поиском.",
+    operation_id="getProjectDocuments",
+    response_description="Список документов проекта.",
+    responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
     response_model=list[DocumentSchema],
 )
 async def get_documents(
-    documents_service: DocumentsServiceDep,
+    project_id: Annotated[int, Path(gt=0, description="Идентификатор проекта.")],
+    service: DocumentsServiceDep,
     search: Annotated[
         str | None,
         Query(max_length=200, description="Поиск по заголовку, содержимому или slug."),
     ] = None,
 ) -> list[DocumentSchema]:
-    """Получает список документов.
+    """Получает документы проекта.
 
     Args:
-        documents_service: Сервис документов.
-        search: Опциональная строка поиска.
+        project_id: Идентификатор проекта.
+        service: Сервис документов.
+        search: Опциональная поисковая строка.
 
     Returns:
-        Список найденных документов.
+        Список документов.
 
     Raises:
-        HTTPException: Если сервис не смог получить документы.
+        HTTPException: Если проект не найден или получить документы не удалось.
     """
-    logger.info("🚀 Запрос GET /documents. Поиск: %s.", search)
+    logger.info("🚀 Запрос GET /projects/%s/documents. search=%s.", project_id, search)
     try:
-        result = await documents_service.get_document_list(search=search)
-        logger.info("✅ Запрос GET /documents выполнен. Найдено: %s.", len(result))
+        result = await service.get_document_list(project_id=project_id, search=search)
+        logger.info("✅ Документы проекта id=%s получены. Найдено: %s.", project_id, len(result))
         return result
-    except DocumentsServiceError as error:
-        logger.exception("❌ Ошибка GET /documents. Детали: %s", error)
+    except DocumentErrors as error:
+        logger.exception("❌ Ошибка GET /projects/%s/documents. Детали: %s", project_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.post(
-    path="",
+    path="/projects/{project_id}/documents",
     status_code=status.HTTP_201_CREATED,
-    summary="Создать документ",
-    description="Создаёт редактируемый Markdown-документ с уникальным slug.",
-    operation_id="createDocument",
+    summary="Создать документ проекта",
+    description="Создаёт документ, подбирая свободный slug внутри проекта.",
+    operation_id="createProjectDocument",
     response_description="Созданный документ.",
-    responses={409: CONFLICT_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
+    responses={
+        404: NOT_FOUND_RESPONSE,
+        409: CONFLICT_RESPONSE,
+        422: VALIDATION_RESPONSE,
+        500: SERVER_ERROR_RESPONSE,
+    },
     response_model=DocumentDetailSchema,
 )
 async def create_document(
+    project_id: Annotated[int, Path(gt=0, description="Идентификатор проекта.")],
     data: DocumentCreateSchema,
-    documents_service: DocumentsServiceDep,
+    service: DocumentsServiceDep,
 ) -> DocumentDetailSchema:
-    """Создаёт документ.
+    """Создаёт документ проекта.
 
     Args:
+        project_id: Идентификатор проекта.
         data: Поля нового документа.
-        documents_service: Сервис документов.
+        service: Сервис документов.
 
     Returns:
         Созданный документ.
 
     Raises:
-        HTTPException: Если документ создать не удалось.
+        HTTPException: Если проект не найден или создать документ не удалось.
     """
-    logger.info("🚀 Запрос POST /documents. Заголовок: %s.", data.title)
+    logger.info("🚀 Запрос POST /projects/%s/documents. Заголовок: %s.", project_id, data.title)
     try:
-        result = await documents_service.create_document(
+        result = await service.create_document(
+            project_id=project_id,
             title=data.title,
             slug=data.slug,
             content_md=data.content_md,
         )
-        logger.info("✅ Документ создан. slug=%s.", result.slug)
+        logger.info("✅ Документ создан. id=%s, slug=%s.", result.id, result.slug)
         return result
-    except DocumentsServiceError as error:
-        logger.exception("❌ Ошибка POST /documents. Детали: %s", error)
+    except DocumentErrors as error:
+        logger.exception("❌ Ошибка POST /projects/%s/documents. Детали: %s", project_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.get(
-    path="/{slug}",
+    path="/documents/{document_id}",
     status_code=status.HTTP_200_OK,
     summary="Получить документ",
-    description="Возвращает полное содержимое документа по его URL-идентификатору.",
+    description="Возвращает документ с Markdown-содержимым.",
     operation_id="getDocument",
-    response_description="Документ с Markdown-содержимым.",
+    response_description="Документ проекта.",
     responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
     response_model=DocumentDetailSchema,
 )
 async def get_document(
-    slug: Annotated[str, Path(description="URL-идентификатор документа.")],
-    documents_service: DocumentsServiceDep,
+    document_id: Annotated[int, Path(gt=0, description="Идентификатор документа.")],
+    service: DocumentsServiceDep,
 ) -> DocumentDetailSchema:
-    """Получает документ по slug.
+    """Получает документ по идентификатору.
 
     Args:
-        slug: URL-идентификатор документа.
-        documents_service: Сервис документов.
+        document_id: Идентификатор документа.
+        service: Сервис документов.
 
     Returns:
-        Полный документ.
+        Документ с содержимым.
 
     Raises:
         HTTPException: Если документ не найден или получить его не удалось.
     """
-    logger.info("🚀 Запрос GET /documents/%s.", slug)
+    logger.info("🚀 Запрос GET /documents/%s.", document_id)
     try:
-        result = await documents_service.get_document_by_slug(slug=slug)
-        logger.info("✅ Документ slug=%s получен.", slug)
+        result = await service.get_document(document_id=document_id)
+        logger.info("✅ Документ id=%s получен.", document_id)
         return result
-    except (DocumentNotFoundError, DocumentsServiceError) as error:
-        logger.exception("❌ Ошибка GET /documents/%s. Детали: %s", slug, error)
+    except DocumentErrors as error:
+        logger.exception("❌ Ошибка GET /documents/%s. Детали: %s", document_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.patch(
-    path="/{slug}",
+    path="/documents/{document_id}",
     status_code=status.HTTP_200_OK,
-    summary="Обновить документ",
-    description="Частично обновляет заголовок или Markdown-содержимое документа.",
+    summary="Изменить документ",
+    description="Частично обновляет заголовок и содержимое документа.",
     operation_id="updateDocument",
     response_description="Обновлённый документ.",
-    responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
+    responses={
+        404: NOT_FOUND_RESPONSE,
+        409: CONFLICT_RESPONSE,
+        422: VALIDATION_RESPONSE,
+        500: SERVER_ERROR_RESPONSE,
+    },
     response_model=DocumentDetailSchema,
 )
 async def update_document(
-    slug: Annotated[str, Path(description="URL-идентификатор документа.")],
+    document_id: Annotated[int, Path(gt=0, description="Идентификатор документа.")],
     data: DocumentUpdateSchema,
-    documents_service: DocumentsServiceDep,
+    service: DocumentsServiceDep,
 ) -> DocumentDetailSchema:
     """Обновляет документ.
 
     Args:
-        slug: URL-идентификатор документа.
-        data: Изменяемые поля.
-        documents_service: Сервис документов.
+        document_id: Идентификатор документа.
+        data: Изменяемые поля документа.
+        service: Сервис документов.
 
     Returns:
         Обновлённый документ.
 
     Raises:
-        HTTPException: Если документ не найден или обновление не удалось.
+        HTTPException: Если документ не найден или обновить его не удалось.
     """
-    logger.info("🚀 Запрос PATCH /documents/%s.", slug)
+    logger.info("🚀 Запрос PATCH /documents/%s.", document_id)
     try:
-        result = await documents_service.update_document(
-            slug=slug,
+        result = await service.update_document(
+            document_id=document_id,
             data=data.model_dump(exclude_unset=True),
         )
-        logger.info("✅ Документ slug=%s обновлён.", slug)
+        logger.info("✅ Документ id=%s обновлён.", document_id)
         return result
-    except (DocumentNotFoundError, DocumentsServiceError) as error:
-        logger.exception("❌ Ошибка PATCH /documents/%s. Детали: %s", slug, error)
+    except DocumentErrors as error:
+        logger.exception("❌ Ошибка PATCH /documents/%s. Детали: %s", document_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.delete(
-    path="/{slug}",
+    path="/documents/{document_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить документ",
-    description="Удаляет документ и все его связи.",
+    description="Удаляет документ и его связи с задачами.",
     operation_id="deleteDocument",
     response_description="Документ удалён.",
     responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
 )
 async def delete_document(
-    slug: Annotated[str, Path(description="URL-идентификатор документа.")],
-    documents_service: DocumentsServiceDep,
+    document_id: Annotated[int, Path(gt=0, description="Идентификатор документа.")],
+    service: DocumentsServiceDep,
 ) -> None:
     """Удаляет документ.
 
     Args:
-        slug: URL-идентификатор документа.
-        documents_service: Сервис документов.
+        document_id: Идентификатор документа.
+        service: Сервис документов.
 
     Returns:
         ``None`` после успешного удаления.
 
     Raises:
-        HTTPException: Если документ не найден или удаление не удалось.
+        HTTPException: Если документ не найден или удалить его не удалось.
     """
-    logger.info("🚀 Запрос DELETE /documents/%s.", slug)
+    logger.info("🚀 Запрос DELETE /documents/%s.", document_id)
     try:
-        await documents_service.delete_document(slug=slug)
-        logger.info("✅ Документ slug=%s удалён.", slug)
-    except (DocumentNotFoundError, DocumentsServiceError) as error:
-        logger.exception("❌ Ошибка DELETE /documents/%s. Детали: %s", slug, error)
+        await service.delete_document(document_id=document_id)
+        logger.info("✅ Документ id=%s удалён.", document_id)
+    except DocumentErrors as error:
+        logger.exception("❌ Ошибка DELETE /documents/%s. Детали: %s", document_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.get(
-    path="/{slug}/links",
+    path="/documents/{document_id}/links",
     status_code=status.HTTP_200_OK,
-    summary="Получить связи документа",
-    description="Возвращает задачи канбана и узлы ИСР, связанные с документом.",
+    summary="Получить задачи документа",
+    description="Возвращает задачи, связанные с документом.",
     operation_id="getDocumentLinks",
-    response_description="Список целей, связанных с документом.",
+    response_description="Связанные задачи.",
     responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
-    response_model=list[LinkedTargetSchema],
+    response_model=list[LinkedTaskSchema],
 )
 async def get_document_links(
-    slug: Annotated[str, Path(description="URL-идентификатор документа.")],
-    document_links_service: DocumentLinksServiceDep,
-) -> list[LinkedTargetSchema]:
-    """Получает связи документа.
+    document_id: Annotated[int, Path(gt=0, description="Идентификатор документа.")],
+    service: DocumentLinksServiceDep,
+) -> list[LinkedTaskSchema]:
+    """Получает связанные с документом задачи.
 
     Args:
-        slug: URL-идентификатор документа.
-        document_links_service: Сервис связей документов.
+        document_id: Идентификатор документа.
+        service: Сервис связей документов.
 
     Returns:
-        Связанные задачи и узлы ИСР.
+        Список связанных задач.
 
     Raises:
-        HTTPException: Если документ не найден или связи получить не удалось.
+        HTTPException: Если документ не найден или получить связи не удалось.
     """
-    logger.info("🚀 Запрос GET /documents/%s/links.", slug)
+    logger.info("🚀 Запрос GET /documents/%s/links.", document_id)
     try:
-        result = await document_links_service.get_links_for_document_slug(slug=slug)
-        logger.info("✅ Связи документа slug=%s получены. Найдено: %s.", slug, len(result))
+        result = await service.get_links_for_document(document_id=document_id)
+        logger.info("✅ Связи документа id=%s получены. Найдено: %s.", document_id, len(result))
         return result
-    except (DocumentNotFoundError, DocumentLinksServiceError) as error:
-        logger.exception("❌ Ошибка GET /documents/%s/links. Детали: %s", slug, error)
+    except (DocumentLinksServiceError, DocumentsServiceError) as error:
+        logger.exception("❌ Ошибка GET /documents/%s/links. Детали: %s", document_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error

@@ -1,21 +1,26 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db.models.projects import Project
 from src.repositories.documents import DocumentsRepository
 
 
 @pytest.mark.asyncio
 async def test_search_on_real_postgres_supports_prefix_and_highlight(
     db_session: AsyncSession,
+    project: Project,
 ) -> None:
     repository = DocumentsRepository(db_session)
     document = await repository.create(
-        slug="guide",
-        title="Руководство",
-        content_md="Пользовательская инструкция по работе с системой.",
+        data={
+            "project_id": project.id,
+            "slug": "guide",
+            "title": "Руководство",
+            "content_md": "Пользовательская инструкция по работе с системой.",
+        }
     )
 
-    documents = await repository.get_all(search="пользова")
+    documents = await repository.get_by_project(project_id=project.id, search="пользова")
     highlights = await repository.get_search_highlights(
         document_ids=[document.id],
         search="пользова",

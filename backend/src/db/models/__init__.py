@@ -1,23 +1,27 @@
 from .base import Base
 from .document_links import DocumentLink
 from .documents import Document
-from .kanban_stages import KanbanStage
-from .kanban_tasks import KanbanTask
-from .seed_state import SeedState
-from .task_activity import TaskActivity
+from .project_stages import ProjectStage
+from .projects import Project, ProjectStatus
+from .task_activity import TaskActivity, TaskActivityEventType
 from .task_attachments import TaskAttachment
 from .task_comments import TaskComment
-from .wbs import WbsItem
+from .tasks import Task, TaskPriority, TaskRole
+from .wbs_nodes import WbsNode
 
 __all__ = [
     "Base",
     "Document",
     "DocumentLink",
-    "KanbanStage",
-    "KanbanTask",
+    "Project",
+    "ProjectStage",
+    "ProjectStatus",
+    "Task",
     "TaskActivity",
+    "TaskActivityEventType",
     "TaskAttachment",
     "TaskComment",
-    "SeedState",
-    "WbsItem",
+    "TaskPriority",
+    "TaskRole",
+    "WbsNode",
 ]

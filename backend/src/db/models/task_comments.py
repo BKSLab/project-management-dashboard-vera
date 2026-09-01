@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
 
 if TYPE_CHECKING:
-    from .kanban_tasks import KanbanTask
+    from .tasks import Task
 
 
 class TaskComment(Base):
@@ -27,7 +27,7 @@ class TaskComment(Base):
         comment="Уникальный идентификатор комментария.",
     )
     task_id: Mapped[int] = mapped_column(
-        ForeignKey("kanban_tasks.id", ondelete="CASCADE"),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
         nullable=False,
         doc="Задача комментария.",
         comment="Идентификатор задачи, к которой относится комментарий.",
@@ -63,7 +63,7 @@ class TaskComment(Base):
         comment="Взвешенный FTS-вектор текста и автора комментария.",
     )
 
-    task: Mapped[KanbanTask] = relationship("KanbanTask", back_populates="comments")
+    task: Mapped[Task] = relationship("Task", back_populates="comments")
 
     def __repr__(self) -> str:
         return f"<TaskComment(id={self.id}, task_id={self.task_id})>"

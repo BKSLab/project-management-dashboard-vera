@@ -1,25 +1,25 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.repositories.kanban_stages import KanbanStagesRepository
-from src.repositories.kanban_tasks import KanbanTasksRepository
+from src.db.models.project_stages import ProjectStage
 from src.repositories.task_comments import TaskCommentsRepository
+from src.repositories.tasks import TasksRepository
 
 
 @pytest.mark.asyncio
 async def test_search_on_real_postgres_finds_task_by_comment_prefix(
     db_session: AsyncSession,
+    stage: ProjectStage,
 ) -> None:
-    stage = await KanbanStagesRepository(db_session).save(
+    task = await TasksRepository(db_session).save(
         data={
-            "name": "В работе",
-            "order_index": 1,
-            "color": "#F5B800",
-            "is_done_stage": False,
+            "project_id": stage.project_id,
+            "stage_id": stage.id,
+            "number": 1,
+            "title": "Карточка",
+            "priority": "MEDIUM",
+            "position": 1.0,
         }
-    )
-    task = await KanbanTasksRepository(db_session).save(
-        data={"stage_id": stage.id, "title": "Карточка", "position": 1.0}
     )
     repository = TaskCommentsRepository(db_session)
     await repository.save(

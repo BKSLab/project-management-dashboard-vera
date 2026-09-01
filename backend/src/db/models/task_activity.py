@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
 
 if TYPE_CHECKING:
-    from .kanban_tasks import KanbanTask
+    from .tasks import Task
 
 
 class TaskActivityEventType(str, enum.Enum):
@@ -19,6 +19,9 @@ class TaskActivityEventType(str, enum.Enum):
     STAGE_CHANGED = "STAGE_CHANGED"
     DUE_DATE_CHANGED = "DUE_DATE_CHANGED"
     DESCRIPTION_CHANGED = "DESCRIPTION_CHANGED"
+    PRIORITY_CHANGED = "PRIORITY_CHANGED"
+    ASSIGNEE_CHANGED = "ASSIGNEE_CHANGED"
+    WBS_NODE_CHANGED = "WBS_NODE_CHANGED"
     COMMENT_ADDED = "COMMENT_ADDED"
 
 
@@ -33,7 +36,7 @@ class TaskActivity(Base):
         comment="Уникальный идентификатор события.",
     )
     task_id: Mapped[int] = mapped_column(
-        ForeignKey("kanban_tasks.id", ondelete="CASCADE"),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
         nullable=False,
         doc="Задача события.",
         comment="Идентификатор задачи, к которой относится событие.",
@@ -64,7 +67,7 @@ class TaskActivity(Base):
         comment="Дата и время фиксации события.",
     )
 
-    task: Mapped[KanbanTask] = relationship("KanbanTask", back_populates="activity")
+    task: Mapped[Task] = relationship("Task", back_populates="activity")
 
     def __repr__(self) -> str:
         return f"<TaskActivity(id={self.id}, task_id={self.task_id}, event_type={self.event_type})>"

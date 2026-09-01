@@ -9,6 +9,7 @@ class DocumentSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int = Field(..., description="Уникальный идентификатор документа.", examples=[1])
+    project_id: int = Field(..., description="Идентификатор проекта.", examples=[1])
     slug: str = Field(..., description="URL-идентификатор документа.", examples=["design-guide"])
     title: str = Field(..., description="Заголовок документа.", examples=["Дизайн-гайд"])
     updated_at: datetime = Field(

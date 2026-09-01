@@ -10,11 +10,11 @@ class DocumentsRepositoryError(RepositoryError):
 
 
 class DocumentSlugAlreadyExistsRepositoryError(DocumentsRepositoryError):
-    """Ошибка уникальности slug на уровне базы данных."""
+    """Ошибка уникальности slug внутри проекта на уровне базы данных."""
 
     def __init__(self, slug: str):
         self.slug = slug
-        super().__init__(error_details=f"Документ со slug={slug!r} уже существует.")
+        super().__init__(error_details=f"Документ со slug={slug!r} уже существует в проекте.")
 
 
 class DocumentsServiceError(ServiceError):
@@ -24,28 +24,28 @@ class DocumentsServiceError(ServiceError):
 
 
 class DocumentNotFoundError(DocumentsServiceError):
-    """Документ с указанным slug не найден."""
+    """Документ не найден."""
 
     status_code = status.HTTP_404_NOT_FOUND
 
-    def __init__(self, slug: str):
-        self.slug = slug
-        super().__init__(error_details=f"Документ со slug={slug!r} не найден.")
+    def __init__(self, document_id: int):
+        self.document_id = document_id
+        super().__init__(error_details=f"Документ id={document_id} не найден.")
 
     @property
     def detail(self) -> str:
-        return f"Документ со slug='{self.slug}' не найден."
+        return f"Документ с id={self.document_id} не найден."
 
 
 class DocumentSlugConflictError(DocumentsServiceError):
-    """Документ с указанным slug уже существует."""
+    """Документ с указанным slug уже существует в проекте."""
 
     status_code = status.HTTP_409_CONFLICT
 
     def __init__(self, slug: str):
         self.slug = slug
-        super().__init__(error_details=f"Документ со slug={slug!r} уже существует.")
+        super().__init__(error_details=f"Документ со slug={slug!r} уже существует в проекте.")
 
     @property
     def detail(self) -> str:
-        return f"Документ со slug='{self.slug}' уже существует."
+        return f"Документ со slug='{self.slug}' уже существует в этом проекте."

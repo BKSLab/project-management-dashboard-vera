@@ -9,18 +9,19 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.v1.endpoints.dashboard import router as dashboard_router
 from src.api.v1.endpoints.document_links import router as document_links_router
 from src.api.v1.endpoints.documents import router as documents_router
-from src.api.v1.endpoints.kanban_stages import router as kanban_stages_router
-from src.api.v1.endpoints.kanban_tasks import router as kanban_tasks_router
+from src.api.v1.endpoints.project_stages import router as project_stages_router
+from src.api.v1.endpoints.projects import router as projects_router
 from src.api.v1.endpoints.task_activity import router as task_activity_router
 from src.api.v1.endpoints.task_attachments import router as task_attachments_router
 from src.api.v1.endpoints.task_comments import router as task_comments_router
-from src.api.v1.endpoints.wbs import router as wbs_router
+from src.api.v1.endpoints.tasks import router as tasks_router
+from src.api.v1.endpoints.wbs_nodes import router as wbs_nodes_router
 from src.core.config_logger import configure_logging
 from src.core.settings import get_settings
 from src.db.session import async_session_factory, engine
-from src.dependencies.initial_data import create_initial_data_service
 from src.utils.check_db import check_db_connection
 
 configure_logging()
@@ -41,8 +42,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("🚀 Запуск приложения %s.", settings.app.app_name)
     async with async_session_factory() as db_session:
         await check_db_connection(db_session=db_session)
-        initial_data_service = create_initial_data_service(session=db_session)
-        await initial_data_service.ensure_loaded()
     logger.info("✅ Приложение успешно запущено.")
     yield
     await engine.dispose()
@@ -91,13 +90,15 @@ async def validation_exception_handler(
 
 
 for api_router in (
+    dashboard_router,
+    projects_router,
+    project_stages_router,
+    tasks_router,
+    wbs_nodes_router,
     documents_router,
     document_links_router,
-    kanban_stages_router,
-    kanban_tasks_router,
     task_comments_router,
     task_activity_router,
     task_attachments_router,
-    wbs_router,
 ):
     app.include_router(api_router, prefix=settings.app.api_v1_prefix)

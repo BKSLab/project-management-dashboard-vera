@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Локальные артефакты тестов и отладки backend
+backend/pytest-tmp-attachments/
+backend/hypercorn_debug.log

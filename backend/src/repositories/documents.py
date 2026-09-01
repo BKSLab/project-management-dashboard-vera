@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import Result, func, select, union
+from sqlalchemy import Result, and_, func, select, union
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -21,27 +21,32 @@ from src.utils.fts import (
 
 logger = logging.getLogger(__name__)
 
+DOCUMENT_SLUG_CONSTRAINTS = frozenset({"uq_documents_project_slug"})
+
 
 class DocumentsRepository:
-    """Репозиторий для работы с документами в базе данных."""
+    """Репозиторий для работы с документами проекта."""
 
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
 
-    async def get_all(self, search: str | None = None) -> list[Document]:
-        """Возвращает документы с опциональным поисковым фильтром.
+    async def get_by_project(self, project_id: int, search: str | None = None) -> list[Document]:
+        """Возвращает документы проекта с опциональным поисковым фильтром.
 
         Args:
+            project_id: Идентификатор проекта.
             search: Полнотекстовый запрос или ``None``.
 
         Returns:
-            Список найденных документов.
+            Список найденных документов проекта.
 
         Raises:
             DocumentsRepositoryError: Если запрос к БД завершился ошибкой.
         """
         try:
-            stmt = select(Document).order_by(Document.title)
+            stmt = (
+                select(Document).where(Document.project_id == project_id).order_by(Document.title)
+            )
             search_text = search.strip() if search else ""
             if search_text:
                 ts_query = build_ts_query(search_text)
@@ -63,9 +68,11 @@ class DocumentsRepository:
             return list(result.scalars().all())
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
-            logger.error("❌ Не удалось получить список документов.", exc_info=True)
+            logger.error(
+                "❌ Не удалось получить документы проекта id=%s.", project_id, exc_info=True
+            )
             raise DocumentsRepositoryError(
-                error_details="Ошибка при получении списка документов."
+                error_details=f"Ошибка при получении документов проекта id={project_id}."
             ) from error
 
     async def get_search_highlights(
@@ -133,11 +140,11 @@ class DocumentsRepository:
                 error_details="Ошибка при подготовке подсветки результатов поиска документов."
             ) from error
 
-    async def get_by_slug(self, slug: str) -> Document | None:
-        """Возвращает документ по slug.
+    async def get_by_id(self, document_id: int) -> Document | None:
+        """Возвращает документ по идентификатору.
 
         Args:
-            slug: URL-идентификатор документа.
+            document_id: Идентификатор документа.
 
         Returns:
             Найденный документ или ``None``.
@@ -146,8 +153,36 @@ class DocumentsRepository:
             DocumentsRepositoryError: Если запрос к БД завершился ошибкой.
         """
         try:
-            stmt = select(Document).where(Document.slug == slug)
-            result: Result = await self.db_session.execute(stmt)
+            result: Result = await self.db_session.execute(
+                select(Document).where(Document.id == document_id)
+            )
+            return result.scalar_one_or_none()
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить документ id=%s.", document_id, exc_info=True)
+            raise DocumentsRepositoryError(
+                error_details=f"Ошибка при получении документа. id={document_id}."
+            ) from error
+
+    async def get_by_project_slug(self, project_id: int, slug: str) -> Document | None:
+        """Возвращает документ проекта по slug.
+
+        Args:
+            project_id: Идентификатор проекта.
+            slug: URL-идентификатор документа внутри проекта.
+
+        Returns:
+            Найденный документ или ``None``.
+
+        Raises:
+            DocumentsRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        try:
+            result: Result = await self.db_session.execute(
+                select(Document).where(
+                    and_(Document.project_id == project_id, Document.slug == slug)
+                )
+            )
             return result.scalar_one_or_none()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
@@ -155,38 +190,6 @@ class DocumentsRepository:
             raise DocumentsRepositoryError(
                 error_details=f"Ошибка при получении документа. slug={slug}."
             ) from error
-
-    async def get_by_slug_or_id(
-        self,
-        slug: str | None = None,
-        document_id: int | None = None,
-    ) -> Document | None:
-        """Возвращает документ по одному переданному идентификатору.
-
-        Args:
-            slug: Опциональный URL-идентификатор.
-            document_id: Опциональный числовой идентификатор.
-
-        Returns:
-            Найденный документ или ``None``.
-
-        Raises:
-            DocumentsRepositoryError: Если запрос к БД завершился ошибкой.
-        """
-        try:
-            stmt = select(Document)
-            if document_id is not None:
-                stmt = stmt.where(Document.id == document_id)
-            elif slug is not None:
-                stmt = stmt.where(Document.slug == slug)
-            else:
-                return None
-            result: Result = await self.db_session.execute(stmt)
-            return result.scalar_one_or_none()
-        except (SQLAlchemyError, Exception) as error:
-            await self.db_session.rollback()
-            logger.error("❌ Не удалось получить документ по идентификатору.", exc_info=True)
-            raise DocumentsRepositoryError("Ошибка получения документа.") from error
 
     async def get_by_ids(self, document_ids: set[int]) -> list[Document]:
         """Возвращает документы по набору идентификаторов.
@@ -212,31 +215,30 @@ class DocumentsRepository:
             logger.error("❌ Не удалось получить набор документов.", exc_info=True)
             raise DocumentsRepositoryError("Ошибка получения набора документов.") from error
 
-    async def create(self, slug: str, title: str, content_md: str) -> Document:
-        """Создаёт новый документ.
+    async def create(self, data: dict) -> Document:
+        """Создаёт новый документ проекта.
 
         Args:
-            slug: Уникальный URL-идентификатор.
-            title: Заголовок документа.
-            content_md: Markdown-содержимое.
+            data: Поля нового документа.
 
         Returns:
             Сохранённый документ.
 
         Raises:
-            DocumentSlugAlreadyExistsRepositoryError: Если slug уже занят.
+            DocumentSlugAlreadyExistsRepositoryError: Если slug уже занят в проекте.
             DocumentsRepositoryError: Если сохранить документ не удалось.
         """
+        slug = str(data.get("slug", ""))
         try:
-            document = Document(slug=slug, title=title, content_md=content_md)
+            document = Document(**data)
             self.db_session.add(document)
             await self.db_session.commit()
             await self.db_session.refresh(document)
             return document
         except IntegrityError as error:
             await self.db_session.rollback()
-            if get_integrity_constraint_name(error) == "ix_documents_slug":
-                logger.warning("⚠️ Документ со slug=%s уже существует.", slug)
+            if get_integrity_constraint_name(error) in DOCUMENT_SLUG_CONSTRAINTS:
+                logger.warning("⚠️ Документ со slug=%s уже существует в проекте.", slug)
                 raise DocumentSlugAlreadyExistsRepositoryError(slug=slug) from error
             logger.error("❌ Ограничение БД не позволило создать документ.", exc_info=True)
             raise DocumentsRepositoryError(
@@ -272,10 +274,10 @@ class DocumentsRepository:
             return document
         except IntegrityError as error:
             await self.db_session.rollback()
-            if get_integrity_constraint_name(error) == "ix_documents_slug" and isinstance(
+            if get_integrity_constraint_name(error) in DOCUMENT_SLUG_CONSTRAINTS and isinstance(
                 new_slug, str
             ):
-                logger.warning("⚠️ Документ со slug=%s уже существует.", new_slug)
+                logger.warning("⚠️ Документ со slug=%s уже существует в проекте.", new_slug)
                 raise DocumentSlugAlreadyExistsRepositoryError(slug=new_slug) from error
             logger.error(
                 "❌ Ограничение БД не позволило обновить документ id=%s.",

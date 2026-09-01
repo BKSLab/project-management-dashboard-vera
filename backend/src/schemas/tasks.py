@@ -1,0 +1,220 @@
+from datetime import date, datetime
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from src.db.models.tasks import TaskPriority, TaskRole
+
+
+class TaskSchema(BaseModel):
+    """Задача проекта с агрегированным контекстом."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="Уникальный идентификатор задачи.", examples=[142])
+    project_id: int = Field(..., description="Идентификатор проекта.", examples=[1])
+    stage_id: int = Field(..., description="Идентификатор текущей стадии.", examples=[2])
+    wbs_node_id: int | None = Field(
+        None,
+        description="Раздел ИСР или null, если задача не распределена.",
+        examples=[32],
+    )
+    number: int = Field(..., description="Номер задачи внутри проекта.", examples=[142])
+    key: str = Field(
+        ...,
+        description="Отображаемый идентификатор задачи.",
+        examples=["VERA-142"],
+    )
+    title: str = Field(
+        ...,
+        description="Заголовок задачи.",
+        examples=["Реализовать фильтрацию проектов"],
+    )
+    description_md: str | None = Field(
+        None,
+        description="Описание задачи в Markdown.",
+        examples=["Добавить фильтрацию по статусу и исполнителю."],
+    )
+    priority: TaskPriority = Field(..., description="Приоритет задачи.", examples=["HIGH"])
+    role: TaskRole | None = Field(None, description="Ответственная роль.", examples=["BE"])
+    assignee: str | None = Field(
+        None,
+        description="Подпись исполнителя.",
+        examples=["Иван"],
+    )
+    due_date: date | None = Field(
+        None,
+        description="Плановая дата завершения.",
+        examples=["2026-09-08"],
+    )
+    position: float = Field(..., description="Позиция задачи внутри стадии.", examples=[1000.0])
+    created_at: datetime = Field(
+        ...,
+        description="Дата создания задачи.",
+        examples=["2026-09-01T10:00:00Z"],
+    )
+    updated_at: datetime = Field(
+        ...,
+        description="Дата последнего обновления задачи.",
+        examples=["2026-09-02T12:00:00Z"],
+    )
+    comments_count: int = Field(
+        0,
+        ge=0,
+        description="Количество комментариев задачи.",
+        examples=[4],
+    )
+    last_comment: str | None = Field(
+        None,
+        description="Текст последнего комментария.",
+        examples=["Готово к проверке."],
+    )
+    search_match_source: str | None = Field(
+        None,
+        description="Источник поискового совпадения.",
+        examples=["title"],
+    )
+    search_title: str | None = Field(
+        None,
+        description="Заголовок с маркерами подсветки.",
+        examples=["__FTS_START__Фильтрация__FTS_END__ проектов"],
+    )
+    search_excerpt: str | None = Field(
+        None,
+        description="Фрагмент совпадения с маркерами подсветки.",
+        examples=["Добавить __FTS_START__фильтрацию__FTS_END__ по статусу."],
+    )
+
+
+class TaskCompactSchema(BaseModel):
+    """Компактное представление задачи для пула ИСР и canvas."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="Уникальный идентификатор задачи.", examples=[142])
+    key: str = Field(..., description="Отображаемый идентификатор.", examples=["VERA-142"])
+    title: str = Field(
+        ...,
+        description="Заголовок задачи.",
+        examples=["Реализовать фильтрацию проектов"],
+    )
+    stage_id: int = Field(..., description="Идентификатор текущей стадии.", examples=[2])
+    wbs_node_id: int | None = Field(None, description="Раздел ИСР.", examples=[32])
+    priority: TaskPriority = Field(..., description="Приоритет задачи.", examples=["HIGH"])
+    assignee: str | None = Field(None, description="Подпись исполнителя.", examples=["Иван"])
+    due_date: date | None = Field(
+        None,
+        description="Плановая дата завершения.",
+        examples=["2026-09-08"],
+    )
+    is_done: bool = Field(
+        ...,
+        description="Признак задачи в завершающей стадии.",
+        examples=[False],
+    )
+
+
+class TaskCreateSchema(BaseModel):
+    """Тело запроса для создания задачи."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "title": "Реализовать фильтрацию проектов",
+                "description_md": "Добавить фильтрацию по статусу и исполнителю.",
+                "priority": "HIGH",
+                "due_date": "2026-09-08",
+            }
+        }
+    )
+
+    title: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Заголовок задачи.",
+        examples=["Реализовать фильтрацию проектов"],
+    )
+    description_md: str | None = Field(
+        None,
+        description="Описание задачи в Markdown.",
+        examples=["Добавить фильтрацию по статусу и исполнителю."],
+    )
+    stage_id: int | None = Field(
+        None,
+        gt=0,
+        description="Начальная стадия; без значения берётся первая стадия проекта.",
+        examples=[1],
+    )
+    wbs_node_id: int | None = Field(
+        None,
+        gt=0,
+        description="Раздел ИСР, в который сразу помещается задача.",
+        examples=[32],
+    )
+    priority: TaskPriority = Field(
+        TaskPriority.MEDIUM,
+        description="Приоритет задачи.",
+        examples=["HIGH"],
+    )
+    role: TaskRole | None = Field(None, description="Ответственная роль.", examples=["BE"])
+    assignee: str | None = Field(
+        None,
+        max_length=255,
+        description="Подпись исполнителя.",
+        examples=["Иван"],
+    )
+    due_date: date | None = Field(
+        None,
+        description="Плановая дата завершения.",
+        examples=["2026-09-08"],
+    )
+
+
+class TaskUpdateSchema(BaseModel):
+    """Тело запроса для частичного обновления задачи."""
+
+    model_config = ConfigDict(json_schema_extra={"example": {"priority": "URGENT"}})
+
+    title: str | None = Field(
+        None,
+        min_length=1,
+        max_length=512,
+        description="Новый заголовок.",
+        examples=["Реализовать фильтрацию и сортировку"],
+    )
+    description_md: str | None = Field(
+        None,
+        description="Новое описание в Markdown.",
+        examples=["Добавить фильтрацию, сортировку и сохранение пресетов."],
+    )
+    priority: TaskPriority | None = Field(
+        None,
+        description="Новый приоритет.",
+        examples=["URGENT"],
+    )
+    role: TaskRole | None = Field(None, description="Новая ответственная роль.", examples=["FE"])
+    assignee: str | None = Field(
+        None,
+        max_length=255,
+        description="Новая подпись исполнителя или null для очистки.",
+        examples=["Мария"],
+    )
+    due_date: date | None = Field(
+        None,
+        description="Новая дата завершения или null для очистки.",
+        examples=["2026-09-12"],
+    )
+
+
+class TaskMoveSchema(BaseModel):
+    """Тело запроса для перемещения задачи по доске."""
+
+    model_config = ConfigDict(json_schema_extra={"example": {"stage_id": 3}})
+
+    stage_id: int = Field(..., gt=0, description="Целевая стадия.", examples=[3])
+    position: float | None = Field(
+        None,
+        ge=0,
+        description="Новая позиция внутри стадии; без значения задача ставится в конец.",
+        examples=[2000.0],
+    )

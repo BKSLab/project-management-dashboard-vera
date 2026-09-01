@@ -68,11 +68,11 @@ class DocumentLinksRepository:
                 error_details=f"Ошибка при получении связей документа id={document_id}."
             ) from error
 
-    async def get_for_task(self, kanban_task_id: int) -> list[DocumentLink]:
+    async def get_for_task(self, task_id: int) -> list[DocumentLink]:
         """Возвращает связи документов с указанной задачей.
 
         Args:
-            kanban_task_id: Идентификатор задачи.
+            task_id: Идентификатор задачи.
 
         Returns:
             Связи документов с задачей.
@@ -81,16 +81,14 @@ class DocumentLinksRepository:
             DocumentLinksRepositoryError: Если запрос к БД завершился ошибкой.
         """
         try:
-            stmt = select(DocumentLink).where(DocumentLink.kanban_task_id == kanban_task_id)
+            stmt = select(DocumentLink).where(DocumentLink.task_id == task_id)
             result: Result = await self.db_session.execute(stmt)
             return list(result.scalars().all())
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
-            logger.error(
-                "❌ Не удалось получить связи задачи id=%s.", kanban_task_id, exc_info=True
-            )
+            logger.error("❌ Не удалось получить связи задачи id=%s.", task_id, exc_info=True)
             raise DocumentLinksRepositoryError(
-                error_details=f"Ошибка при получении связей задачи id={kanban_task_id}."
+                error_details=f"Ошибка при получении связей задачи id={task_id}."
             ) from error
 
     async def create(self, data: dict) -> DocumentLink:
@@ -114,10 +112,7 @@ class DocumentLinksRepository:
         except IntegrityError as error:
             await self.db_session.rollback()
             constraint_name = get_integrity_constraint_name(error)
-            if constraint_name in {
-                "uq_document_links_document_task",
-                "uq_document_links_document_wbs",
-            }:
+            if constraint_name == "uq_document_links_document_task":
                 logger.warning("⚠️ Связь документа id=%s уже существует.", data["document_id"])
                 raise DocumentLinkAlreadyExistsRepositoryError(
                     document_id=data["document_id"]

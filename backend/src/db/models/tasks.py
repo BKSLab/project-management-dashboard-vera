@@ -1,0 +1,181 @@
+from __future__ import annotations
+
+import enum
+from datetime import date
+from typing import TYPE_CHECKING
+
+from sqlalchemy import (
+    Computed,
+    Date,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from .project_stages import ProjectStage
+    from .projects import Project
+    from .task_activity import TaskActivity
+    from .task_attachments import TaskAttachment
+    from .task_comments import TaskComment
+    from .wbs_nodes import WbsNode
+
+
+class TaskRole(str, enum.Enum):
+    """Роль, ответственная за выполнение задачи."""
+
+    PM = "PM"
+    BE = "BE"
+    FE = "FE"
+    UXR = "UXR"
+    UXD = "UXD"
+    EXPERT = "EXPERT"
+    QA = "QA"
+    BA = "BA"
+    MKT = "MKT"
+
+
+class TaskPriority(str, enum.Enum):
+    """Приоритет задачи."""
+
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    URGENT = "URGENT"
+
+
+class Task(Base, TimestampMixin):
+    """Задача проекта.
+
+    Одна и та же задача отображается в канбане, списке задач и ИСР. Стадия
+    отвечает за состояние работы, ``wbs_node_id`` — за место в структуре
+    проекта; эти признаки независимы друг от друга.
+    """
+
+    __tablename__ = "tasks"
+    __table_args__ = (
+        UniqueConstraint("project_id", "number", name="uq_tasks_project_number"),
+        Index("ix_tasks_search_vector", "search_vector", postgresql_using="gin"),
+    )
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+        doc="Идентификатор задачи.",
+        comment="Уникальный идентификатор задачи.",
+    )
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        doc="Проект, которому принадлежит задача.",
+        comment="Идентификатор проекта-владельца задачи.",
+    )
+    stage_id: Mapped[int] = mapped_column(
+        ForeignKey("project_stages.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        doc="Текущая стадия задачи. Стадия принадлежит тому же проекту.",
+        comment="Идентификатор текущей стадии задачи.",
+    )
+    wbs_node_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wbs_nodes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        doc="Раздел ИСР. NULL — задача не распределена по структуре.",
+        comment="Идентификатор раздела ИСР; NULL для нераспределённой задачи.",
+    )
+    number: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        doc="Порядковый номер задачи внутри проекта.",
+        comment="Номер задачи внутри проекта для отображения вида KEY-42.",
+    )
+    title: Mapped[str] = mapped_column(
+        String(length=512),
+        nullable=False,
+        doc="Заголовок задачи.",
+        comment="Заголовок задачи.",
+    )
+    description_md: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        doc="Markdown-описание задачи.",
+        comment="Описание задачи в формате Markdown.",
+    )
+    priority: Mapped[TaskPriority] = mapped_column(
+        Enum(TaskPriority, name="task_priority"),
+        nullable=False,
+        default=TaskPriority.MEDIUM,
+        doc="Приоритет задачи.",
+        comment="Приоритет выполнения задачи.",
+    )
+    role: Mapped[TaskRole | None] = mapped_column(
+        Enum(TaskRole, name="task_role"),
+        nullable=True,
+        doc="Роль, ответственная за задачу.",
+        comment="Ответственная за выполнение задачи роль.",
+    )
+    assignee: Mapped[str | None] = mapped_column(
+        String(length=255),
+        nullable=True,
+        doc="Свободная подпись исполнителя. Авторизации в проекте нет.",
+        comment="Необязательное имя исполнителя задачи.",
+    )
+    due_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        doc="Срок исполнения.",
+        comment="Плановая дата завершения задачи.",
+    )
+    position: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0.0,
+        doc="Позиция внутри стадии.",
+        comment="Позиция сортировки задачи внутри стадии.",
+    )
+    search_vector: Mapped[object] = mapped_column(
+        TSVECTOR,
+        Computed(
+            "setweight(to_tsvector('russian', coalesce(title, '')), 'A') || "
+            "setweight(to_tsvector('russian', coalesce(description_md, '')), 'B')",
+            persisted=True,
+        ),
+        nullable=False,
+        doc="Вычисляемый FTS-вектор задачи.",
+        comment="Взвешенный FTS-вектор заголовка и описания задачи.",
+    )
+
+    project: Mapped[Project] = relationship("Project", back_populates="tasks")
+    stage: Mapped[ProjectStage] = relationship("ProjectStage", back_populates="tasks")
+    wbs_node: Mapped[WbsNode | None] = relationship("WbsNode", back_populates="tasks")
+    comments: Mapped[list[TaskComment]] = relationship(
+        "TaskComment",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    activity: Mapped[list[TaskActivity]] = relationship(
+        "TaskActivity",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    attachments: Mapped[list[TaskAttachment]] = relationship(
+        "TaskAttachment",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    def __repr__(self) -> str:
+        return f"<Task(id={self.id}, project_id={self.project_id}, title={self.title!r})>"

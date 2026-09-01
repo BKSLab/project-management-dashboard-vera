@@ -5,11 +5,11 @@ from fastapi import APIRouter, HTTPException, Path, status
 
 from src.api.v1.responses import NOT_FOUND_RESPONSE, SERVER_ERROR_RESPONSE, VALIDATION_RESPONSE
 from src.dependencies.services import TaskCommentsServiceDep
-from src.exceptions.kanban_tasks import KanbanTasksServiceError
 from src.exceptions.task_comments import TaskCommentsServiceError
+from src.exceptions.tasks import TasksServiceError
 from src.schemas.task_comments import CommentCreateSchema, CommentSchema
 
-router = APIRouter(prefix="/kanban", tags=["task-comments"])
+router = APIRouter(prefix="", tags=["task-comments"])
 logger = logging.getLogger(__name__)
 
 
@@ -39,12 +39,12 @@ async def get_comments(
     Raises:
         HTTPException: Если задача не найдена или получить комментарии не удалось.
     """
-    logger.info("🚀 Запрос GET /kanban/tasks/%s/comments.", task_id)
+    logger.info("🚀 Запрос GET /tasks/%s/comments.", task_id)
     try:
         result = await service.get_comments(task_id=task_id)
         logger.info("✅ Комментарии задачи id=%s получены. Найдено: %s.", task_id, len(result))
         return result
-    except (TaskCommentsServiceError, KanbanTasksServiceError) as error:
+    except (TaskCommentsServiceError, TasksServiceError) as error:
         logger.exception(
             "❌ Ошибка получения комментариев задачи id=%s. Детали: %s", task_id, error
         )
@@ -79,7 +79,7 @@ async def add_comment(
     Raises:
         HTTPException: Если задача не найдена или комментарий сохранить не удалось.
     """
-    logger.info("🚀 Запрос POST /kanban/tasks/%s/comments. Автор: %s.", task_id, data.author_name)
+    logger.info("🚀 Запрос POST /tasks/%s/comments. Автор: %s.", task_id, data.author_name)
     try:
         result = await service.add_comment(
             task_id=task_id,
@@ -88,7 +88,7 @@ async def add_comment(
         )
         logger.info("✅ Комментарий id=%s добавлен к задаче id=%s.", result.id, task_id)
         return result
-    except (TaskCommentsServiceError, KanbanTasksServiceError) as error:
+    except (TaskCommentsServiceError, TasksServiceError) as error:
         logger.exception(
             "❌ Ошибка добавления комментария задачи id=%s. Детали: %s", task_id, error
         )
@@ -120,7 +120,7 @@ async def delete_comment(
     Raises:
         HTTPException: Если комментарий не найден или удаление не удалось.
     """
-    logger.info("🚀 Запрос DELETE /kanban/comments/%s.", comment_id)
+    logger.info("🚀 Запрос DELETE /comments/%s.", comment_id)
     try:
         await service.delete_comment(comment_id=comment_id)
         logger.info("✅ Комментарий id=%s удалён.", comment_id)

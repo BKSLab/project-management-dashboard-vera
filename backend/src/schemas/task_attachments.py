@@ -29,7 +29,7 @@ class TaskAttachmentSchema(BaseModel):
     content_url: str = Field(
         ...,
         description="Относительный URL просмотра или скачивания файла.",
-        examples=["/api/v1/kanban/tasks/12/attachments/4/content"],
+        examples=["/api/v1/tasks/12/attachments/4/content"],
     )
     previewable: bool = Field(
         ...,

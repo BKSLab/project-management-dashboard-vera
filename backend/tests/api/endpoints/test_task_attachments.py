@@ -24,7 +24,7 @@ def attachment_schema() -> TaskAttachmentSchema:
         content_type="application/pdf",
         size=3,
         created_at=datetime.now(UTC),
-        content_url="/api/v1/kanban/tasks/2/attachments/4/content",
+        content_url="/api/v1/tasks/2/attachments/4/content",
         previewable=False,
     )
 
@@ -37,7 +37,7 @@ async def test_upload_task_attachment_accepts_multipart(api_client: AsyncClient)
     app.dependency_overrides[get_task_attachments_service] = lambda: service
 
     response = await api_client.post(
-        "/api/v1/kanban/tasks/2/attachments",
+        "/api/v1/tasks/2/attachments",
         files={"file": ("report.pdf", b"pdf", "application/pdf")},
     )
 
@@ -59,7 +59,7 @@ async def test_upload_task_attachment_maps_too_large_to_413(api_client: AsyncCli
     app.dependency_overrides[get_task_attachments_service] = lambda: service
 
     response = await api_client.post(
-        "/api/v1/kanban/tasks/2/attachments",
+        "/api/v1/tasks/2/attachments",
         files={"file": ("report.pdf", b"pdf", "application/pdf")},
     )
 
@@ -82,7 +82,7 @@ async def test_get_task_attachment_content_streams_inline_image(
     )
     app.dependency_overrides[get_task_attachments_service] = lambda: service
 
-    response = await api_client.get("/api/v1/kanban/tasks/2/attachments/4/content")
+    response = await api_client.get("/api/v1/tasks/2/attachments/4/content")
 
     assert response.status_code == 200
     assert response.content == b"image"
@@ -99,6 +99,6 @@ async def test_delete_task_attachment_maps_missing_file_to_404(
     service.delete_attachment.side_effect = TaskAttachmentNotFoundError(attachment_id=999)
     app.dependency_overrides[get_task_attachments_service] = lambda: service
 
-    response = await api_client.delete("/api/v1/kanban/tasks/2/attachments/999")
+    response = await api_client.delete("/api/v1/tasks/2/attachments/999")
 
     assert response.status_code == 404

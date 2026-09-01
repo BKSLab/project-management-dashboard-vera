@@ -9,18 +9,18 @@ class DocumentLinksRepositoryError(RepositoryError):
     detail = "Ошибка базы данных при обработке связей документов."
 
 
-class DocumentLinksServiceError(ServiceError):
-    """Ошибка бизнес-операции со связями документов."""
-
-    detail = "Не удалось выполнить операцию со связью документа."
-
-
 class DocumentLinkAlreadyExistsRepositoryError(DocumentLinksRepositoryError):
     """Такая связь документа уже существует в БД."""
 
     def __init__(self, document_id: int):
         self.document_id = document_id
         super().__init__(error_details=f"Связь документа id={document_id} уже существует.")
+
+
+class DocumentLinksServiceError(ServiceError):
+    """Ошибка бизнес-операции со связями документов."""
+
+    detail = "Не удалось выполнить операцию со связью документа."
 
 
 class DocumentLinkAlreadyExistsError(DocumentLinksServiceError):
@@ -37,14 +37,23 @@ class DocumentLinkAlreadyExistsError(DocumentLinksServiceError):
         return f"Такая связь документа с id={self.document_id} уже существует."
 
 
-class DocumentLinkInvalidError(DocumentLinksServiceError):
-    """Связь указывает не на один целевой объект."""
+class DocumentLinkProjectMismatchError(DocumentLinksServiceError):
+    """Документ и задача принадлежат разным проектам."""
 
-    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
-    detail = "Должно быть заполнено ровно одно из полей: kanban_task_id или wbs_item_id."
+    status_code = status.HTTP_409_CONFLICT
 
-    def __init__(self):
-        super().__init__(error_details=self.detail)
+    def __init__(self, document_id: int, task_id: int):
+        self.document_id = document_id
+        self.task_id = task_id
+        super().__init__(
+            error_details=(
+                f"Документ id={document_id} и задача id={task_id} принадлежат разным проектам."
+            ),
+        )
+
+    @property
+    def detail(self) -> str:
+        return "Связать можно только документ и задачу одного проекта."
 
 
 class DocumentLinkNotFoundError(DocumentLinksServiceError):

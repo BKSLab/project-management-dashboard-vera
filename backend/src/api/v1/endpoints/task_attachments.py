@@ -11,11 +11,11 @@ from src.api.v1.responses import (
     VALIDATION_RESPONSE,
 )
 from src.dependencies.services import TaskAttachmentsServiceDep
-from src.exceptions.kanban_tasks import KanbanTasksServiceError
 from src.exceptions.task_attachments import TaskAttachmentsServiceError
+from src.exceptions.tasks import TasksServiceError
 from src.schemas.task_attachments import TaskAttachmentSchema
 
-router = APIRouter(prefix="/kanban", tags=["task-attachments"])
+router = APIRouter(prefix="", tags=["task-attachments"])
 logger = logging.getLogger(__name__)
 
 TOO_LARGE_RESPONSE = {
@@ -54,12 +54,12 @@ async def get_task_attachments(
     Raises:
         HTTPException: Если задача не найдена или получить файлы не удалось.
     """
-    logger.info("🚀 Запрос GET /kanban/tasks/%s/attachments.", task_id)
+    logger.info("🚀 Запрос GET /tasks/%s/attachments.", task_id)
     try:
         result = await service.get_attachments(task_id=task_id)
         logger.info("✅ Файлы задачи id=%s получены. Найдено: %s.", task_id, len(result))
         return result
-    except (TaskAttachmentsServiceError, KanbanTasksServiceError) as error:
+    except (TaskAttachmentsServiceError, TasksServiceError) as error:
         logger.exception("❌ Ошибка получения файлов задачи id=%s. Детали: %s", task_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
@@ -99,7 +99,7 @@ async def upload_task_attachment(
     Raises:
         HTTPException: Если задача не найдена, файл невалиден или сохранение не удалось.
     """
-    logger.info("🚀 Запрос POST /kanban/tasks/%s/attachments. Файл: %r.", task_id, file.filename)
+    logger.info("🚀 Запрос POST /tasks/%s/attachments. Файл: %r.", task_id, file.filename)
     try:
         content = await file.read(service.max_file_size + 1)
         result = await service.upload_attachment(
@@ -110,7 +110,7 @@ async def upload_task_attachment(
         )
         logger.info("✅ Файл id=%s добавлен к задаче id=%s.", result.id, task_id)
         return result
-    except (TaskAttachmentsServiceError, KanbanTasksServiceError) as error:
+    except (TaskAttachmentsServiceError, TasksServiceError) as error:
         logger.exception("❌ Ошибка загрузки файла задачи id=%s. Детали: %s", task_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     finally:
@@ -145,7 +145,7 @@ async def get_task_attachment_content(
         HTTPException: Если файл не найден или недоступен.
     """
     logger.info(
-        "🚀 Запрос GET /kanban/tasks/%s/attachments/%s/content.",
+        "🚀 Запрос GET /tasks/%s/attachments/%s/content.",
         task_id,
         attachment_id,
     )
@@ -194,7 +194,7 @@ async def delete_task_attachment(
     Raises:
         HTTPException: Если файл не найден или удалить его не удалось.
     """
-    logger.info("🚀 Запрос DELETE /kanban/tasks/%s/attachments/%s.", task_id, attachment_id)
+    logger.info("🚀 Запрос DELETE /tasks/%s/attachments/%s.", task_id, attachment_id)
     try:
         await service.delete_attachment(task_id=task_id, attachment_id=attachment_id)
         logger.info("✅ Файл id=%s удалён из задачи id=%s.", attachment_id, task_id)

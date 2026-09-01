@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.db.models.task_attachments import TaskAttachment
-from src.exceptions.kanban_tasks import KanbanTaskNotFoundError, KanbanTasksRepositoryError
 from src.exceptions.task_attachments import (
     TaskAttachmentLimitError,
     TaskAttachmentNotFoundError,
@@ -17,8 +16,9 @@ from src.exceptions.task_attachments import (
     TaskAttachmentUnsupportedTypeError,
     TaskAttachmentValidationError,
 )
-from src.repositories.kanban_tasks import KanbanTasksRepository
+from src.exceptions.tasks import TaskNotFoundError, TasksRepositoryError
 from src.repositories.task_attachments import TaskAttachmentsRepository
+from src.repositories.tasks import TasksRepository
 from src.schemas.task_attachments import TaskAttachmentSchema
 from src.storage.task_attachments import TaskAttachmentStorage
 
@@ -76,7 +76,7 @@ class TaskAttachmentsService:
     def __init__(
         self,
         attachments_repository: TaskAttachmentsRepository,
-        tasks_repository: KanbanTasksRepository,
+        tasks_repository: TasksRepository,
         storage: TaskAttachmentStorage,
     ) -> None:
         self.attachments_repository = attachments_repository
@@ -98,16 +98,16 @@ class TaskAttachmentsService:
             Метаданные файлов в хронологическом порядке.
 
         Raises:
-            KanbanTaskNotFoundError: Если задача не найдена.
+            TaskNotFoundError: Если задача не найдена.
             TaskAttachmentsServiceError: Если получить файлы не удалось.
         """
         try:
             await self._ensure_task_exists(task_id)
             attachments = await self.attachments_repository.get_for_task(task_id=task_id)
             return [self._to_schema(attachment) for attachment in attachments]
-        except KanbanTaskNotFoundError:
+        except TaskNotFoundError:
             raise
-        except (TaskAttachmentsRepositoryError, KanbanTasksRepositoryError) as error:
+        except (TaskAttachmentsRepositoryError, TasksRepositoryError) as error:
             logger.error("❌ Ошибка получения файлов задачи id=%s.", task_id, exc_info=True)
             raise TaskAttachmentsServiceError(str(error)) from error
 
@@ -131,7 +131,7 @@ class TaskAttachmentsService:
             Метаданные созданного файла.
 
         Raises:
-            KanbanTaskNotFoundError: Если задача не найдена.
+            TaskNotFoundError: Если задача не найдена.
             TaskAttachmentValidationError: Если файл пуст или имя некорректно.
             TaskAttachmentTooLargeError: Если файл превышает 10 МБ.
             TaskAttachmentUnsupportedTypeError: Если расширение запрещено.
@@ -171,7 +171,7 @@ class TaskAttachmentsService:
             )
             return self._to_schema(attachment)
         except (
-            KanbanTaskNotFoundError,
+            TaskNotFoundError,
             TaskAttachmentLimitError,
             TaskAttachmentTooLargeError,
             TaskAttachmentUnsupportedTypeError,
@@ -181,7 +181,7 @@ class TaskAttachmentsService:
         except (
             TaskAttachmentStorageError,
             TaskAttachmentsRepositoryError,
-            KanbanTasksRepositoryError,
+            TasksRepositoryError,
         ) as error:
             if storage_key is not None:
                 try:
@@ -264,7 +264,7 @@ class TaskAttachmentsService:
     async def _ensure_task_exists(self, task_id: int) -> None:
         """Проверяет существование задачи."""
         if await self.tasks_repository.get_by_id(task_id=task_id) is None:
-            raise KanbanTaskNotFoundError(task_id=task_id)
+            raise TaskNotFoundError(task_id=task_id)
 
     async def _get_attachment(
         self,
@@ -318,9 +318,7 @@ class TaskAttachmentsService:
             content_type=attachment.content_type,
             size=attachment.size,
             created_at=attachment.created_at,
-            content_url=(
-                f"/api/v1/kanban/tasks/{attachment.task_id}/attachments/{attachment.id}/content"
-            ),
+            content_url=(f"/api/v1/tasks/{attachment.task_id}/attachments/{attachment.id}/content"),
             previewable=self._is_previewable(
                 attachment.original_name,
                 attachment.content_type,
