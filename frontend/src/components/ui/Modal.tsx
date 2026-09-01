@@ -1,92 +1,83 @@
-import type { DialogProps } from "react-aria-components";
-import { Modal as RACModal, ModalOverlay, Dialog, Heading } from "react-aria-components";
+import type { ReactNode } from "react";
+import { X } from "lucide-react";
+import { Dialog, Heading, Modal as RACModal, ModalOverlay } from "react-aria-components";
 import { cn } from "@/lib/cn";
+import { IconButton } from "@/components/ui/Button";
 
-interface ModalProps extends DialogProps {
-    title?: string;
-    children: React.ReactNode;
+interface ModalProps {
+    title: string;
+    description?: string;
+    children: ReactNode;
+    footer?: ReactNode;
     isOpen?: boolean;
     onOpenChange?: (isOpen: boolean) => void;
-    containerClassName?: string;
-    overlayClassName?: string;
+    /** Ширина диалога: обычные формы — sm, карточка задачи — lg. */
+    size?: "sm" | "md" | "lg";
+    isDismissable?: boolean;
 }
+
+const SIZES = {
+    sm: "max-w-md",
+    md: "max-w-xl",
+    lg: "max-w-3xl",
+} as const;
 
 export function Modal({
     title,
+    description,
     children,
+    footer,
     isOpen,
     onOpenChange,
-    containerClassName,
-    overlayClassName,
-    ...props
+    size = "sm",
+    isDismissable = true,
 }: ModalProps) {
     return (
         <ModalOverlay
             isOpen={isOpen}
             onOpenChange={onOpenChange}
-            isDismissable
+            isDismissable={isDismissable}
             className={cn(
-                "fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md",
-                overlayClassName,
+                "fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4",
+                "backdrop-blur-[2px]",
             )}
         >
             <RACModal
                 className={cn(
-                    "relative flex w-full max-w-md flex-col overflow-hidden rounded-2xl",
-                    "border border-white/15",
-                    "bg-[linear-gradient(160deg,rgba(255,255,255,0.07),rgba(255,255,255,0.03))]",
-                    "shadow-[0_24px_64px_rgba(0,0,0,0.65),inset_0_0_0_1px_rgba(255,255,255,0.05)]",
-                    "backdrop-blur-md backdrop-saturate-150",
-                    containerClassName
+                    "glass relative flex max-h-[min(85vh,900px)] w-full flex-col overflow-hidden",
+                    "rounded-[var(--radius-xl)] shadow-panel",
+                    SIZES[size],
                 )}
             >
-                <Dialog {...props} className="flex min-h-0 flex-1 flex-col outline-none">
+                <Dialog aria-label={title} className="flex min-h-0 flex-1 flex-col outline-none">
                     {({ close }) => (
                         <>
-                            <div
-                                aria-hidden="true"
-                                className="h-px shrink-0 bg-gradient-to-r from-transparent via-accent to-transparent"
-                            />
-
-                            <div className="flex min-h-0 flex-1 flex-col p-6">
-                                {title && (
-                                    <div className="mb-5 flex shrink-0 items-center justify-between gap-4">
-                                        <Heading
-                                            slot="title"
-                                            className="min-w-0 break-words text-xl font-bold text-foreground"
-                                        >
-                                            {title}
-                                        </Heading>
-                                        <button
-                                            onClick={close}
-                                            aria-label="Закрыть"
-                                            className="shrink-0 rounded-lg p-1.5 text-muted transition-colors hover:bg-white/10 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-                                        >
-                                            <svg
-                                                width="16"
-                                                height="16"
-                                                viewBox="0 0 24 24"
-                                                fill="none"
-                                                stroke="currentColor"
-                                                strokeWidth="2.5"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                                aria-hidden="true"
-                                            >
-                                                <path d="M18 6L6 18M6 6l12 12" />
-                                            </svg>
-                                        </button>
-                                    </div>
-                                )}
-                                <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
-                                    {children}
+                            <header className="flex shrink-0 items-start justify-between gap-4 border-b border-line px-5 py-4">
+                                <div className="flex min-w-0 flex-col gap-1">
+                                    <Heading
+                                        slot="title"
+                                        className="min-w-0 text-[15px] font-semibold break-words text-primary"
+                                    >
+                                        {title}
+                                    </Heading>
+                                    {description && (
+                                        <p className="text-[13px] text-muted">{description}</p>
+                                    )}
                                 </div>
+                                <IconButton label="Закрыть" onClick={close}>
+                                    <X size={16} aria-hidden="true" />
+                                </IconButton>
+                            </header>
+
+                            <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                                {children}
                             </div>
 
-                            <div
-                                aria-hidden="true"
-                                className="h-px shrink-0 bg-gradient-to-r from-transparent via-white/8 to-transparent"
-                            />
+                            {footer && (
+                                <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line px-5 py-3">
+                                    {footer}
+                                </footer>
+                            )}
                         </>
                     )}
                 </Dialog>

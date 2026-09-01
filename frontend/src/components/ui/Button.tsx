@@ -1,32 +1,109 @@
+import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { Link, type LinkProps } from "react-router-dom";
 import { cn } from "@/lib/cn";
-import type { ButtonHTMLAttributes } from "react";
+
+const base =
+    "inline-flex items-center justify-center gap-2 rounded-md font-medium " +
+    "transition-[background-color,border-color,color,box-shadow] duration-[var(--duration-normal)] " +
+    "ease-[var(--ease-standard)] disabled:cursor-not-allowed disabled:opacity-55 " +
+    "disabled:hover:bg-inherit";
 
 const variants = {
-    primary:
-        "rounded-md bg-accent px-4 py-2 font-semibold text-accent-foreground transition-colors duration-150 hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60",
+    primary: "bg-accent text-[#0d1117] font-semibold hover:bg-accent-hover active:brightness-95",
     secondary:
-        "rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-sm font-semibold text-foreground transition-colors duration-150 hover:border-white/20 hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60",
-    neutral:
-        "rounded-md bg-surface-hover px-3 py-1.5 text-sm font-medium text-foreground transition-colors duration-150 hover:bg-surface-active focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60",
+        "border border-line bg-surface-2 text-primary hover:border-line-strong hover:bg-hover active:bg-active",
+    ghost: "text-secondary hover:bg-hover hover:text-primary active:bg-active",
+    destructive:
+        "border border-danger/40 bg-danger/10 text-danger hover:border-danger/60 hover:bg-danger/20",
 } as const;
 
-type ButtonVariant = keyof typeof variants;
+const sizes = {
+    sm: "h-7 px-2.5 text-[13px]",
+    md: "h-8 px-3 text-[13px]",
+    lg: "h-9 px-4 text-sm",
+} as const;
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-    variant?: ButtonVariant;
+    variant?: keyof typeof variants;
+    size?: keyof typeof sizes;
+    icon?: ReactNode;
 }
 
 export function Button({
     variant = "secondary",
+    size = "md",
+    icon,
     className,
     type = "button",
+    children,
     ...props
 }: ButtonProps) {
     return (
         <button
             type={type}
-            className={cn(variants[variant], className)}
+            className={cn(base, variants[variant], sizes[size], className)}
             {...props}
-        />
+        >
+            {icon}
+            {children}
+        </button>
+    );
+}
+
+interface LinkButtonProps extends LinkProps {
+    variant?: keyof typeof variants;
+    size?: keyof typeof sizes;
+    icon?: ReactNode;
+}
+
+/** Ссылка с видом кнопки: настоящий `a`, а не кнопка с вложенной ссылкой. */
+export function LinkButton({
+    variant = "secondary",
+    size = "md",
+    icon,
+    className,
+    children,
+    ...props
+}: LinkButtonProps) {
+    return (
+        <Link className={cn(base, variants[variant], sizes[size], className)} {...props}>
+            {icon}
+            {children}
+        </Link>
+    );
+}
+
+interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+    /** Обязателен: кнопка без текста непонятна без доступного имени (раздел 15). */
+    label: string;
+    variant?: keyof typeof variants;
+    size?: "sm" | "md";
+}
+
+export function IconButton({
+    label,
+    variant = "ghost",
+    size = "md",
+    className,
+    type = "button",
+    children,
+    ...props
+}: IconButtonProps) {
+    return (
+        <button
+            type={type}
+            aria-label={label}
+            title={label}
+            className={cn(
+                base,
+                variants[variant],
+                size === "sm" ? "h-6 w-6" : "h-8 w-8",
+                "shrink-0 p-0",
+                className,
+            )}
+            {...props}
+        >
+            {children}
+        </button>
     );
 }

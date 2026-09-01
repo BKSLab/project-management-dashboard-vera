@@ -33,10 +33,10 @@ export function SearchHighlight({ text }: SearchHighlightProps) {
         parts.push(
             <mark
                 key={partIndex++}
-                className="rounded-sm bg-yellow-300 px-0.5 font-semibold text-slate-950 ring-1 ring-yellow-200/80"
+                className="rounded-sm bg-accent/25 px-0.5 font-semibold text-primary"
             >
                 {text.slice(matchStart, end)}
-            </mark>
+            </mark>,
         );
         cursor = end + HIGHLIGHT_END.length;
     }

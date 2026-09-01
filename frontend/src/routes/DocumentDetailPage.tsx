@@ -1,141 +1,248 @@
 import { useState } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
-import { cn } from "@/lib/cn";
-import type { DocumentDetail } from "@/lib/types";
-import { FocusHeading } from "@/components/ui/FocusHeading";
-import { Skeleton } from "@/components/ui/Skeleton";
-import { ErrorMessage } from "@/components/ui/ErrorMessage";
-import { Button } from "@/components/ui/Button";
-import { MarkdownEditor } from "@/components/docs/MarkdownEditor";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, Pencil, Trash2 } from "lucide-react";
+import { api, endpoints, queryKeys } from "@/lib/api";
+import type { DocumentDetail, DocumentListItem, LinkedTask } from "@/lib/types";
+import { formatRelative } from "@/lib/dates";
+import { useProjectOutlet } from "@/lib/useProjectOutlet";
 import { useRenderedMarkdown } from "@/lib/useRenderedMarkdown";
+import { useUiStore } from "@/stores/ui";
+import { Button, IconButton } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
+import { Input, Textarea } from "@/components/ui/Field";
+import { Modal } from "@/components/ui/Modal";
+import { EmptyState, ErrorMessage, Skeleton } from "@/components/ui/States";
 
-const PARAGRAPH_WIDTHS = ["w-full", "w-11/12", "w-4/5", "w-full", "w-3/5", "w-full", "w-2/3"];
-
-function DocumentDetailSkeleton() {
+function RenderedDocument({ markdown }: { markdown: string }) {
+    const html = useRenderedMarkdown(markdown);
     return (
-        <div className="mx-auto max-w-6xl" role="status" aria-live="polite" aria-label="Загрузка документа...">
-            <div className="mb-6 flex items-center justify-between gap-4">
-                <Skeleton className="h-8 w-72" />
-                <div className="flex gap-2">
-                    <Skeleton className="h-8 w-28 rounded-md" />
-                    <Skeleton className="h-8 w-24 rounded-md" />
-                </div>
-            </div>
-            <div className="space-y-3">
-                {PARAGRAPH_WIDTHS.map((width, index) => (
-                    <Skeleton key={index} className={cn("h-4", width)} />
-                ))}
-            </div>
-        </div>
+        <div
+            className="markdown-body"
+            // Содержимое очищается DOMPurify внутри renderMarkdown.
+            dangerouslySetInnerHTML={{ __html: html }}
+        />
     );
 }
 
 export function DocumentDetailPage() {
+    const project = useProjectOutlet();
     const { slug } = useParams<{ slug: string }>();
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    const [isEditing, setIsEditing] = useState(false);
-    const [draft, setDraft] = useState("");
+    const setSelectedTaskId = useUiStore((state) => state.setSelectedTaskId);
+    const [isEditing, setEditing] = useState(false);
+    const [titleDraft, setTitleDraft] = useState("");
+    const [contentDraft, setContentDraft] = useState("");
+    const [isDeleteOpen, setDeleteOpen] = useState(false);
 
-    const { data, isPending, isError, error } = useQuery({
-        queryKey: ["documents", slug],
-        queryFn: () => api.get<DocumentDetail>(`/api/v1/documents/${slug}`),
-        enabled: !!slug,
+    const listQuery = useQuery({
+        queryKey: queryKeys.documents(project.id),
+        queryFn: () => api.get<DocumentListItem[]>(endpoints.projectDocuments(project.id)),
     });
 
-    const updateMutation = useMutation({
-        mutationFn: (content_md: string) =>
-            api.patch<DocumentDetail>(`/api/v1/documents/${slug}`, { content_md }),
-        onSuccess: (updated) => {
-            queryClient.setQueryData(["documents", slug], updated);
-            queryClient.invalidateQueries({ queryKey: ["documents"] });
-            setIsEditing(false);
+    const documentId = listQuery.data?.find((item) => item.slug === slug)?.id;
+
+    const documentQuery = useQuery({
+        queryKey: queryKeys.document(documentId ?? 0),
+        queryFn: () => api.get<DocumentDetail>(endpoints.document(documentId as number)),
+        enabled: documentId !== undefined,
+    });
+
+    const linksQuery = useQuery({
+        queryKey: queryKeys.documentLinks(documentId ?? 0),
+        queryFn: () => api.get<LinkedTask[]>(endpoints.documentLinks(documentId as number)),
+        enabled: documentId !== undefined,
+    });
+
+    function startEditing(document: DocumentDetail) {
+        setTitleDraft(document.title);
+        setContentDraft(document.content_md);
+        setEditing(true);
+    }
+
+    const saveMutation = useMutation({
+        mutationFn: () =>
+            api.patch<DocumentDetail>(endpoints.document(documentId as number), {
+                title: titleDraft.trim(),
+                content_md: contentDraft,
+            }),
+        onSuccess: () => {
+            setEditing(false);
+            queryClient.invalidateQueries({ queryKey: ["projects", project.id, "documents"] });
+            queryClient.invalidateQueries({ queryKey: queryKeys.document(documentId as number) });
         },
     });
 
     const deleteMutation = useMutation({
-        mutationFn: () => api.delete(`/api/v1/documents/${slug}`),
+        mutationFn: () => api.delete(endpoints.document(documentId as number)),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ["documents"] });
-            navigate("/docs");
+            queryClient.invalidateQueries({ queryKey: ["projects", project.id, "documents"] });
+            navigate(`/projects/${project.key}/docs`);
         },
     });
 
-    const handleDelete = () => {
-        if (data && window.confirm(`Удалить документ «${data.title}»? Действие нельзя отменить.`)) {
-            deleteMutation.mutate();
-        }
-    };
+    if (listQuery.isPending || documentQuery.isPending) {
+        return (
+            <div className="mx-auto flex w-full max-w-4xl flex-col gap-3 px-5 py-5">
+                <Skeleton className="h-8 w-64" />
+                <Skeleton className="h-64 w-full" />
+            </div>
+        );
+    }
 
-    const previewHtml = useRenderedMarkdown(data?.content_md ?? "");
+    if (documentId === undefined) {
+        return (
+            <div className="mx-auto w-full max-w-4xl px-5 py-5">
+                <EmptyState
+                    title="Документ не найден"
+                    description={`В проекте нет документа со slug «${slug}».`}
+                    action={
+                        <Link
+                            to={`/projects/${project.key}/docs`}
+                            className="text-[13px] text-accent hover:text-accent-hover"
+                        >
+                            Ко всем документам
+                        </Link>
+                    }
+                />
+            </div>
+        );
+    }
 
-    if (isPending) return <DocumentDetailSkeleton />;
-    if (isError) return <ErrorMessage message={(error as Error).message} />;
-    if (!data) return null;
+    const document = documentQuery.data;
 
     return (
-        <div className="mx-auto max-w-6xl">
-            <div className="mb-6 flex items-center justify-between gap-4">
-                <FocusHeading className="text-2xl font-bold">{data.title}</FocusHeading>
-                <div className="flex gap-2">
-                    <Link to="/docs" className="text-sm text-muted hover:text-foreground">
-                        ← К списку
+        <div className="scrollbar-thin h-full overflow-y-auto">
+            <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 py-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Link
+                        to={`/projects/${project.key}/docs`}
+                        className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-secondary"
+                    >
+                        <ArrowLeft size={14} aria-hidden="true" />
+                        Документы
                     </Link>
-                    {!isEditing && (
-                        <>
-                            <Button
-                                variant="secondary"
-                                onClick={() => {
-                                    setDraft(data.content_md);
-                                    setIsEditing(true);
-                                }}
+                    <div className="flex items-center gap-1">
+                        {!isEditing && documentQuery.data && (
+                            <IconButton
+                                label="Редактировать документ"
+                                onClick={() => startEditing(documentQuery.data)}
                             >
-                                Редактировать
-                            </Button>
-                            <Button
-                                variant="neutral"
-                                disabled={deleteMutation.isPending}
-                                onClick={handleDelete}
-                            >
-                                Удалить
-                            </Button>
-                        </>
-                    )}
-                </div>
-            </div>
-
-            {updateMutation.isError && (
-                <div className="mb-4">
-                    <ErrorMessage message={(updateMutation.error as Error).message} />
-                </div>
-            )}
-            {deleteMutation.isError && (
-                <div className="mb-4">
-                    <ErrorMessage message={(deleteMutation.error as Error).message} />
-                </div>
-            )}
-
-            {isEditing ? (
-                <div>
-                    <MarkdownEditor value={draft} onChange={setDraft} />
-                    <div className="mt-4 flex gap-2">
-                        <Button
-                            variant="primary"
-                            disabled={updateMutation.isPending}
-                            onClick={() => updateMutation.mutate(draft)}
+                                <Pencil size={14} aria-hidden="true" />
+                            </IconButton>
+                        )}
+                        <IconButton
+                            label="Удалить документ"
+                            variant="destructive"
+                            onClick={() => setDeleteOpen(true)}
                         >
-                            {updateMutation.isPending ? "Сохранение..." : "Сохранить"}
-                        </Button>
-                        <Button variant="neutral" onClick={() => setIsEditing(false)}>
-                            Отмена
-                        </Button>
+                            <Trash2 size={14} aria-hidden="true" />
+                        </IconButton>
                     </div>
                 </div>
-            ) : (
-                <div className="markdown-body" dangerouslySetInnerHTML={{ __html: previewHtml }} />
-            )}
+
+                {saveMutation.error && (
+                    <ErrorMessage message={(saveMutation.error as Error).message} />
+                )}
+
+                {isEditing ? (
+                    <Card className="flex flex-col gap-3 p-4">
+                        <Input
+                            value={titleDraft}
+                            aria-label="Заголовок документа"
+                            onChange={(event) => setTitleDraft(event.target.value)}
+                        />
+                        <Textarea
+                            rows={22}
+                            value={contentDraft}
+                            aria-label="Содержимое документа в Markdown"
+                            className="font-mono text-[12px]"
+                            onChange={(event) => setContentDraft(event.target.value)}
+                        />
+                        <div className="flex justify-end gap-2">
+                            <Button onClick={() => setEditing(false)}>Отмена</Button>
+                            <Button
+                                variant="primary"
+                                disabled={titleDraft.trim() === "" || saveMutation.isPending}
+                                onClick={() => saveMutation.mutate()}
+                            >
+                                Сохранить
+                            </Button>
+                        </div>
+                    </Card>
+                ) : (
+                    document && (
+                        <>
+                            <header className="flex flex-col gap-1">
+                                <h1 className="text-xl font-semibold text-primary">
+                                    {document.title}
+                                </h1>
+                                <p className="text-[11px] text-disabled">
+                                    <span className="font-mono">{document.slug}</span> · изменён{" "}
+                                    {formatRelative(document.updated_at)}
+                                </p>
+                            </header>
+
+                            <Card className="p-5">
+                                <RenderedDocument markdown={document.content_md} />
+                            </Card>
+                        </>
+                    )
+                )}
+
+                {(linksQuery.data?.length ?? 0) > 0 && (
+                    <section className="flex flex-col gap-2">
+                        <h2 className="text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">
+                            Связанные задачи
+                        </h2>
+                        <Card className="p-1.5">
+                            {linksQuery.data?.map((link) => (
+                                <button
+                                    key={link.link_id}
+                                    type="button"
+                                    onClick={() => setSelectedTaskId(link.task_id)}
+                                    className="flex w-full min-w-0 items-center gap-3 rounded-md px-2.5 py-2 text-left hover:bg-hover"
+                                >
+                                    <span className="w-20 shrink-0 font-mono text-[11px] text-muted">
+                                        {link.key}
+                                    </span>
+                                    <span className="min-w-0 flex-1 truncate text-[13px] text-secondary">
+                                        {link.title}
+                                    </span>
+                                </button>
+                            ))}
+                        </Card>
+                    </section>
+                )}
+            </div>
+
+            <Modal
+                title="Удалить документ?"
+                description="Документ и его связи с задачами будут удалены безвозвратно."
+                isOpen={isDeleteOpen}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        setDeleteOpen(false);
+                    }
+                }}
+                footer={
+                    <>
+                        <Button onClick={() => setDeleteOpen(false)}>Отмена</Button>
+                        <Button
+                            variant="destructive"
+                            disabled={deleteMutation.isPending}
+                            onClick={() => deleteMutation.mutate()}
+                        >
+                            Удалить
+                        </Button>
+                    </>
+                }
+            >
+                {deleteMutation.error && (
+                    <ErrorMessage message={(deleteMutation.error as Error).message} />
+                )}
+            </Modal>
         </div>
     );
 }

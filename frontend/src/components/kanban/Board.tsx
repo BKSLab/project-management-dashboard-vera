@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import {
     DndContext,
     DragOverlay,
+    KeyboardSensor,
     PointerSensor,
     useSensor,
     useSensors,
@@ -9,18 +10,21 @@ import {
     type DragStartEvent,
 } from "@dnd-kit/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
-import type { KanbanStage, KanbanTask } from "@/lib/types";
-import { compareWbsCode } from "@/lib/sortCode";
+import { api, endpoints, queryKeys } from "@/lib/api";
+import type { ProjectStage, Task } from "@/lib/types";
+import { useToast } from "@/lib/toast";
 import { Column } from "@/components/kanban/Column";
-import { TaskCardContent } from "@/components/kanban/TaskCard";
-import { ErrorMessage } from "@/components/ui/ErrorMessage";
+import { TaskCard } from "@/components/kanban/TaskCard";
+
+const POSITION_STEP = 1000;
 
 interface BoardProps {
-    stages: KanbanStage[];
-    tasks: KanbanTask[];
-    highlightedTaskId: number | null;
-    onTaskClick: (taskId: number) => void;
+    projectId: number;
+    stages: ProjectStage[];
+    tasks: Task[];
+    search: string;
+    selectedTaskId: number | null;
+    onTaskOpen: (taskId: number) => void;
 }
 
 interface MoveVariables {
@@ -29,87 +33,87 @@ interface MoveVariables {
     position: number;
 }
 
-export function Board({ stages, tasks, highlightedTaskId, onTaskClick }: BoardProps) {
+export function Board({
+    projectId,
+    stages,
+    tasks,
+    search,
+    selectedTaskId,
+    onTaskOpen,
+}: BoardProps) {
     const queryClient = useQueryClient();
-    const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
-    const [activeTask, setActiveTask] = useState<KanbanTask | null>(null);
-
-    const backlogStageId = useMemo(
-        () =>
-            stages.length > 0
-                ? stages.reduce((min, stage) => (stage.order_index < min.order_index ? stage : min)).id
-                : null,
-        [stages]
+    const toast = useToast();
+    const sensors = useSensors(
+        useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+        useSensor(KeyboardSensor),
     );
+    const [activeTask, setActiveTask] = useState<Task | null>(null);
 
     const tasksByStage = useMemo(() => {
-        const map = new Map<number, KanbanTask[]>();
-        for (const stage of stages) map.set(stage.id, []);
+        const map = new Map<number, Task[]>();
+        for (const stage of stages) {
+            map.set(stage.id, []);
+        }
         for (const task of tasks) {
             map.get(task.stage_id)?.push(task);
         }
-        for (const [stageId, list] of map.entries()) {
-            if (stageId === backlogStageId) {
-                list.sort((a, b) => {
-                    if (a.wbs_code && b.wbs_code) return compareWbsCode(a.wbs_code, b.wbs_code);
-                    if (a.wbs_code) return -1;
-                    if (b.wbs_code) return 1;
-                    return a.title.localeCompare(b.title, "ru");
-                });
-            } else {
-                list.sort((a, b) => a.position - b.position);
-            }
+        for (const list of map.values()) {
+            list.sort((first, second) => first.position - second.position);
         }
         return map;
-    }, [stages, tasks, backlogStageId]);
+    }, [stages, tasks]);
+
+    const tasksKey = queryKeys.tasks(projectId, search);
 
     const moveMutation = useMutation({
         mutationFn: ({ taskId, stageId, position }: MoveVariables) =>
-            api.patch<KanbanTask>(`/api/v1/kanban/tasks/${taskId}/move`, { stage_id: stageId, position }),
+            api.patch<Task>(endpoints.taskMove(taskId), { stage_id: stageId, position }),
         onMutate: async (variables) => {
-            const previous = queryClient.getQueryData<KanbanTask[]>(["kanban", "tasks"]);
-            queryClient.setQueryData<KanbanTask[]>(["kanban", "tasks"], (old) =>
+            await queryClient.cancelQueries({ queryKey: tasksKey });
+            const previous = queryClient.getQueryData<Task[]>(tasksKey);
+            queryClient.setQueryData<Task[]>(tasksKey, (old) =>
                 (old ?? []).map((task) =>
                     task.id === variables.taskId
                         ? { ...task, stage_id: variables.stageId, position: variables.position }
-                        : task
-                )
+                        : task,
+                ),
             );
             return { previous };
         },
-        onError: (_error, _variables, context) => {
+        onError: (error, _variables, context) => {
             if (context?.previous) {
-                queryClient.setQueryData(["kanban", "tasks"], context.previous);
+                queryClient.setQueryData(tasksKey, context.previous);
             }
+            toast.error(`Не удалось переместить задачу: ${(error as Error).message}`);
         },
         onSettled: () => {
-            queryClient.invalidateQueries({ queryKey: ["kanban", "tasks"] });
-            queryClient.invalidateQueries({ queryKey: ["wbs", "tree"] });
+            queryClient.invalidateQueries({ queryKey: ["projects", projectId] });
+            queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
         },
     });
 
     function handleDragStart(event: DragStartEvent) {
-        const task = tasks.find((item) => item.id === Number(event.active.id));
-        setActiveTask(task ?? null);
+        setActiveTask(tasks.find((task) => task.id === Number(event.active.id)) ?? null);
     }
 
     function handleDragEnd(event: DragEndEvent) {
         setActiveTask(null);
         const { active, over } = event;
-        if (!over) return;
-
-        const activeTaskId = Number(active.id);
-        const activeTask = tasks.find((task) => task.id === activeTaskId);
-        if (!activeTask) return;
-
+        if (!over) {
+            return;
+        }
+        const task = tasks.find((item) => item.id === Number(active.id));
         const targetStageId = Number(over.id);
-        if (targetStageId === activeTask.stage_id) return;
-
-        const destTasks = tasksByStage.get(targetStageId) ?? [];
-        const maxPosition = destTasks.reduce((max, task) => Math.max(max, task.position), 0);
-        const newPosition = maxPosition + 1000;
-
-        moveMutation.mutate({ taskId: activeTaskId, stageId: targetStageId, position: newPosition });
+        if (!task || targetStageId === task.stage_id) {
+            return;
+        }
+        const destination = tasksByStage.get(targetStageId) ?? [];
+        const maxPosition = destination.reduce((max, item) => Math.max(max, item.position), 0);
+        moveMutation.mutate({
+            taskId: task.id,
+            stageId: targetStageId,
+            position: maxPosition + POSITION_STEP,
+        });
     }
 
     return (
@@ -119,32 +123,24 @@ export function Board({ stages, tasks, highlightedTaskId, onTaskClick }: BoardPr
             onDragEnd={handleDragEnd}
             onDragCancel={() => setActiveTask(null)}
         >
-            {moveMutation.isError && (
-                <div className="mb-4">
-                    <ErrorMessage
-                        title="Не удалось переместить задачу"
-                        message={(moveMutation.error as Error).message}
-                    />
-                </div>
-            )}
-            <div className="scrollbar-thin overflow-x-auto pb-4">
-                <div className="flex w-max min-w-full justify-start gap-4">
+            <div className="scrollbar-thin h-full overflow-x-auto px-5 py-4">
+                <div className="flex h-full w-max min-w-full items-start gap-3">
                     {stages.map((stage) => (
                         <Column
                             key={stage.id}
                             stage={stage}
                             tasks={tasksByStage.get(stage.id) ?? []}
-                            highlightedTaskId={highlightedTaskId}
-                            onTaskClick={onTaskClick}
-                            groupByPhase={stage.id === backlogStageId}
+                            selectedTaskId={selectedTaskId}
+                            onTaskOpen={onTaskOpen}
                         />
                     ))}
                 </div>
             </div>
+
             <DragOverlay>
                 {activeTask && (
-                    <div className="w-80 rotate-1 scale-[1.03] rounded-xl border border-accent/30 bg-surface-elevated p-3 text-sm shadow-[var(--shadow-dragging)]">
-                        <TaskCardContent task={activeTask} />
+                    <div className="w-[300px]">
+                        <TaskCard task={activeTask} isDragging onOpen={() => undefined} />
                     </div>
                 )}
             </DragOverlay>

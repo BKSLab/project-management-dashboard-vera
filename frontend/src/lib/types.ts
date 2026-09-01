@@ -1,98 +1,151 @@
-export interface DocumentListItem {
-    id: number;
-    slug: string;
-    title: string;
-    updated_at: string;
-    search_match_source: "title" | "content" | "slug" | null;
-    search_title: string | null;
-    search_excerpt: string | null;
-}
+export type ProjectStatus = "PLANNING" | "ACTIVE" | "PAUSED" | "COMPLETED" | "ARCHIVED";
 
-export interface DocumentDetail extends DocumentListItem {
-    content_md: string;
+export type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+
+export type TaskRole = "PM" | "BE" | "FE" | "UXR" | "UXD" | "EXPERT" | "QA" | "BA" | "MKT";
+
+export interface Project {
+    id: number;
+    key: string;
+    name: string;
+    description_md: string | null;
+    status: ProjectStatus;
+    color: string;
+    icon: string | null;
+    start_date: string | null;
+    due_date: string | null;
+    order_index: number;
     created_at: string;
+    updated_at: string;
 }
 
-export type WbsRole = "PM" | "BE" | "FE" | "UXR" | "UXD" | "EXPERT" | "QA" | "BA" | "MKT";
-
-export interface WbsProgress {
-    done: number;
-    total: number;
+export interface ProjectCreate {
+    key: string;
+    name: string;
+    description_md?: string | null;
+    status?: ProjectStatus;
+    color?: string;
+    icon?: string | null;
+    start_date?: string | null;
+    due_date?: string | null;
 }
 
-export interface WbsTaskRef {
-    id: number;
+export type ProjectUpdate = Partial<ProjectCreate> & { order_index?: number };
+
+export interface StageBreakdown {
     stage_id: number;
     stage_name: string;
-    due_date: string | null;
+    color: string;
+    is_done_stage: boolean;
+    tasks_count: number;
 }
 
-export interface WbsNode {
+export interface ProjectStats {
+    project_id: number;
+    total_tasks: number;
+    done_tasks: number;
+    in_progress_tasks: number;
+    overdue_tasks: number;
+    due_soon_tasks: number;
+    unassigned_tasks: number;
+    completion_rate: number;
+    next_due_date: string | null;
+    stage_breakdown: StageBreakdown[];
+}
+
+export interface ProjectStage {
     id: number;
-    code: string;
-    phase_name: string | null;
-    title: string;
-    role: WbsRole | null;
-    progress: WbsProgress | null;
-    task: WbsTaskRef | null;
-    children: WbsNode[];
-}
-
-export interface WbsItem {
-    id: number;
-    parent_id: number | null;
-    code: string;
-    phase_name: string | null;
-    title: string;
-    role: WbsRole | null;
-    order_index: number;
-    is_leaf: boolean;
-}
-
-export interface WbsItemCreate {
-    parent_id: number | null;
-    title: string;
-    role?: WbsRole | null;
-    phase_name?: string | null;
-}
-
-export interface WbsItemUpdate {
-    title?: string;
-    role?: WbsRole | null;
-    phase_name?: string | null;
-}
-
-export interface KanbanStage {
-    id: number;
+    project_id: number;
     name: string;
     order_index: number;
     color: string;
     is_done_stage: boolean;
 }
 
-export interface KanbanTask {
+export interface StageCreate {
+    name: string;
+    color?: string;
+    is_done_stage?: boolean;
+}
+
+export interface StageUpdate {
+    name?: string;
+    color?: string;
+    order_index?: number;
+    is_done_stage?: boolean;
+}
+
+export type SearchMatchSource =
+    | "title"
+    | "description"
+    | "comment"
+    | "comment_author"
+    | "content"
+    | "slug"
+    | null;
+
+export interface Task {
     id: number;
-    wbs_item_id: number | null;
+    project_id: number;
     stage_id: number;
+    wbs_node_id: number | null;
+    number: number;
+    key: string;
     title: string;
     description_md: string | null;
+    priority: TaskPriority;
+    role: TaskRole | null;
+    assignee: string | null;
     due_date: string | null;
     position: number;
     created_at: string;
     updated_at: string;
-    wbs_code: string | null;
-    wbs_phase_name: string | null;
     comments_count: number;
     last_comment: string | null;
-    search_match_source: "title" | "description" | "comment" | "comment_author" | "wbs_code" | null;
+    search_match_source: SearchMatchSource;
     search_title: string | null;
     search_excerpt: string | null;
+}
+
+export interface TaskCompact {
+    id: number;
+    key: string;
+    title: string;
+    stage_id: number;
+    wbs_node_id: number | null;
+    priority: TaskPriority;
+    assignee: string | null;
+    due_date: string | null;
+    is_done: boolean;
+}
+
+export interface TaskCreate {
+    title: string;
+    description_md?: string | null;
+    stage_id?: number | null;
+    wbs_node_id?: number | null;
+    priority?: TaskPriority;
+    role?: TaskRole | null;
+    assignee?: string | null;
+    due_date?: string | null;
+}
+
+export interface TaskUpdate {
+    title?: string;
+    description_md?: string | null;
+    priority?: TaskPriority;
+    role?: TaskRole | null;
+    assignee?: string | null;
+    due_date?: string | null;
 }
 
 export type TaskActivityEventType =
     | "STAGE_CHANGED"
     | "DUE_DATE_CHANGED"
     | "DESCRIPTION_CHANGED"
+    | "PRIORITY_CHANGED"
+    | "ASSIGNEE_CHANGED"
+    | "WBS_NODE_CHANGED"
     | "COMMENT_ADDED";
 
 export interface TaskActivity {
@@ -123,11 +176,50 @@ export interface TaskAttachment {
     previewable: boolean;
 }
 
-export interface LinkedTarget {
-    link_id: number;
-    kanban_task_id: number | null;
-    wbs_item_id: number | null;
+export interface WbsNode {
+    id: number;
+    project_id: number;
+    parent_id: number | null;
     title: string;
+    position: number;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface WbsStats {
+    total_nodes: number;
+    total_tasks: number;
+    assigned_tasks: number;
+    unassigned_tasks: number;
+    done_tasks: number;
+    overdue_tasks: number;
+}
+
+export interface WbsStructure {
+    nodes: WbsNode[];
+    tasks: TaskCompact[];
+    stats: WbsStats;
+}
+
+export interface WbsNodeDeleteResult {
+    deleted_nodes: number;
+    released_tasks: number;
+}
+
+export interface DocumentListItem {
+    id: number;
+    project_id: number;
+    slug: string;
+    title: string;
+    updated_at: string;
+    search_match_source: SearchMatchSource;
+    search_title: string | null;
+    search_excerpt: string | null;
+}
+
+export interface DocumentDetail extends DocumentListItem {
+    content_md: string;
+    created_at: string;
 }
 
 export interface LinkedDocument {
@@ -137,14 +229,99 @@ export interface LinkedDocument {
     title: string;
 }
 
-export const ROLE_COLORS: Record<WbsRole, string> = {
-    PM: "#F5B800",
-    BE: "#F97316",
-    FE: "#38BDF8",
-    UXR: "#A855F7",
-    UXD: "#EC4899",
-    EXPERT: "#22C55E",
-    QA: "#EF4444",
-    BA: "#3B82F6",
-    MKT: "#2DD4BF",
+export interface LinkedTask {
+    link_id: number;
+    task_id: number;
+    key: string;
+    title: string;
+}
+
+export interface DashboardTotals {
+    total_projects: number;
+    active_projects: number;
+    total_tasks: number;
+    done_tasks: number;
+    in_progress_tasks: number;
+    overdue_tasks: number;
+    completion_rate: number;
+}
+
+export interface DashboardProject {
+    id: number;
+    key: string;
+    name: string;
+    description_md: string | null;
+    status: ProjectStatus;
+    color: string;
+    icon: string | null;
+    total_tasks: number;
+    done_tasks: number;
+    in_progress_tasks: number;
+    overdue_tasks: number;
+    completion_rate: number;
+    next_due_date: string | null;
+    updated_at: string;
+}
+
+export interface DashboardTask {
+    id: number;
+    key: string;
+    title: string;
+    project_id: number;
+    project_key: string;
+    project_name: string;
+    project_color: string;
+    stage_id: number;
+    stage_name: string;
+    priority: TaskPriority;
+    due_date: string | null;
+    is_overdue: boolean;
+    updated_at: string;
+}
+
+export interface Dashboard {
+    totals: DashboardTotals;
+    projects: DashboardProject[];
+    attention_tasks: DashboardTask[];
+    recent_tasks: DashboardTask[];
+}
+
+export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
+    PLANNING: "Планирование",
+    ACTIVE: "В работе",
+    PAUSED: "На паузе",
+    COMPLETED: "Завершён",
+    ARCHIVED: "В архиве",
 };
+
+export const PRIORITY_LABELS: Record<TaskPriority, string> = {
+    LOW: "Низкий",
+    MEDIUM: "Средний",
+    HIGH: "Высокий",
+    URGENT: "Срочный",
+};
+
+export const PRIORITY_ORDER: TaskPriority[] = ["URGENT", "HIGH", "MEDIUM", "LOW"];
+
+export const ROLE_LABELS: Record<TaskRole, string> = {
+    PM: "Менеджер проекта",
+    BE: "Backend",
+    FE: "Frontend",
+    UXR: "UX-исследования",
+    UXD: "UX-дизайн",
+    EXPERT: "Эксперт",
+    QA: "Тестирование",
+    BA: "Аналитика",
+    MKT: "Маркетинг",
+};
+
+export const PROJECT_COLORS = [
+    "#58a6ff",
+    "#a371f7",
+    "#3fb950",
+    "#d29922",
+    "#f85149",
+    "#39c5cf",
+    "#db61a2",
+    "#7d8793",
+];

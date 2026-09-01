@@ -1,31 +1,37 @@
-import { Routes, Route } from "react-router-dom";
-import { SkipLink } from "@/components/ui/SkipLink";
-import { Header } from "@/components/layout/Header";
-import { Footer } from "@/components/layout/Footer";
-import { HomePage } from "@/routes/HomePage";
-import { DocumentsPage } from "@/routes/DocumentsPage";
-import { NewDocumentPage } from "@/routes/NewDocumentPage";
+import { Route, Routes } from "react-router-dom";
+import { AppShell } from "@/components/layout/AppShell";
+import { ProjectLayout } from "@/components/projects/ProjectLayout";
+import { DashboardPage } from "@/routes/DashboardPage";
+import { ProjectsPage } from "@/routes/ProjectsPage";
+import { NewProjectPage } from "@/routes/NewProjectPage";
+import { ProjectOverviewPage } from "@/routes/ProjectOverviewPage";
+import { BoardPage } from "@/routes/BoardPage";
+import { TasksListPage } from "@/routes/TasksListPage";
+import { StructurePage } from "@/routes/StructurePage";
+import { ProjectDocumentsPage } from "@/routes/ProjectDocumentsPage";
 import { DocumentDetailPage } from "@/routes/DocumentDetailPage";
-import { WbsPage } from "@/routes/WbsPage";
-import { KanbanPage } from "@/routes/KanbanPage";
+import { ProjectSettingsPage } from "@/routes/ProjectSettingsPage";
+import { NotFoundPage } from "@/routes/NotFoundPage";
 
 function App() {
     return (
-        <div className="flex min-h-screen min-w-0 flex-col overflow-x-hidden">
-            <SkipLink />
-            <Header />
-            <main id="main-content" className="min-w-0 w-full flex-1 px-4 py-8">
-                <Routes>
-                    <Route path="/" element={<HomePage />} />
-                    <Route path="/docs" element={<DocumentsPage />} />
-                    <Route path="/docs/new" element={<NewDocumentPage />} />
-                    <Route path="/docs/:slug" element={<DocumentDetailPage />} />
-                    <Route path="/wbs" element={<WbsPage />} />
-                    <Route path="/kanban" element={<KanbanPage />} />
-                </Routes>
-            </main>
-            <Footer />
-        </div>
+        <AppShell>
+            <Routes>
+                <Route path="/" element={<DashboardPage />} />
+                <Route path="/projects" element={<ProjectsPage />} />
+                <Route path="/projects/new" element={<NewProjectPage />} />
+                <Route path="/projects/:projectKey" element={<ProjectLayout />}>
+                    <Route index element={<ProjectOverviewPage />} />
+                    <Route path="board" element={<BoardPage />} />
+                    <Route path="tasks" element={<TasksListPage />} />
+                    <Route path="structure" element={<StructurePage />} />
+                    <Route path="docs" element={<ProjectDocumentsPage />} />
+                    <Route path="docs/:slug" element={<DocumentDetailPage />} />
+                    <Route path="settings" element={<ProjectSettingsPage />} />
+                </Route>
+                <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+        </AppShell>
     );
 }
 

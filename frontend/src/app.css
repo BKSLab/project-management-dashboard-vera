@@ -1,85 +1,184 @@
 @import "tailwindcss";
 
+/*
+  Дизайн-токены задаются в одном месте — по разделам 2, 3, 4, 9 и 17
+  документа docs/DESIGN_GUIDE.md. Компоненты не используют локальные HEX.
+*/
 :root {
-  /* поверхности — 4 уровня тёмной темы */
-  --background: #111827;
-  --surface: #1a1f2e;
-  --surface-elevated: #242b3d;
-  --surface-hover: #2f374d;
-  --surface-active: #374151;
+  /* поверхности: приложение → сайдбар → рабочая область → карточка → hover */
+  --color-bg-app: #0d1117;
+  --color-bg-sidebar: #11161d;
+  --color-bg-surface: #161b22;
+  --color-bg-surface-2: #1c222b;
+  --color-bg-elevated: #212832;
+  --color-bg-hover: #272f3a;
+  --color-bg-active: #303947;
 
-  --border: rgba(255, 255, 255, 0.05);
-  --border-hover: rgba(255, 255, 255, 0.12);
+  --color-border-subtle: rgba(255, 255, 255, 0.055);
+  --color-border: rgba(255, 255, 255, 0.09);
+  --color-border-strong: rgba(255, 255, 255, 0.15);
 
-  --foreground: #F0F0F0;
-  --muted: #9CA3AF;
+  --color-text-primary: #e6edf3;
+  --color-text-secondary: #b1bac4;
+  --color-text-muted: #7d8793;
+  --color-text-disabled: #555f6b;
 
-  /* акценты — сине-фиолетовый основной, бирюзовый вторичный */
-  --accent: #6366F1;
-  --accent-hover: #7C83FF;
-  --accent-foreground: #FFFFFF;
-  --accent-secondary: #06B6D4;
-  --warning: #F59E0B;
-  --danger: #EF4444;
-  --success: #10B981;
+  --color-accent: #58a6ff;
+  --color-accent-hover: #79b8ff;
+  --color-accent-soft: rgba(88, 166, 255, 0.12);
+  --color-accent-border: rgba(88, 166, 255, 0.38);
 
-  /* тени */
-  --shadow-panel: 0 4px 20px rgba(0, 0, 0, 0.3);
-  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.25);
-  --shadow-card-hover: 0 8px 25px rgba(0, 0, 0, 0.35);
-  --shadow-selected: 0 0 0 1px rgba(99, 102, 241, 0.7), 0 8px 30px rgba(99, 102, 241, 0.15);
-  --shadow-dragging: 0 15px 40px rgba(0, 0, 0, 0.45);
+  --color-success: #3fb950;
+  --color-warning: #d29922;
+  --color-danger: #f85149;
+  --color-info: #58a6ff;
+  --color-purple: #a371f7;
+
+  /* приоритеты задач — раздел 9 */
+  --color-priority-low: #7d8793;
+  --color-priority-medium: #58a6ff;
+  --color-priority-high: #d29922;
+  --color-priority-urgent: #f85149;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+
+  --duration-fast: 120ms;
+  --duration-normal: 180ms;
+  --duration-slow: 240ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* тени — раздел 3: карточка, поднятая карточка, плавающая панель */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.28), 0 4px 12px rgba(0, 0, 0, 0.12);
+  --shadow-elevated: 0 4px 10px rgba(0, 0, 0, 0.28), 0 12px 28px rgba(0, 0, 0, 0.18);
+  --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --shadow-dragging: 0 18px 44px rgba(0, 0, 0, 0.42);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-accent: var(--accent);
-  --color-accent-hover: var(--accent-hover);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent-secondary: var(--accent-secondary);
-  --color-surface: var(--surface);
-  --color-surface-elevated: var(--surface-elevated);
-  --color-surface-hover: var(--surface-hover);
-  --color-surface-active: var(--surface-active);
-  --color-border: var(--border);
-  --color-border-hover: var(--border-hover);
-  --color-muted: var(--muted);
-  --color-warning: var(--warning);
-  --color-danger: var(--danger);
-  --color-success: var(--success);
-  --font-sans: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --color-app: var(--color-bg-app);
+  --color-sidebar: var(--color-bg-sidebar);
+  --color-surface: var(--color-bg-surface);
+  --color-surface-2: var(--color-bg-surface-2);
+  --color-elevated: var(--color-bg-elevated);
+  --color-hover: var(--color-bg-hover);
+  --color-active: var(--color-bg-active);
+
+  --color-line-subtle: var(--color-border-subtle);
+  --color-line: var(--color-border);
+  --color-line-strong: var(--color-border-strong);
+
+  --color-primary: var(--color-text-primary);
+  --color-secondary: var(--color-text-secondary);
+  --color-muted: var(--color-text-muted);
+  --color-disabled: var(--color-text-disabled);
+
+  --color-accent: var(--color-accent);
+  --color-accent-hover: var(--color-accent-hover);
+  --color-accent-soft: var(--color-accent-soft);
+  --color-accent-border: var(--color-accent-border);
+
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-danger: var(--color-danger);
+  --color-purple: var(--color-purple);
+
+  --color-priority-low: var(--color-priority-low);
+  --color-priority-medium: var(--color-priority-medium);
+  --color-priority-high: var(--color-priority-high);
+  --color-priority-urgent: var(--color-priority-urgent);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-elevated: var(--shadow-elevated);
+  --shadow-panel: var(--shadow-panel);
+  --shadow-dragging: var(--shadow-dragging);
+
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--color-bg-app);
+  color: var(--color-text-primary);
   font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
 }
 
-.markdown-body h1, .markdown-body h2, .markdown-body h3 {
-  font-weight: 700;
+/* Раздел 16: focus-visible нельзя убирать, только заменять равноценным. */
+:focus-visible {
+  outline: 2px solid rgba(88, 166, 255, 0.8);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Стекло — только для header, drawer, modal, dropdown (раздел 3). */
+.glass {
+  background: rgba(22, 27, 34, 0.82);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  font-weight: 600;
   margin-top: 1.25em;
   margin-bottom: 0.5em;
+  color: var(--color-text-primary);
 }
-.markdown-body h1 { font-size: 1.5rem; }
-.markdown-body h2 { font-size: 1.25rem; }
-.markdown-body h3 { font-size: 1.1rem; }
-.markdown-body p { margin-bottom: 0.75em; line-height: 1.625; }
-.markdown-body ul, .markdown-body ol { margin-bottom: 0.75em; padding-left: 1.5em; }
+.markdown-body h1 { font-size: 1.375rem; }
+.markdown-body h2 { font-size: 1.125rem; }
+.markdown-body h3 { font-size: 1rem; }
+.markdown-body p { margin-bottom: 0.75em; line-height: 1.65; color: var(--color-text-secondary); }
+.markdown-body ul, .markdown-body ol { margin-bottom: 0.75em; padding-left: 1.5em; color: var(--color-text-secondary); }
+.markdown-body ul { list-style: disc; }
+.markdown-body ol { list-style: decimal; }
 .markdown-body li { margin-bottom: 0.25em; }
-.markdown-body code { background: var(--surface-hover); border-radius: 0.25rem; padding: 0.125em 0.375em; font-size: 0.875em; }
-.markdown-body pre { background: var(--surface-hover); border-radius: 0.5rem; padding: 1em; overflow-x: auto; margin-bottom: 0.75em; }
-.markdown-body pre code { background: none; padding: 0; }
-.markdown-body a { color: var(--accent); text-decoration: underline; }
+.markdown-body code {
+  background: var(--color-bg-surface-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.375em;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+.markdown-body pre {
+  background: var(--color-bg-surface-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.875em 1em;
+  overflow-x: auto;
+  margin-bottom: 0.75em;
+}
+.markdown-body pre code { background: none; border: none; padding: 0; }
+.markdown-body a { color: var(--color-accent); text-decoration: underline; text-underline-offset: 2px; }
 .markdown-body table { border-collapse: collapse; margin-bottom: 0.75em; }
-.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 0.375em 0.75em; }
-.markdown-body blockquote { border-left: 2px solid var(--accent); padding-left: 1em; color: var(--muted); margin-bottom: 0.75em; }
+.markdown-body th, .markdown-body td {
+  border: 1px solid var(--color-border);
+  padding: 0.375em 0.75em;
+  color: var(--color-text-secondary);
+}
+.markdown-body th { color: var(--color-text-primary); font-weight: 600; }
+.markdown-body blockquote {
+  border-left: 2px solid var(--color-accent-border);
+  padding-left: 1em;
+  color: var(--color-text-muted);
+  margin-bottom: 0.75em;
+}
+.markdown-body hr { border-color: var(--color-border); margin: 1.25em 0; }
 
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--color-border-strong) transparent;
 }
 .scrollbar-thin::-webkit-scrollbar {
   width: 8px;
@@ -89,9 +188,21 @@ body {
   background: transparent;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: var(--border);
-  border-radius: 9999px;
+  background: var(--color-border-strong);
+  border-radius: 4px;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background-color: var(--surface-hover);
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* Раздел 16: уважаем системную настройку уменьшенной анимации. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

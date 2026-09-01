@@ -1,86 +1,86 @@
 import { useDroppable } from "@dnd-kit/core";
-import type { KanbanStage, KanbanTask } from "@/lib/types";
-import { TaskCard } from "@/components/kanban/TaskCard";
+import { useDraggable } from "@dnd-kit/core";
+import type { ProjectStage, Task } from "@/lib/types";
 import { cn } from "@/lib/cn";
+import { StatusDot } from "@/components/ui/Badge";
+import { TaskCard } from "@/components/kanban/TaskCard";
 
-interface ColumnProps {
-    stage: KanbanStage;
-    tasks: KanbanTask[];
-    highlightedTaskId: number | null;
-    onTaskClick: (taskId: number) => void;
-    groupByPhase?: boolean;
-}
-
-interface RenderItem {
-    type: "header" | "task";
-    phaseName?: string;
-    task?: KanbanTask;
-}
-
-function buildRenderItems(tasks: KanbanTask[], groupByPhase: boolean): RenderItem[] {
-    if (!groupByPhase) {
-        return tasks.map((task) => ({ type: "task", task }));
-    }
-
-    const items: RenderItem[] = [];
-    let lastPhase: string | null = "__unset__";
-    for (const task of tasks) {
-        const phase = task.wbs_phase_name ?? "Без фазы (вручную)";
-        if (phase !== lastPhase) {
-            items.push({ type: "header", phaseName: phase });
-            lastPhase = phase;
-        }
-        items.push({ type: "task", task });
-    }
-    return items;
-}
-
-export function Column({ stage, tasks, highlightedTaskId, onTaskClick, groupByPhase = false }: ColumnProps) {
-    const { setNodeRef, isOver } = useDroppable({
-        id: stage.id,
-        data: { type: "column" },
-    });
-
-    const widthClass = tasks.length > 50
-        ? "w-[calc(100vw-2rem)] sm:w-[26rem]"
-        : "w-[calc(100vw-2rem)] sm:w-80";
-    const renderItems = buildRenderItems(tasks, groupByPhase);
+function DraggableTask({
+    task,
+    isDone,
+    isSelected,
+    onOpen,
+}: {
+    task: Task;
+    isDone: boolean;
+    isSelected: boolean;
+    onOpen: (taskId: number) => void;
+}) {
+    const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id });
 
     return (
-        <div className={cn("flex h-[75vh] shrink-0 flex-col rounded-2xl border border-white/[0.05] bg-surface", widthClass)}>
-            <div
-                className="flex items-center justify-between gap-2 border-b-2 px-4 py-3"
-                style={{ borderBottomColor: stage.color }}
-            >
-                <span className="text-sm font-semibold uppercase tracking-[0.1em] text-foreground">{stage.name}</span>
-                <span className="text-xs text-muted">{tasks.length} задач</span>
-            </div>
+        <TaskCard
+            ref={setNodeRef}
+            task={task}
+            isDone={isDone}
+            isSelected={isSelected}
+            className={cn(isDragging && "opacity-40")}
+            onOpen={onOpen}
+            dragHandleProps={{ ...listeners, ...attributes }}
+        />
+    );
+}
+
+interface ColumnProps {
+    stage: ProjectStage;
+    tasks: Task[];
+    selectedTaskId: number | null;
+    onTaskOpen: (taskId: number) => void;
+}
+
+/**
+ * Колонка доски: лёгкая шапка со счётчиком и цветным маркером стадии.
+ * Колонка не заливается цветом статуса (раздел 7 дизайн-гайда).
+ */
+export function Column({ stage, tasks, selectedTaskId, onTaskOpen }: ColumnProps) {
+    const { setNodeRef, isOver } = useDroppable({ id: stage.id });
+
+    return (
+        <section
+            aria-label={`Колонка ${stage.name}`}
+            className="flex w-[min(88vw,300px)] shrink-0 flex-col"
+        >
+            <header className="mb-2 flex items-center gap-2 px-1">
+                <StatusDot color={stage.color} />
+                <h2 className="text-[12px] font-semibold tracking-[0.04em] text-secondary uppercase">
+                    {stage.name}
+                </h2>
+                <span className="font-mono text-[11px] text-disabled">{tasks.length}</span>
+            </header>
 
             <div
                 ref={setNodeRef}
                 className={cn(
-                    "scrollbar-thin flex flex-1 flex-col gap-2 overflow-y-auto p-4",
-                    isOver && "rounded-b-2xl border border-accent/30 bg-accent/[0.08]"
+                    "scrollbar-thin flex min-h-40 flex-1 flex-col gap-2 overflow-y-auto rounded-lg p-1.5",
+                    "border transition-[background-color,border-color] duration-[var(--duration-fast)]",
+                    isOver
+                        ? "border-dashed border-accent-border bg-accent/[0.055]"
+                        : "border-transparent bg-surface/60",
                 )}
             >
-                {renderItems.map((item, index) =>
-                    item.type === "header" ? (
-                        <p
-                            key={`header-${index}`}
-                            className="mt-1 truncate px-1 text-[11px] font-bold uppercase tracking-wider text-muted first:mt-0"
-                        >
-                            {item.phaseName}
-                        </p>
-                    ) : (
-                        <TaskCard
-                            key={item.task!.id}
-                            task={item.task!}
-                            highlighted={item.task!.id === highlightedTaskId}
-                            onClick={() => onTaskClick(item.task!.id)}
-                        />
-                    )
+                {tasks.map((task) => (
+                    <DraggableTask
+                        key={task.id}
+                        task={task}
+                        isDone={stage.is_done_stage}
+                        isSelected={task.id === selectedTaskId}
+                        onOpen={onTaskOpen}
+                    />
+                ))}
+                {tasks.length === 0 && (
+                    <p className="px-2 py-6 text-center text-[12px] text-disabled">Пусто</p>
                 )}
             </div>
-        </div>
+        </section>
     );
 }

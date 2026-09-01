@@ -1,32 +1,51 @@
 import { create } from "zustand";
 
+export type WbsLayoutMode = "horizontal" | "vertical";
+
 interface UiState {
+    /** Открытая карточка задачи — общая для канбана, списка и структуры. */
     selectedTaskId: number | null;
     setSelectedTaskId: (taskId: number | null) => void;
 
-    drawerOpen: boolean;
-    setDrawerOpen: (open: boolean) => void;
+    sidebarCollapsed: boolean;
+    toggleSidebar: () => void;
 
-    wbsExpandedNodes: Set<number>;
+    /** Свёрнутые ветки ИСР — локальное состояние вида, на backend не уходит. */
+    collapsedWbsNodes: Set<number>;
     toggleWbsNode: (nodeId: number) => void;
+    expandWbsNodes: (nodeIds: number[]) => void;
+
+    wbsLayoutMode: WbsLayoutMode;
+    setWbsLayoutMode: (mode: WbsLayoutMode) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
     selectedTaskId: null,
-    setSelectedTaskId: (taskId) => set({ selectedTaskId: taskId, drawerOpen: taskId !== null }),
+    setSelectedTaskId: (taskId) => set({ selectedTaskId: taskId }),
 
-    drawerOpen: false,
-    setDrawerOpen: (open) => set({ drawerOpen: open }),
+    sidebarCollapsed: false,
+    toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 
-    wbsExpandedNodes: new Set(),
+    collapsedWbsNodes: new Set<number>(),
     toggleWbsNode: (nodeId) =>
         set((state) => {
-            const next = new Set(state.wbsExpandedNodes);
+            const next = new Set(state.collapsedWbsNodes);
             if (next.has(nodeId)) {
                 next.delete(nodeId);
             } else {
                 next.add(nodeId);
             }
-            return { wbsExpandedNodes: next };
+            return { collapsedWbsNodes: next };
         }),
+    expandWbsNodes: (nodeIds) =>
+        set((state) => {
+            const next = new Set(state.collapsedWbsNodes);
+            for (const nodeId of nodeIds) {
+                next.delete(nodeId);
+            }
+            return { collapsedWbsNodes: next };
+        }),
+
+    wbsLayoutMode: "horizontal",
+    setWbsLayoutMode: (mode) => set({ wbsLayoutMode: mode }),
 }));

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Download, ExternalLink } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import type { FileDescriptor } from "@/lib/files";
 import { FileTypeIcon } from "./FileTypeIcon";
@@ -14,84 +15,61 @@ export function FilePreviewModal({
     const previewKey = `${file?.key ?? ""}:${file?.url ?? ""}`;
     const loadFailed = failedPreviewKey === previewKey;
 
-    if (!file) return null;
+    if (!file) {
+        return null;
+    }
 
     return (
         <Modal
             isOpen
-            onOpenChange={(isOpen) => {
-                if (!isOpen) onClose();
-            }}
+            size="lg"
             title={file.name}
-            containerClassName="max-h-[calc(100dvh-2rem)] max-w-5xl overflow-y-auto bg-surface/95"
-            overlayClassName="z-[60]"
-        >
-            {file.url && (
-                <div className="flex flex-col gap-3">
-                    <div className="flex min-h-52 items-center justify-center overflow-hidden rounded-xl border border-white/[0.07] bg-background">
-                        {!loadFailed ? (
-                            <img
-                                src={file.url}
-                                alt={file.name}
-                                className="max-h-[72vh] max-w-full object-contain"
-                                onError={() => setFailedPreviewKey(previewKey)}
-                            />
-                        ) : (
-                            <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
-                                <FileTypeIcon file={file} className="h-14 w-14" />
-                                <p className="text-sm text-muted">
-                                    Не удалось загрузить изображение для просмотра.
-                                </p>
-                            </div>
-                        )}
-                    </div>
-                    <div className="flex flex-wrap justify-end gap-2">
-                        <a
-                            href={file.url}
-                            download={file.name}
-                            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-colors hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-                        >
-                            Скачать
-                            <svg
-                                width="12"
-                                height="12"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                aria-hidden="true"
-                            >
-                                <path d="M12 3v12" />
-                                <path d="m7 10 5 5 5-5" />
-                                <path d="M5 21h14" />
-                            </svg>
-                        </a>
+            onOpenChange={(isOpen) => {
+                if (!isOpen) {
+                    onClose();
+                }
+            }}
+            footer={
+                file.url ? (
+                    <>
                         <a
                             href={file.url}
                             target="_blank"
                             rel="noreferrer"
-                            className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:border-white/20 hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line bg-surface-2 px-3 text-[13px] font-medium text-primary hover:border-line-strong hover:bg-hover"
                         >
                             Открыть оригинал
-                            <svg
-                                width="12"
-                                height="12"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                aria-hidden="true"
-                            >
-                                <path d="M14 3h7v7" />
-                                <path d="M10 14 21 3" />
-                                <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
-                            </svg>
+                            <ExternalLink size={13} aria-hidden="true" />
                         </a>
-                    </div>
+                        <a
+                            href={file.url}
+                            download={file.name}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-semibold text-[#0d1117] hover:bg-accent-hover"
+                        >
+                            Скачать
+                            <Download size={13} aria-hidden="true" />
+                        </a>
+                    </>
+                ) : undefined
+            }
+        >
+            {file.url && (
+                <div className="flex min-h-52 items-center justify-center overflow-hidden rounded-lg border border-line bg-app">
+                    {!loadFailed ? (
+                        <img
+                            src={file.url}
+                            alt={file.name}
+                            className="max-h-[62vh] max-w-full object-contain"
+                            onError={() => setFailedPreviewKey(previewKey)}
+                        />
+                    ) : (
+                        <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+                            <FileTypeIcon file={file} className="h-14 w-14" />
+                            <p className="text-[13px] text-muted">
+                                Не удалось загрузить изображение для просмотра.
+                            </p>
+                        </div>
+                    )}
                 </div>
             )}
         </Modal>

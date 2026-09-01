@@ -1,0 +1,152 @@
+import { useState } from "react";
+import { cn } from "@/lib/cn";
+import { PROJECT_COLORS, PROJECT_STATUS_LABELS } from "@/lib/types";
+import type { ProjectStatus } from "@/lib/types";
+import { PROJECT_KEY_PATTERN, type ProjectFormValues } from "@/lib/projectForm";
+import { Field, Input, Select, Textarea } from "@/components/ui/Field";
+
+interface ProjectFormProps {
+    values: ProjectFormValues;
+    onChange: (values: ProjectFormValues) => void;
+    /** Код проекта участвует в номерах задач, поэтому у существующего проекта его не меняем. */
+    lockKey?: boolean;
+}
+
+export function ProjectForm({ values, onChange, lockKey = false }: ProjectFormProps) {
+    const [keyTouched, setKeyTouched] = useState(false);
+    const keyError =
+        keyTouched && values.key !== "" && !PROJECT_KEY_PATTERN.test(values.key)
+            ? "Латиница и цифры, от 2 до 10 символов, первая — буква."
+            : undefined;
+
+    function update(patch: Partial<ProjectFormValues>) {
+        onChange({ ...values, ...patch });
+    }
+
+    return (
+        <div className="flex flex-col gap-4">
+            <div className="grid gap-4 sm:grid-cols-[140px_1fr]">
+                <Field
+                    label="Код"
+                    hint={lockKey ? undefined : "Префикс номеров задач: VERA-142"}
+                    error={keyError}
+                >
+                    {(id) => (
+                        <Input
+                            id={id}
+                            value={values.key}
+                            disabled={lockKey}
+                            maxLength={10}
+                            placeholder="VERA"
+                            className="font-mono uppercase"
+                            onBlur={() => setKeyTouched(true)}
+                            onChange={(event) =>
+                                update({ key: event.target.value.toUpperCase() })
+                            }
+                        />
+                    )}
+                </Field>
+
+                <Field label="Название">
+                    {(id) => (
+                        <Input
+                            id={id}
+                            value={values.name}
+                            placeholder="Агент Вера"
+                            onChange={(event) => update({ name: event.target.value })}
+                        />
+                    )}
+                </Field>
+            </div>
+
+            <Field label="Описание" hint="Markdown поддерживается">
+                {(id) => (
+                    <Textarea
+                        id={id}
+                        rows={4}
+                        value={values.description_md}
+                        onChange={(event) => update({ description_md: event.target.value })}
+                    />
+                )}
+            </Field>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+                <Field label="Статус">
+                    {(id) => (
+                        <Select
+                            id={id}
+                            value={values.status}
+                            onChange={(event) =>
+                                update({ status: event.target.value as ProjectStatus })
+                            }
+                        >
+                            {Object.entries(PROJECT_STATUS_LABELS).map(([value, label]) => (
+                                <option key={value} value={value}>
+                                    {label}
+                                </option>
+                            ))}
+                        </Select>
+                    )}
+                </Field>
+
+                <Field label="Старт">
+                    {(id) => (
+                        <Input
+                            id={id}
+                            type="date"
+                            value={values.start_date}
+                            onChange={(event) => update({ start_date: event.target.value })}
+                        />
+                    )}
+                </Field>
+
+                <Field label="Плановое завершение">
+                    {(id) => (
+                        <Input
+                            id={id}
+                            type="date"
+                            value={values.due_date}
+                            onChange={(event) => update({ due_date: event.target.value })}
+                        />
+                    )}
+                </Field>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-[120px_1fr]">
+                <Field label="Иконка" hint="Эмодзи">
+                    {(id) => (
+                        <Input
+                            id={id}
+                            value={values.icon}
+                            maxLength={4}
+                            placeholder="🚀"
+                            onChange={(event) => update({ icon: event.target.value })}
+                        />
+                    )}
+                </Field>
+
+                <fieldset className="flex flex-col gap-1.5">
+                    <legend className="mb-1.5 text-xs font-medium text-secondary">Цвет</legend>
+                    <div className="flex flex-wrap gap-2">
+                        {PROJECT_COLORS.map((color) => (
+                            <button
+                                key={color}
+                                type="button"
+                                aria-label={`Цвет ${color}`}
+                                aria-pressed={values.color === color}
+                                onClick={() => update({ color })}
+                                style={{ backgroundColor: color }}
+                                className={cn(
+                                    "size-6 rounded-full transition-[box-shadow] duration-[var(--duration-fast)]",
+                                    values.color === color
+                                        ? "ring-2 ring-primary ring-offset-2 ring-offset-app"
+                                        : "ring-1 ring-line-strong",
+                                )}
+                            />
+                        ))}
+                    </div>
+                </fieldset>
+            </div>
+        </div>
+    );
+}
