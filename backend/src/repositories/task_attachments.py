@@ -42,6 +42,33 @@ class TaskAttachmentsRepository:
                 f"Ошибка получения файлов задачи id={task_id}."
             ) from error
 
+    async def get_for_tasks(self, task_ids: set[int]) -> list[TaskAttachment]:
+        """Возвращает файлы заданного набора задач."""
+        if not task_ids:
+            return []
+        try:
+            result: Result = await self.db_session.execute(
+                select(TaskAttachment)
+                .where(TaskAttachment.task_id.in_(task_ids))
+                .order_by(TaskAttachment.task_id, TaskAttachment.created_at, TaskAttachment.id)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить файлы набора задач.", exc_info=True)
+            raise TaskAttachmentsRepositoryError("Ошибка получения файлов задач.") from error
+
+    async def get_by_id(self, attachment_id: int) -> TaskAttachment | None:
+        """Возвращает метаданные файла по идентификатору."""
+        try:
+            return await self.db_session.get(TaskAttachment, attachment_id)
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить файл id=%s.", attachment_id, exc_info=True)
+            raise TaskAttachmentsRepositoryError(
+                f"Ошибка получения файла задачи id={attachment_id}."
+            ) from error
+
     async def get_by_id_for_task(
         self,
         attachment_id: int,

@@ -1,5 +1,6 @@
 import logging
 
+from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.task_activity import TaskActivityEventType
 from src.db.models.tasks import Task
 from src.exceptions.project_stages import (
@@ -30,9 +31,11 @@ from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.wbs_nodes import WbsNodesRepository
 from src.schemas.tasks import TaskSchema
+from src.services.knowledge_events import KnowledgeEvents
 from src.storage.task_attachments import TaskAttachmentStorage
 
 logger = logging.getLogger(__name__)
+TASK_SEMANTIC_FIELDS = frozenset({"title", "description_md"})
 
 POSITION_STEP = 1000.0
 NUMBER_ALLOCATION_ATTEMPTS = 5
@@ -59,6 +62,7 @@ class TasksService:
         activity_repository: TaskActivityRepository,
         wbs_nodes_repository: WbsNodesRepository,
         attachment_storage: TaskAttachmentStorage | None = None,
+        knowledge_events: KnowledgeEvents | None = None,
     ):
         self.tasks_repository = tasks_repository
         self.projects_repository = projects_repository
@@ -67,6 +71,7 @@ class TasksService:
         self.activity_repository = activity_repository
         self.wbs_nodes_repository = wbs_nodes_repository
         self.attachment_storage = attachment_storage
+        self.knowledge_events = knowledge_events
 
     async def get_task_list(
         self,
@@ -197,6 +202,12 @@ class TasksService:
             payload["position"] = max_position + POSITION_STEP
 
             task = await self._save_with_number(project_id=project_id, payload=payload)
+            if self.knowledge_events is not None:
+                await self.knowledge_events.upsert(
+                    project_id=project_id,
+                    entity_type=KnowledgeEntityType.TASK,
+                    entity_id=task.id,
+                )
             logger.info("✅ Задача %s-%s создана.", project.key, task.number)
             return to_task_schema(task=task, project_key=project.key)
         except (
@@ -231,6 +242,12 @@ class TasksService:
             project = await self._get_project(project_id=task.project_id)
             await self._record_field_changes(task=task, data=data)
             updated = await self.tasks_repository.update(task=task, data=data)
+            if self.knowledge_events is not None and TASK_SEMANTIC_FIELDS.intersection(data):
+                await self.knowledge_events.upsert(
+                    project_id=updated.project_id,
+                    entity_type=KnowledgeEntityType.TASK,
+                    entity_id=updated.id,
+                )
             return to_task_schema(task=updated, project_key=project.key)
         except (TaskNotFoundError, ProjectNotFoundError):
             raise
@@ -319,7 +336,14 @@ class TasksService:
         """
         try:
             task = await self._get_task(task_id=task_id)
+            project_id = task.project_id
             await self.tasks_repository.delete(task=task)
+            if self.knowledge_events is not None:
+                await self.knowledge_events.delete(
+                    project_id=project_id,
+                    entity_type=KnowledgeEntityType.TASK,
+                    entity_id=task_id,
+                )
             await self._cleanup_deleted_task_files(task_id=task_id)
         except TaskNotFoundError:
             raise

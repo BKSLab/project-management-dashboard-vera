@@ -70,6 +70,22 @@ class TaskCommentsRepository:
             logger.error("❌ Не удалось получить комментарии задач.", exc_info=True)
             raise TaskCommentsRepositoryError("Ошибка получения комментариев задач.") from error
 
+    async def get_for_tasks(self, task_ids: set[int]) -> list[TaskComment]:
+        """Возвращает комментарии заданного набора задач."""
+        if not task_ids:
+            return []
+        try:
+            result: Result = await self.db_session.execute(
+                select(TaskComment)
+                .where(TaskComment.task_id.in_(task_ids))
+                .order_by(TaskComment.task_id, TaskComment.created_at, TaskComment.id)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить комментарии набора задач.", exc_info=True)
+            raise TaskCommentsRepositoryError("Ошибка получения комментариев задач.") from error
+
     async def get_by_id(self, comment_id: int) -> TaskComment | None:
         """Возвращает комментарий по идентификатору.
 

@@ -5,7 +5,9 @@ import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.task_attachments import TaskAttachment
+from src.db.models.tasks import Task
 from src.exceptions.task_attachments import (
     TaskAttachmentLimitError,
     TaskAttachmentNotFoundError,
@@ -20,6 +22,7 @@ from src.exceptions.tasks import TaskNotFoundError, TasksRepositoryError
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.tasks import TasksRepository
 from src.schemas.task_attachments import TaskAttachmentSchema
+from src.services.knowledge_events import KnowledgeEvents
 from src.storage.task_attachments import TaskAttachmentStorage
 
 logger = logging.getLogger(__name__)
@@ -78,10 +81,12 @@ class TaskAttachmentsService:
         attachments_repository: TaskAttachmentsRepository,
         tasks_repository: TasksRepository,
         storage: TaskAttachmentStorage,
+        knowledge_events: KnowledgeEvents | None = None,
     ) -> None:
         self.attachments_repository = attachments_repository
         self.tasks_repository = tasks_repository
         self.storage = storage
+        self.knowledge_events = knowledge_events
 
     @property
     def max_file_size(self) -> int:
@@ -140,7 +145,7 @@ class TaskAttachmentsService:
         """
         storage_key: str | None = None
         try:
-            await self._ensure_task_exists(task_id)
+            task = await self._ensure_task_exists(task_id)
             if (
                 await self.attachments_repository.get_count_for_task(task_id)
                 >= self.MAX_FILES_PER_TASK
@@ -169,6 +174,12 @@ class TaskAttachmentsService:
                 task_id,
                 len(content),
             )
+            if self.knowledge_events is not None:
+                await self.knowledge_events.upsert(
+                    project_id=task.project_id,
+                    entity_type=KnowledgeEntityType.ATTACHMENT,
+                    entity_id=attachment.id,
+                )
             return self._to_schema(attachment)
         except (
             TaskNotFoundError,
@@ -244,8 +255,15 @@ class TaskAttachmentsService:
         """
         try:
             attachment = await self._get_attachment(task_id, attachment_id)
+            task = await self._ensure_task_exists(task_id)
             storage_key = attachment.storage_key
             await self.attachments_repository.delete(attachment=attachment)
+            if self.knowledge_events is not None:
+                await self.knowledge_events.delete(
+                    project_id=task.project_id,
+                    entity_type=KnowledgeEntityType.ATTACHMENT,
+                    entity_id=attachment_id,
+                )
             try:
                 await self.storage.delete(storage_key)
             except TaskAttachmentStorageError:
@@ -261,10 +279,12 @@ class TaskAttachmentsService:
             logger.error("❌ Ошибка удаления файла задачи id=%s.", attachment_id, exc_info=True)
             raise TaskAttachmentsServiceError(str(error)) from error
 
-    async def _ensure_task_exists(self, task_id: int) -> None:
-        """Проверяет существование задачи."""
-        if await self.tasks_repository.get_by_id(task_id=task_id) is None:
+    async def _ensure_task_exists(self, task_id: int) -> Task:
+        """Возвращает существующую задачу либо поднимает 404."""
+        task = await self.tasks_repository.get_by_id(task_id=task_id)
+        if task is None:
             raise TaskNotFoundError(task_id=task_id)
+        return task
 
     async def _get_attachment(
         self,

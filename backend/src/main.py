@@ -1,6 +1,7 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pprint import pformat
 
 from fastapi import FastAPI, Request, status
@@ -13,6 +14,7 @@ from src.api.v1.endpoints.auth import router as auth_router
 from src.api.v1.endpoints.dashboard import router as dashboard_router
 from src.api.v1.endpoints.document_links import router as document_links_router
 from src.api.v1.endpoints.documents import router as documents_router
+from src.api.v1.endpoints.knowledge import router as knowledge_router
 from src.api.v1.endpoints.project_stages import router as project_stages_router
 from src.api.v1.endpoints.projects import router as projects_router
 from src.api.v1.endpoints.task_activity import router as task_activity_router
@@ -24,6 +26,8 @@ from src.api.v1.endpoints.wbs_nodes import router as wbs_nodes_router
 from src.core.config_logger import configure_logging
 from src.core.settings import get_settings
 from src.db.session import async_session_factory, engine
+from src.knowledge.runtime import close_knowledge_runtime
+from src.knowledge.worker import run_knowledge_worker
 from src.utils.check_db import check_db_connection
 
 configure_logging()
@@ -44,10 +48,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("🚀 Запуск приложения %s.", settings.app.app_name)
     async with async_session_factory() as db_session:
         await check_db_connection(db_session=db_session)
+    worker_stop = asyncio.Event()
+    worker_task: asyncio.Task | None = None
+    if settings.knowledge.knowledge_enabled:
+        worker_task = asyncio.create_task(
+            run_knowledge_worker(worker_stop),
+            name="project-knowledge-indexer",
+        )
+        logger.info("✅ Фоновый индексатор базы знаний запущен.")
     logger.info("✅ Приложение успешно запущено.")
-    yield
-    await engine.dispose()
-    logger.info("✅ Ресурсы приложения освобождены.")
+    try:
+        yield
+    finally:
+        worker_stop.set()
+        if worker_task is not None:
+            worker_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker_task
+        await close_knowledge_runtime()
+        await engine.dispose()
+        logger.info("✅ Ресурсы приложения освобождены.")
 
 
 app = FastAPI(
@@ -106,5 +126,6 @@ for api_router in (
     task_comments_router,
     task_activity_router,
     task_attachments_router,
+    knowledge_router,
 ):
     app.include_router(api_router, prefix=settings.app.api_v1_prefix)

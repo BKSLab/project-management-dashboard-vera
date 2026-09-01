@@ -43,6 +43,51 @@ class AuthSettings(SettingsBase):
     avatars_path: Path = BASE_DIR / "uploads" / "avatars"
 
 
+class LlmSettings(SettingsBase):
+    """Настройки OpenAI-совместимого API для Project Agent."""
+
+    llm_api_key: SecretStr
+    llm_api_url: str
+    llm_model: str = "google/gemini-3.7-flash"
+    agent_model: str = "google/gemini-3.7-flash"
+    llm_timeout: int = 300
+    llm_retries: int = 3
+
+    @property
+    def headers(self) -> dict[str, str]:
+        """Возвращает заголовки авторизации для LLM API."""
+        return {
+            "Authorization": f"Bearer {self.llm_api_key.get_secret_value()}",
+            "Content-Type": "application/json",
+        }
+
+
+class EmbeddingSettings(SettingsBase):
+    """Настройки OpenAI-совместимого API эмбеддингов."""
+
+    embedding_api_key: SecretStr
+    embedding_api_url: str
+    embedding_model: str = "openai/text-embedding-3-large"
+    embedding_dim: int = 3072
+    embedding_timeout: int = 120
+
+
+class KnowledgeSettings(SettingsBase):
+    """Настройки семантического индекса и фонового индексатора."""
+
+    knowledge_enabled: bool = True
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: SecretStr = SecretStr("")
+    qdrant_collection_prefix: str = "project"
+    qdrant_score_threshold: float = 0.35
+    knowledge_index_poll_seconds: float = 2.0
+    knowledge_index_max_attempts: int = 5
+    knowledge_embedding_batch_size: int = 32
+    knowledge_chunk_target_chars: int = 2200
+    knowledge_chunk_overlap_chars: int = 300
+    knowledge_agent_semantic_limit: int = 10
+
+
 class DBSettings(SettingsBase):
     """Настройки подключения к PostgreSQL."""
 
@@ -68,6 +113,9 @@ class Settings(BaseSettings):
     db: DBSettings = Field(default_factory=DBSettings)
     app: AppSettings = Field(default_factory=AppSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
+    llm: LlmSettings = Field(default_factory=LlmSettings)
+    embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
+    knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
 
 
 @lru_cache

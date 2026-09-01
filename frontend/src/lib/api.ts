@@ -88,6 +88,11 @@ export const endpoints = {
     projects: () => `${V1}/projects`,
     project: (projectId: number) => `${V1}/projects/${projectId}`,
     projectStats: (projectId: number) => `${V1}/projects/${projectId}/stats`,
+    projectKnowledgeStatus: (projectId: number) =>
+        `${V1}/projects/${projectId}/knowledge/status`,
+    projectKnowledgeAsk: (projectId: number) => `${V1}/projects/${projectId}/knowledge/ask`,
+    projectKnowledgeReindex: (projectId: number) =>
+        `${V1}/projects/${projectId}/knowledge/reindex`,
     projectStages: (projectId: number) => `${V1}/projects/${projectId}/stages`,
     stage: (stageId: number) => `${V1}/stages/${stageId}`,
     projectTasks: (projectId: number) => `${V1}/projects/${projectId}/tasks`,
@@ -122,6 +127,8 @@ export const queryKeys = {
     projects: ["projects"] as const,
     project: (projectId: number) => ["projects", projectId] as const,
     projectStats: (projectId: number) => ["projects", projectId, "stats"] as const,
+    projectKnowledgeStatus: (projectId: number) =>
+        ["projects", projectId, "knowledge", "status"] as const,
     stages: (projectId: number) => ["projects", projectId, "stages"] as const,
     tasks: (projectId: number, search?: string) =>
         ["projects", projectId, "tasks", search ?? ""] as const,

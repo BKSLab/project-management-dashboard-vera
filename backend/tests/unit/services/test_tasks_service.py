@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.task_activity import TaskActivityEventType
 from src.db.models.tasks import TaskPriority
 from src.exceptions.project_stages import (
@@ -25,6 +26,7 @@ from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.wbs_nodes import WbsNodesRepository
+from src.services.knowledge_events import KnowledgeEvents
 from src.services.tasks import TasksService
 
 PROJECT = SimpleNamespace(id=1, key="VERA")
@@ -65,6 +67,7 @@ def build_service(
     activity_repository: AsyncMock | None = None,
     wbs_nodes_repository: AsyncMock | None = None,
     projects_repository: AsyncMock | None = None,
+    knowledge_events: AsyncMock | None = None,
 ) -> TasksService:
     """Собирает сервис задач с подменёнными репозиториями."""
     projects = projects_repository or AsyncMock(spec=ProjectsRepository)
@@ -79,6 +82,7 @@ def build_service(
         comments_repository=comments_repository,
         activity_repository=activity_repository or AsyncMock(spec=TaskActivityRepository),
         wbs_nodes_repository=wbs_nodes_repository or AsyncMock(spec=WbsNodesRepository),
+        knowledge_events=knowledge_events,
     )
 
 
@@ -93,8 +97,13 @@ async def test_create_task_allocates_number_and_uses_first_stage() -> None:
         SimpleNamespace(id=1),
         SimpleNamespace(id=2),
     ]
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
 
-    result = await build_service(tasks_repository, stages_repository).create_task(
+    result = await build_service(
+        tasks_repository,
+        stages_repository,
+        knowledge_events=knowledge_events,
+    ).create_task(
         project_id=1,
         data={"title": "Реализовать фильтрацию", "stage_id": None},
     )
@@ -104,6 +113,11 @@ async def test_create_task_allocates_number_and_uses_first_stage() -> None:
     assert saved["stage_id"] == 1
     assert saved["position"] == 3000.0
     assert result.key == "VERA-43"
+    knowledge_events.upsert.assert_awaited_once_with(
+        project_id=1,
+        entity_type=KnowledgeEntityType.TASK,
+        entity_id=10,
+    )
 
 
 @pytest.mark.asyncio
@@ -233,7 +247,12 @@ async def test_update_task_records_priority_and_assignee_changes() -> None:
         assignee="Мария",
     )
     activity_repository = AsyncMock(spec=TaskActivityRepository)
-    service = build_service(tasks_repository, activity_repository=activity_repository)
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    service = build_service(
+        tasks_repository,
+        activity_repository=activity_repository,
+        knowledge_events=knowledge_events,
+    )
 
     await service.update_task(
         task_id=10,
@@ -243,6 +262,24 @@ async def test_update_task_records_priority_and_assignee_changes() -> None:
     events = [call.kwargs["event_type"] for call in activity_repository.save.await_args_list]
     assert TaskActivityEventType.PRIORITY_CHANGED in events
     assert TaskActivityEventType.ASSIGNEE_CHANGED in events
+    knowledge_events.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_task_reindexes_semantic_fields() -> None:
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = make_task()
+    tasks_repository.update.return_value = make_task()
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    service = build_service(tasks_repository, knowledge_events=knowledge_events)
+
+    await service.update_task(task_id=10, data={"title": "Новый смысловой заголовок"})
+
+    knowledge_events.upsert.assert_awaited_once_with(
+        project_id=1,
+        entity_type=KnowledgeEntityType.TASK,
+        entity_id=10,
+    )
 
 
 @pytest.mark.asyncio
@@ -274,10 +311,12 @@ async def test_move_task_records_stage_change_and_appends_to_end() -> None:
         SimpleNamespace(id=1, project_id=1, name="Бэклог"),
     ]
     activity_repository = AsyncMock(spec=TaskActivityRepository)
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
     service = build_service(
         tasks_repository,
         stages_repository,
         activity_repository=activity_repository,
+        knowledge_events=knowledge_events,
     )
 
     await service.move_task(task_id=10, stage_id=2)
@@ -287,6 +326,7 @@ async def test_move_task_records_stage_change_and_appends_to_end() -> None:
     assert event["event_type"] == TaskActivityEventType.STAGE_CHANGED
     assert event["from_value"] == "Бэклог"
     assert event["to_value"] == "В работе"
+    knowledge_events.upsert.assert_not_awaited()
 
 
 @pytest.mark.asyncio

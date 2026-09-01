@@ -19,9 +19,11 @@ from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
 from src.schemas.projects import ProjectSchema, ProjectStatsSchema, StageBreakdownSchema
+from src.services.knowledge_events import KnowledgeEvents
 from src.storage.task_attachments import TaskAttachmentStorage
 
 logger = logging.getLogger(__name__)
+PROJECT_SEMANTIC_FIELDS = frozenset({"key", "name", "description_md"})
 
 DUE_SOON_DAYS = 7
 
@@ -50,12 +52,14 @@ class ProjectsService:
         stages_repository: ProjectStagesRepository,
         tasks_repository: TasksRepository,
         attachment_storage: TaskAttachmentStorage | None = None,
+        knowledge_events: KnowledgeEvents | None = None,
     ):
         self.projects_repository = projects_repository
         self.members_repository = members_repository
         self.stages_repository = stages_repository
         self.tasks_repository = tasks_repository
         self.attachment_storage = attachment_storage
+        self.knowledge_events = knowledge_events
 
     async def get_project_list(self, user_id: int) -> list[ProjectSchema]:
         """Возвращает проекты, доступные пользователю.
@@ -140,6 +144,8 @@ class ProjectsService:
                     for index, stage in enumerate(DEFAULT_STAGES)
                 ]
             )
+            if self.knowledge_events is not None:
+                await self.knowledge_events.reindex_project(project.id)
             logger.info("✅ Проект %s создан со стадиями по умолчанию.", project.key)
             return ProjectSchema.model_validate(project)
         except ProjectKeyAlreadyExistsRepositoryError as error:
@@ -169,6 +175,8 @@ class ProjectsService:
             if project is None:
                 raise ProjectNotFoundError(project_id=project_id)
             updated = await self.projects_repository.update(project=project, data=data)
+            if self.knowledge_events is not None and PROJECT_SEMANTIC_FIELDS.intersection(data):
+                await self.knowledge_events.reindex_project(project_id)
             return ProjectSchema.model_validate(updated)
         except ProjectNotFoundError:
             raise
@@ -199,6 +207,8 @@ class ProjectsService:
             tasks = await self.tasks_repository.get_by_project(project_id=project_id)
             task_ids = [task.id for task in tasks]
             await self.projects_repository.delete(project=project)
+            if self.knowledge_events is not None:
+                await self.knowledge_events.delete_collection(project_id)
             await self._cleanup_task_files(task_ids=task_ids)
             logger.info("✅ Проект id=%s удалён вместе с %s задачами.", project_id, len(task_ids))
         except ProjectNotFoundError:

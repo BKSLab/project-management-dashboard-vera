@@ -5,6 +5,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.task_activity import TaskActivity, TaskActivityEventType
+from src.db.models.tasks import Task
 from src.exceptions.task_activity import TaskActivityRepositoryError
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,28 @@ class TaskActivityRepository:
             logger.error("❌ Не удалось получить историю задачи id=%s.", task_id, exc_info=True)
             raise TaskActivityRepositoryError(
                 f"Ошибка получения истории задачи id={task_id}."
+            ) from error
+
+    async def get_recent_by_project(
+        self,
+        project_id: int,
+        limit: int = 30,
+    ) -> list[TaskActivity]:
+        """Возвращает последние события задач одного проекта."""
+        try:
+            result: Result = await self.db_session.execute(
+                select(TaskActivity)
+                .join(Task, Task.id == TaskActivity.task_id)
+                .where(Task.project_id == project_id)
+                .order_by(TaskActivity.created_at.desc(), TaskActivity.id.desc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить историю проекта id=%s.", project_id, exc_info=True)
+            raise TaskActivityRepositoryError(
+                f"Ошибка получения истории проекта id={project_id}."
             ) from error
 
     async def save(

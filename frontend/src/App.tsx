@@ -12,6 +12,7 @@ import { TasksListPage } from "@/routes/TasksListPage";
 import { ProjectDocumentsPage } from "@/routes/ProjectDocumentsPage";
 import { DocumentDetailPage } from "@/routes/DocumentDetailPage";
 import { ProjectSettingsPage } from "@/routes/ProjectSettingsPage";
+import { ProjectKnowledgePage } from "@/routes/ProjectKnowledgePage";
 import { ProfilePage } from "@/routes/ProfilePage";
 import { LoginPage } from "@/routes/LoginPage";
 import { RegisterPage } from "@/routes/RegisterPage";
@@ -59,6 +60,7 @@ function ProtectedApp() {
                         />
                         <Route path="docs" element={<ProjectDocumentsPage />} />
                         <Route path="docs/:slug" element={<DocumentDetailPage />} />
+                        <Route path="knowledge" element={<ProjectKnowledgePage />} />
                         <Route path="settings" element={<ProjectSettingsPage />} />
                     </Route>
                     <Route path="*" element={<NotFoundPage />} />

@@ -279,6 +279,49 @@ export interface LinkedTask {
     title: string;
 }
 
+export type KnowledgeEntityType =
+    | "project"
+    | "task"
+    | "document"
+    | "comment"
+    | "attachment";
+
+export interface KnowledgeSource {
+    source_id: string;
+    entity_type: KnowledgeEntityType;
+    entity_id: number;
+    title: string;
+    excerpt: string | null;
+    score: number | null;
+    task_id: number | null;
+    document_slug: string | null;
+}
+
+export interface KnowledgeAnswer {
+    answer: string;
+    sources: KnowledgeSource[];
+}
+
+export interface KnowledgeStatus {
+    enabled: boolean;
+    ready: boolean;
+    points_count: number | null;
+    pending_jobs: number;
+    processing_jobs: number;
+    failed_jobs: number;
+    last_error: string | null;
+}
+
+export interface KnowledgeChatMessage {
+    role: "user" | "assistant";
+    content: string;
+}
+
+export interface KnowledgeAskPayload {
+    question: string;
+    history: KnowledgeChatMessage[];
+}
+
 export interface DashboardTotals {
     total_projects: number;
     active_projects: number;

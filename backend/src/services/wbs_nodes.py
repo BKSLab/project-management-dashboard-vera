@@ -2,6 +2,7 @@ import logging
 from collections import defaultdict
 from datetime import date
 
+from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.projects import Project
 from src.db.models.task_activity import TaskActivityEventType
 from src.db.models.tasks import Task
@@ -33,6 +34,7 @@ from src.schemas.wbs_nodes import (
     WbsStatsSchema,
     WbsStructureSchema,
 )
+from src.services.knowledge_events import KnowledgeEvents
 from src.services.tasks import build_task_key
 
 logger = logging.getLogger(__name__)
@@ -64,12 +66,14 @@ class WbsNodesService:
         stages_repository: ProjectStagesRepository,
         tasks_repository: TasksRepository,
         activity_repository: TaskActivityRepository,
+        knowledge_events: KnowledgeEvents | None = None,
     ):
         self.wbs_nodes_repository = wbs_nodes_repository
         self.projects_repository = projects_repository
         self.stages_repository = stages_repository
         self.tasks_repository = tasks_repository
         self.activity_repository = activity_repository
+        self.knowledge_events = knowledge_events
 
     async def get_structure(self, project_id: int) -> WbsStructureSchema:
         """Возвращает структуру проекта одним ответом.
@@ -172,6 +176,8 @@ class WbsNodesService:
                     "position": position,
                 }
             )
+            if self.knowledge_events is not None:
+                await self.knowledge_events.reindex_project(project_id)
             logger.info("✅ Раздел ИСР %r создан в проекте id=%s.", title, project_id)
             return WbsNodeSchema.model_validate(node)
         except (ProjectNotFoundError, WbsNodeNotFoundError, WbsNodeForeignProjectError):
@@ -201,6 +207,8 @@ class WbsNodesService:
         try:
             node = await self._get_node_in_project(node_id=node_id, project_id=project_id)
             updated = await self.wbs_nodes_repository.update(node=node, data={"title": title})
+            if self.knowledge_events is not None:
+                await self.knowledge_events.reindex_project(project_id)
             return WbsNodeSchema.model_validate(updated)
         except (WbsNodeNotFoundError, WbsNodeForeignProjectError):
             raise
@@ -259,6 +267,8 @@ class WbsNodesService:
                 node=node,
                 data={"parent_id": parent_id, "position": position},
             )
+            if self.knowledge_events is not None:
+                await self.knowledge_events.reindex_project(project_id)
             logger.info("✅ Раздел ИСР id=%s перемещён в родителя %s.", node_id, parent_id)
             return WbsNodeSchema.model_validate(updated)
         except (WbsNodeNotFoundError, WbsNodeForeignProjectError, WbsNodeCycleError):
@@ -291,6 +301,8 @@ class WbsNodesService:
             affected_ids = _collect_subtree_ids(nodes=nodes, root_id=node_id)
             released_tasks = await self.tasks_repository.clear_wbs_node(node_ids=affected_ids)
             await self.wbs_nodes_repository.delete(node=node)
+            if self.knowledge_events is not None:
+                await self.knowledge_events.reindex_project(project_id)
             logger.info(
                 "✅ Раздел ИСР id=%s удалён: разделов %s, задач возвращено в пул %s.",
                 node_id,
@@ -391,6 +403,12 @@ class WbsNodesService:
                 task=task,
                 data={"wbs_node_id": wbs_node_id},
             )
+            if self.knowledge_events is not None:
+                await self.knowledge_events.upsert(
+                    project_id=project_id,
+                    entity_type=KnowledgeEntityType.TASK,
+                    entity_id=task_id,
+                )
             return await self._to_compact(task=updated, project=project)
         except (
             ProjectNotFoundError,

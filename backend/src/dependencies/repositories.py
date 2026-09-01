@@ -5,6 +5,7 @@ from fastapi import Depends
 from src.dependencies.db_session import DbSessionDep
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
+from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
@@ -51,6 +52,11 @@ def get_documents_repository(session: DbSessionDep) -> DocumentsRepository:
     return DocumentsRepository(session)
 
 
+def get_knowledge_index_jobs_repository(session: DbSessionDep) -> KnowledgeIndexJobsRepository:
+    """Создаёт репозиторий постоянной очереди базы знаний."""
+    return KnowledgeIndexJobsRepository(session)
+
+
 def get_document_links_repository(session: DbSessionDep) -> DocumentLinksRepository:
     """Создаёт репозиторий связей документов в рамках сессии запроса."""
     return DocumentLinksRepository(session)
@@ -84,6 +90,10 @@ ProjectStagesRepositoryDep = Annotated[
 TasksRepositoryDep = Annotated[TasksRepository, Depends(get_tasks_repository)]
 WbsNodesRepositoryDep = Annotated[WbsNodesRepository, Depends(get_wbs_nodes_repository)]
 DocumentsRepositoryDep = Annotated[DocumentsRepository, Depends(get_documents_repository)]
+KnowledgeIndexJobsRepositoryDep = Annotated[
+    KnowledgeIndexJobsRepository,
+    Depends(get_knowledge_index_jobs_repository),
+]
 DocumentLinksRepositoryDep = Annotated[
     DocumentLinksRepository,
     Depends(get_document_links_repository),

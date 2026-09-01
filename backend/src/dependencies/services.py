@@ -2,9 +2,11 @@ from typing import Annotated
 
 from fastapi import Depends
 
+from src.core.settings import get_settings
 from src.dependencies.repositories import (
     DocumentLinksRepositoryDep,
     DocumentsRepositoryDep,
+    KnowledgeIndexJobsRepositoryDep,
     ProjectMembersRepositoryDep,
     ProjectsRepositoryDep,
     ProjectStagesRepositoryDep,
@@ -20,6 +22,8 @@ from src.services.auth import AuthService
 from src.services.dashboard import DashboardService
 from src.services.document_links import DocumentLinksService
 from src.services.documents import DocumentsService
+from src.services.knowledge_events import KnowledgeEvents
+from src.services.project_agent import ProjectAgentService
 from src.services.project_stages import ProjectStagesService
 from src.services.projects import ProjectsService
 from src.services.task_activity import TaskActivityService
@@ -28,6 +32,19 @@ from src.services.task_comments import TaskCommentsService
 from src.services.tasks import TasksService
 from src.services.users import UsersService
 from src.services.wbs_nodes import WbsNodesService
+
+
+def get_knowledge_events(
+    jobs_repository: KnowledgeIndexJobsRepositoryDep,
+) -> KnowledgeEvents:
+    """Создаёт безопасный publisher изменений для фонового индексатора."""
+    return KnowledgeEvents(
+        repository=jobs_repository,
+        enabled=get_settings().knowledge.knowledge_enabled,
+    )
+
+
+KnowledgeEventsDep = Annotated[KnowledgeEvents, Depends(get_knowledge_events)]
 
 
 def get_auth_service(users_repository: UsersRepositoryDep) -> AuthService:
@@ -49,6 +66,7 @@ def get_projects_service(
     stages_repository: ProjectStagesRepositoryDep,
     tasks_repository: TasksRepositoryDep,
     storage: TaskAttachmentStorageDep,
+    knowledge_events: KnowledgeEventsDep,
 ) -> ProjectsService:
     """Создаёт сервис проектов."""
     return ProjectsService(
@@ -57,6 +75,7 @@ def get_projects_service(
         stages_repository=stages_repository,
         tasks_repository=tasks_repository,
         attachment_storage=storage,
+        knowledge_events=knowledge_events,
     )
 
 
@@ -81,6 +100,7 @@ def get_tasks_service(
     activity_repository: TaskActivityRepositoryDep,
     wbs_nodes_repository: WbsNodesRepositoryDep,
     storage: TaskAttachmentStorageDep,
+    knowledge_events: KnowledgeEventsDep,
 ) -> TasksService:
     """Создаёт сервис задач со всеми доменными зависимостями."""
     return TasksService(
@@ -91,6 +111,7 @@ def get_tasks_service(
         activity_repository=activity_repository,
         wbs_nodes_repository=wbs_nodes_repository,
         attachment_storage=storage,
+        knowledge_events=knowledge_events,
     )
 
 
@@ -100,6 +121,7 @@ def get_wbs_nodes_service(
     stages_repository: ProjectStagesRepositoryDep,
     tasks_repository: TasksRepositoryDep,
     activity_repository: TaskActivityRepositoryDep,
+    knowledge_events: KnowledgeEventsDep,
 ) -> WbsNodesService:
     """Создаёт сервис структуры ИСР."""
     return WbsNodesService(
@@ -108,6 +130,7 @@ def get_wbs_nodes_service(
         stages_repository=stages_repository,
         tasks_repository=tasks_repository,
         activity_repository=activity_repository,
+        knowledge_events=knowledge_events,
     )
 
 
@@ -129,11 +152,32 @@ def get_dashboard_service(
 def get_documents_service(
     documents_repository: DocumentsRepositoryDep,
     projects_repository: ProjectsRepositoryDep,
+    knowledge_events: KnowledgeEventsDep,
 ) -> DocumentsService:
     """Создаёт сервис документов проекта."""
     return DocumentsService(
         documents_repository=documents_repository,
         projects_repository=projects_repository,
+        knowledge_events=knowledge_events,
+    )
+
+
+def get_project_agent_service(
+    stages_repository: ProjectStagesRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    wbs_nodes_repository: WbsNodesRepositoryDep,
+    documents_repository: DocumentsRepositoryDep,
+    activity_repository: TaskActivityRepositoryDep,
+    jobs_repository: KnowledgeIndexJobsRepositoryDep,
+) -> ProjectAgentService:
+    """Создаёт Project Agent в рамках сессии доступного проекта."""
+    return ProjectAgentService(
+        stages_repository=stages_repository,
+        tasks_repository=tasks_repository,
+        wbs_nodes_repository=wbs_nodes_repository,
+        documents_repository=documents_repository,
+        activity_repository=activity_repository,
+        jobs_repository=jobs_repository,
     )
 
 
@@ -158,12 +202,14 @@ def get_task_comments_service(
     comments_repository: TaskCommentsRepositoryDep,
     tasks_repository: TasksRepositoryDep,
     activity_repository: TaskActivityRepositoryDep,
+    knowledge_events: KnowledgeEventsDep,
 ) -> TaskCommentsService:
     """Создаёт сервис комментариев задач."""
     return TaskCommentsService(
         comments_repository=comments_repository,
         tasks_repository=tasks_repository,
         activity_repository=activity_repository,
+        knowledge_events=knowledge_events,
     )
 
 
@@ -182,12 +228,14 @@ def get_task_attachments_service(
     attachments_repository: TaskAttachmentsRepositoryDep,
     tasks_repository: TasksRepositoryDep,
     storage: TaskAttachmentStorageDep,
+    knowledge_events: KnowledgeEventsDep,
 ) -> TaskAttachmentsService:
     """Создаёт сервис файлов задач."""
     return TaskAttachmentsService(
         attachments_repository=attachments_repository,
         tasks_repository=tasks_repository,
         storage=storage,
+        knowledge_events=knowledge_events,
     )
 
 
@@ -218,3 +266,4 @@ TaskAttachmentsServiceDep = Annotated[
     TaskAttachmentsService,
     Depends(get_task_attachments_service),
 ]
+ProjectAgentServiceDep = Annotated[ProjectAgentService, Depends(get_project_agent_service)]

@@ -1,6 +1,12 @@
 from .base import Base
 from .document_links import DocumentLink
 from .documents import Document
+from .knowledge_index_jobs import (
+    KnowledgeEntityType,
+    KnowledgeIndexJob,
+    KnowledgeIndexOperation,
+    KnowledgeIndexStatus,
+)
 from .project_members import ProjectMember, ProjectRole
 from .project_stages import ProjectStage
 from .projects import Project, ProjectStatus
@@ -15,6 +21,10 @@ __all__ = [
     "Base",
     "Document",
     "DocumentLink",
+    "KnowledgeEntityType",
+    "KnowledgeIndexJob",
+    "KnowledgeIndexOperation",
+    "KnowledgeIndexStatus",
     "Project",
     "ProjectMember",
     "ProjectRole",
