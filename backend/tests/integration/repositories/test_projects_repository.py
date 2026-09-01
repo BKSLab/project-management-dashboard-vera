@@ -12,11 +12,12 @@ async def test_duplicate_key_raises_domain_error(
     project: Project,
 ) -> None:
     repository = ProjectsRepository(db_session)
+    busy_key = project.key
 
     with pytest.raises(ProjectKeyAlreadyExistsRepositoryError) as exc_info:
         await repository.save(
             data={
-                "key": project.key,
+                "key": busy_key,
                 "name": "Другой проект",
                 "status": "PLANNING",
                 "color": "#a371f7",
@@ -24,7 +25,7 @@ async def test_duplicate_key_raises_domain_error(
             }
         )
 
-    assert exc_info.value.key == project.key
+    assert exc_info.value.key == busy_key
 
 
 @pytest.mark.asyncio

@@ -24,9 +24,14 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
         pytest.skip(f"Docker недоступен для integration-тестов: {error}")
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture
 async def engine(postgres_container: PostgresContainer) -> AsyncGenerator[AsyncEngine, None]:
-    """Создаёт схему приложения в тестовом PostgreSQL."""
+    """Создаёт схему приложения в тестовом PostgreSQL.
+
+    Движок создаётся на каждый тест: asyncpg привязывает соединения к event
+    loop, а pytest-asyncio даёт каждому тесту свой цикл. Контейнер при этом
+    остаётся общим на весь прогон, поэтому накладные расходы невелики.
+    """
     url = postgres_container.get_connection_url().replace("psycopg2", "asyncpg")
     test_engine = create_async_engine(url)
     async with test_engine.begin() as connection:

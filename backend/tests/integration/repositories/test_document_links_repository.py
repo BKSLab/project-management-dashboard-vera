@@ -33,12 +33,14 @@ async def test_duplicate_link_raises_domain_error(
     )
     repository = DocumentLinksRepository(db_session)
     link = await repository.create(data={"document_id": document.id, "task_id": task.id})
+    # Значения читаем до конфликта: rollback истекает ORM-объекты сессии.
+    document_id, task_id, link_id = document.id, task.id, link.id
 
     with pytest.raises(DocumentLinkAlreadyExistsRepositoryError):
-        await repository.create(data={"document_id": document.id, "task_id": task.id})
+        await repository.create(data={"document_id": document_id, "task_id": task_id})
 
-    for_task = await repository.get_for_task(task_id=task.id)
-    for_document = await repository.get_for_document(document_id=document.id)
+    for_task = await repository.get_for_task(task_id=task_id)
+    for_document = await repository.get_for_document(document_id=document_id)
 
-    assert [item.id for item in for_task] == [link.id]
-    assert [item.id for item in for_document] == [link.id]
+    assert [item.id for item in for_task] == [link_id]
+    assert [item.id for item in for_document] == [link_id]

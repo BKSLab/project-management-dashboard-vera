@@ -101,13 +101,13 @@ export function ProjectLayout() {
                         </div>
 
                         <div className="flex items-center gap-3">
-                            <div className="hidden w-40 flex-col gap-1 sm:flex">
+                            <div className="hidden w-44 items-center gap-2 sm:flex">
                                 <ProgressBar
                                     value={statsQuery.data?.completion_rate ?? 0}
                                     color={project.color}
                                     label={`Прогресс проекта ${project.name}`}
                                 />
-                                <span className="text-right font-mono text-[11px] text-muted">
+                                <span className="shrink-0 font-mono text-[11px] text-secondary">
                                     {percent}%
                                 </span>
                             </div>

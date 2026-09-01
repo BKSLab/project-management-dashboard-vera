@@ -422,6 +422,9 @@ class TasksRepository:
         Args:
             node_ids: Идентификаторы разделов ИСР.
 
+        Синхронизирует identity map сессии, чтобы уже загруженные задачи не
+        сохраняли устаревшую привязку к удалённому разделу.
+
         Returns:
             Количество затронутых задач.
 
@@ -435,7 +438,7 @@ class TasksRepository:
                 update(Task)
                 .where(Task.wbs_node_id.in_(node_ids))
                 .values(wbs_node_id=None)
-                .execution_options(synchronize_session=False)
+                .execution_options(synchronize_session="fetch")
             )
             await self.db_session.commit()
             return int(result.rowcount or 0)
