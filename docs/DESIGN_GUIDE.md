@@ -1,315 +1,423 @@
-# Design Guide — Дашборд «Агент Вера»
+# UI/UX Design Guide для Project Task Tracker
 
-Гайдлайн по визуальному стилю дашборда. Используется как референс при разработке новых экранов/компонентов.
+## 1. Цель и визуальное направление
 
-> Историческая справка: до этой редакции дашборд использовал тёмно-золотую тему, скопированную 1:1 с продуктового сайта `site_work_for_everyone` («Работа для всех»). Эта редакция — самостоятельный стиль именно для дашборда разработчика/PM, дальше темы независимо эволюционируют.
+Документ задаёт единый дизайн-язык при развитии существующего дашборда в полноценный task tracker. Агент должен сохранить существующую функциональность и адаптировать текущие компоненты под общую систему, а не переписывать UI без необходимости.
 
----
+Целевое ощущение: **современный профессиональный desktop-инструмент с качеством хорошего нативного приложения**.
 
-## Общая концепция
+Референсы: **VS Code** — тёмная рабочая среда и плотность информации; **Linear** — минимализм и быстрые взаимодействия; **Postman** — организация технического workspace; **Material Design 3** — системность состояний и elevation; **iOS/macOS и современные Android-интерфейсы** — качество деталей, глубина и плавность.
 
-**Dark Developer Workspace.** Тёмная тема в духе VS Code / Postman / Linear — рабочий инструмент разработчика и PM, а не лендинг. Высокая плотность информации, спокойные многоуровневые тёмные поверхности, плавные переходы (Material-принцип), точечный glassmorphism только на крупных контейнерах (header, панель деталей, модалки) — не на канбан-карточках и списках, там он ухудшает читаемость.
+Ключевые принципы:
 
-Доступность (WCAG 2.2 AA) — обязательное требование, не опция: видимый `focus-visible` на всех интерактивных элементах, `aria-*`-атрибуты, контраст текста.
+- Dark-first, без чистого `#000000` как основного фона.
+- Информация важнее декора.
+- Высокая информационная плотность без визуальной тесноты.
+- Progressive disclosure: кратко в карточке, подробно в detail panel.
+- Глубина: оттенок поверхности → граница → тень → декоративный эффект.
+- Цвет всегда семантичен: выбор, статус, приоритет, предупреждение, ошибка.
 
----
+## 2. Design tokens и палитра
 
-## Цветовая палитра
+Все цвета и размеры вынести в централизованные design tokens / CSS variables.
 
-### Базовые токены
+```css
+:root {
+  --color-bg-app: #0d1117;
+  --color-bg-sidebar: #11161d;
+  --color-bg-surface: #161b22;
+  --color-bg-surface-2: #1c222b;
+  --color-bg-elevated: #212832;
+  --color-bg-hover: #272f3a;
+  --color-bg-active: #303947;
 
-| Токен                  | HEX / значение                  | Применение |
-|-------------------------|----------------------------------|------------|
-| `--background`         | `#111827`                       | Фон страницы |
-| `--surface`             | `#1a1f2e`                        | Фон колонок канбана, карточек документов |
-| `--surface-elevated`    | `#242b3d`                        | Карточки задач, секции в панели деталей |
-| `--surface-hover`       | `#2f374d`                        | Hover-состояние поверхностей |
-| `--surface-active`      | `#374151`                        | Активный/выбранный элемент |
-| `--border`              | `rgba(255,255,255,0.05)`         | Тонкие границы карточек |
-| `--border-hover`        | `rgba(255,255,255,0.12)`         | Границы при hover |
-| `--foreground`          | `#F0F0F0`                        | Основной текст |
-| `--muted`                | `#9CA3AF`                        | Вторичный текст, подписи |
-| `--accent`               | `#6366F1`                        | Основной акцент — сине-фиолетовый |
-| `--accent-hover`         | `#7C83FF`                        | Hover на акцентных элементах |
-| `--accent-foreground`    | `#FFFFFF`                        | Текст поверх акцентного фона |
-| `--accent-secondary`     | `#06B6D4`                        | Бирюзовый — связи, коды ИСР, активность |
-| `--warning`               | `#F59E0B`                        | Срок «скоро» |
-| `--danger`                | `#EF4444`                        | Ошибки, просроченный срок |
-| `--success`               | `#10B981`                        | Успех |
+  --color-border-subtle: rgba(255,255,255,.055);
+  --color-border: rgba(255,255,255,.09);
+  --color-border-strong: rgba(255,255,255,.15);
 
-Никакого чистого `#000000` — он убивает объём многоуровневых поверхностей.
+  --color-text-primary: #e6edf3;
+  --color-text-secondary: #b1bac4;
+  --color-text-muted: #7d8793;
+  --color-text-disabled: #555f6b;
 
-### Тени
+  --color-accent: #58a6ff;
+  --color-accent-hover: #79b8ff;
+  --color-accent-soft: rgba(88,166,255,.12);
+  --color-accent-border: rgba(88,166,255,.38);
 
-```
---shadow-panel:    0 4px 20px rgba(0,0,0,0.3)                                    /* крупные панели */
---shadow-card:      0 2px 8px rgba(0,0,0,0.25)                                    /* карточка в покое */
---shadow-card-hover: 0 8px 25px rgba(0,0,0,0.35)                                  /* карточка при hover */
---shadow-selected:   0 0 0 1px rgba(99,102,241,0.7), 0 8px 30px rgba(99,102,241,0.15)  /* выбранная/подсвеченная карточка */
---shadow-dragging:   0 15px 40px rgba(0,0,0,0.45)                                 /* карточка в DragOverlay */
-```
+  --color-success: #3fb950;
+  --color-warning: #d29922;
+  --color-danger: #f85149;
+  --color-info: #58a6ff;
+  --color-purple: #a371f7;
 
-Тени обязательны — без них тёмная тема выглядит плоской. Не использовать жёсткие тени, большие размытые ореолы или яркое свечение.
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
 
-### Принципы работы с цветом
-
-- Акцент (`#6366F1`) — точечно: активный элемент, выбранная карточка, ссылки. Не красить им большие фоновые области.
-- Второй акцент (`#06B6D4`, бирюзовый) — связи, коды ИСР (`wbs_code`), индикаторы активности.
-- Не более 2–3 акцентных цветов одновременно — без «радуги».
-
----
-
-## Типографика
-
-**Основной шрифт:** Inter (Google Fonts `<link>` в `index.html`, т.к. в Vite SPA нет `next/font`).
-
-**Моноширинный:** JetBrains Mono — для идентификаторов задач (`TASK-145`), кодов ИСР (`1.2.3`), дат, технических меток.
-
-### Шкала размеров (практическая)
-
-| Роль | Класс / размер |
-|------|---------------|
-| Заголовок страницы | `text-2xl font-bold` или `text-3xl font-bold` |
-| Заголовок карточки/панели | `text-lg font-bold` |
-| Заголовок секции | `text-sm font-semibold` |
-| Заголовок задачи (карточка) | `text-[15px] font-semibold` |
-| Основной текст | `text-sm` (14px) |
-| Вторичный текст | `text-sm text-muted` или `text-[13px] text-muted` |
-| Мелкие подписи, идентификаторы | `text-xs font-mono` |
-| Заголовок колонки канбана | `text-sm font-semibold uppercase tracking-[0.1em]` |
-
-### Принципы
-
-- `font-semibold` — для меток, кнопок, заголовков секций.
-- `font-bold` — заголовки страниц/панелей.
-- Идентификаторы (`TASK-{id}`, `wbs_code`) — всегда `font-mono`.
-- Длинные тексты на карточках — `line-clamp-2` (заголовок, описание), `line-clamp-1` (последний комментарий), не растягивать карточку.
-
----
-
-## Интерактивные элементы
-
-### Кнопка Primary
-
-```
-bg-accent text-accent-foreground (белый текст на сине-фиолетовом фоне)
-hover:bg-accent-hover
-transition-colors duration-150
-rounded-md px-4 py-2 font-semibold
-focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent
-disabled:opacity-60 disabled:cursor-not-allowed
+  --duration-fast: 120ms;
+  --duration-normal: 180ms;
+  --duration-slow: 240ms;
+  --ease-standard: cubic-bezier(.2, 0, 0, 1);
+}
 ```
 
-### Кнопка Secondary (основная для большинства действий)
+Muted-цвет использовать только для вторичных метаданных. Основной текст должен иметь высокий контраст.
 
-```
-border border-white/10 bg-white/5 text-foreground
-hover:border-white/20 hover:bg-white/10
-transition-colors duration-150
-rounded-md px-3 py-1.5 text-sm font-semibold
-focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent
-disabled:opacity-60 disabled:cursor-not-allowed
-```
+## 3. Поверхности, тени и glass
 
-Акцент в secondary-кнопках больше не используется (ни рамка, ни текст) — он точечный, не на каждой кнопке.
+Интерфейс должен восприниматься как система слоёв: Application Background → Sidebar/Workspace → Main Surface → Card → Floating Detail Panel.
 
-### Кнопка Neutral (выход, неважные действия)
+Обычная карточка:
 
-```
-bg-surface-hover text-foreground
-hover:bg-surface-active
-transition-colors duration-150
-rounded-md px-3 py-1.5 text-sm font-medium
+```css
+box-shadow:
+  0 1px 2px rgba(0,0,0,.28),
+  0 4px 12px rgba(0,0,0,.12);
 ```
 
-### Правила кнопок
+Hover/elevated:
 
-- Всегда `focus-visible:outline-accent` — скринридеры и клавиатурная навигация.
-- Никогда `outline-none` без альтернативы.
-- Состояние disabled — через `opacity-60`, не через скрытие.
-- Все варианты — `transition-colors duration-150` (Material-принцип плавных переходов).
-
----
-
-## Поля ввода (inputs, textarea)
-
-```
-rounded border border-border bg-surface px-3 py-2
-text-foreground placeholder:text-muted
-focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent
+```css
+box-shadow:
+  0 4px 10px rgba(0,0,0,.28),
+  0 12px 28px rgba(0,0,0,.18);
 ```
 
-Ошибки поля — `text-sm text-danger`, с `role="alert"` и `aria-describedby`.
+Floating panel/modal:
 
----
-
-## Карточки и поверхности
-
-### Стандартная карточка / секция
-
-```
-rounded-xl border border-white/[0.05] bg-surface-elevated p-4
+```css
+box-shadow:
+  0 16px 48px rgba(0,0,0,.42),
+  0 0 0 1px rgba(255,255,255,.05);
 ```
 
-### Карточка задачи канбана
+Glassmorphism применять только к floating toolbar, modal, dropdown, command palette, detail drawer и sticky header:
 
-```
-rounded-xl border border-white/[0.05] bg-surface-elevated p-3
-shadow-[var(--shadow-card)]
-transition-[transform,box-shadow,border-color] duration-200 ease-out
-hover:-translate-y-0.5 hover:border-white/10 hover:shadow-[var(--shadow-card-hover)]
-```
-
-Подсвеченная (выбранная/перешли из ИСР): `shadow-[var(--shadow-selected)] border-accent`.
-
-### Glass-поверхности (только header, панель деталей, модалки)
-
-```
-backdrop-filter: blur(16px)   /* header — 16px */
-backdrop-filter: blur(20px)   /* панель деталей, модалки — 20px */
-background: rgba(36,43,61,0.65)   /* header */
-background: rgba(26,31,46,0.85)   /* панель деталей */
-border: 1px solid rgba(255,255,255,0.06)
+```css
+background: rgba(22,27,34,.82);
+backdrop-filter: blur(18px);
+-webkit-backdrop-filter: blur(18px);
+border: 1px solid rgba(255,255,255,.07);
 ```
 
-Не использовать glass на канбан-карточках, в дереве ИСР, в списках — там он ухудшает читаемость.
+Не применять blur ко всем карточкам Kanban. Не использовать яркие glow-тени.
 
-### Hover на карточках
+## 4. Типографика и spacing
 
-```
-hover:-translate-y-0.5 hover:shadow-[var(--shadow-card-hover)] hover:border-white/10
-```
+Основной UI-шрифт: **Inter** или существующий качественный sans-serif. Для `TASK-142`, кодов и технических метаданных — **JetBrains Mono** / **IBM Plex Mono**.
 
----
+Основной рабочий текст: 13–14 px. Название задачи: 14–15 px, weight 550–600. Не использовать крупную лендинговую типографику.
 
-## Канбан
+Шкала отступов: `4, 8, 12, 16, 20, 24, 32 px`. Типичная task card: `padding: 12px 14px`.
 
-### Колонка
+Скругления: badge 6 px; input/button 8–10 px; task card 10–12 px; panel 14 px; modal 16–18 px.
 
-```
-rounded-2xl border border-white/[0.05] bg-surface
-```
+## 5. Архитектура интерфейса
 
-Заголовок: `IN PROGRESS · 12 задач` — `text-sm font-semibold uppercase tracking-[0.1em]`, разделитель `border-b-2` цветом стадии (`KanbanStage.color`).
+Project — центральная сущность, и UI должен это отражать.
 
-Подсветка колонки-получателя при drag-over:
-```
-border border-accent/30 bg-accent/[0.08]
+Глобально:
+
+```text
+Dashboard
+Projects
 ```
 
-### Карточка задачи — структура
+Внутри Project Workspace:
 
-```
-TASK-145
-Настроить API обработки заявок
-Краткое описание задачи в две строки...
-💬 Последний комментарий (если есть)
-wbs_code          дата          💬 N
-```
-
-- `TASK-{id}` — `font-mono text-xs text-muted`.
-- Заголовок — `line-clamp-2 text-[15px] font-semibold`.
-- Описание — только если есть, `line-clamp-2 text-[13px] text-muted`.
-- Последний комментарий — только если есть, `bg-white/[0.03] rounded-lg`, `line-clamp-1`.
-- Нижняя строка: код ИСР (`font-mono text-accent-secondary`), дата (цвет по сроку — см. ниже), счётчик комментариев `💬 N` (только если > 0).
-
-Цвет даты по сроку:
-- Просрочена → `text-danger`
-- Осталось ≤3 дня → `text-warning`
-- Иначе → `text-muted`
-
-Приоритет задачи не используется — в проекте нет такого понятия.
-
-### Drag & drop
-
-При перетаскивании карточка рендерится в `DragOverlay` (`@dnd-kit/core`):
-```
-scale-[1.03] rotate-1
-shadow-[var(--shadow-dragging)]
-border border-accent/30
-```
-Исходная позиция карточки в колонке — `opacity-40`.
-
----
-
-## Модальное окно задачи (TaskModal)
-
-Детали задачи показываются в центральном модальном окне, а не в правом sidebar. Внешний контейнер:
-```
-max-width: 48rem
-max-height: calc(100dvh - 2rem)
-background: var(--surface) / 95%
-border: 1px solid rgba(255,255,255,0.15)
-border-radius: 1rem
-backdrop-filter: blur(12px)
-box-shadow: 0 24px 64px rgba(0,0,0,0.65)
+```text
+Overview
+Tasks
+Kanban
+Documents
+Structure
 ```
 
-Overlay использует `bg-black/75 backdrop-blur-md`. Секции внутри модального окна — карточки `rounded-xl bg-surface-elevated border border-white/[0.05] p-4`.
+`Structure` можно скрыть до реализации автоматической структуры/ИСР.
 
-Вертикальная прокрутка оформляется общей утилитой `scrollbar-thin`: узкий прозрачный track и скруглённый thumb на токенах темы. Нативная светлая полоса прокрутки внутри тёмной модалки не допускается.
+В верхней части project workspace: название проекта, статус, прогресс, ключевые показатели и действия проекта.
 
-Комментарии — стиль чат-сообщений:
-```
-rounded-xl bg-white/[0.04] p-3
-имя автора — text-accent-secondary font-semibold
-```
+## 6. Общий Dashboard
 
-Файлы показываются отдельной секцией между сроком и связанными документами. Плитка файла имеет ширину до `220px`, миниатюру безопасного растрового изображения либо цветную outline-иконку типа, обрезанное имя и размер. Плитки переносятся на новую строку и не создают горизонтальный скролл на мобильном экране. Изображение открывается в отдельном preview modal; остальные файлы скачиваются. Удаление доступно через иконочную кнопку с `aria-label` и подтверждением.
+Dashboard отвечает на вопрос: **что происходит со всеми проектами сейчас?**
 
----
+Приоритетные блоки: активные проекты, общий прогресс, задачи в работе, просрочки, ближайшие дедлайны, недавно изменённые и проблемные проекты. Не заполнять экран графиками без практической ценности.
 
-## Шапка (Header)
+Пример project card:
 
-```
-sticky top-0 z-40
-background: rgba(36,43,61,0.65)
-backdrop-blur-md backdrop-saturate-150
-border-b border-white/[0.06]
+```text
+Название проекта
+Краткое описание
+
+████████░░ 78%
+18 задач · 5 в работе · 2 просрочено
+Ближайший срок: 08.09
 ```
 
-Навигационные ссылки: `text-sm text-muted hover:text-foreground transition-colors`. Активная страница **не выделяется цветом** — только через `aria-current`, если потребуется. Это сознательное решение: остаётся принцип, по которому навигация не конкурирует за внимание с акцентными элементами контента.
+Красный цвет использовать только при реальной проблеме.
 
----
+## 7. Kanban
 
-## Дерево ИСР
+Колонки должны восприниматься как части одного workspace, а не отдельные массивные панели.
 
-- Фазы (depth 0): `text-base font-bold`, разделитель сверху `border-t border-border`.
-- Разделы (depth 1): `text-sm font-semibold`.
-- Листья: `text-sm` обычный вес.
-- Прогресс-бар: `bg-border` дорожка, `bg-accent` заполнение.
-- Бейдж роли: цвет из палитры ролей (`ROLE_COLORS` в `lib/types.ts`) — это данные домена (роли ИСР), а не токены темы, формула прозрачности (`${color}1A` фон / `${color}4D` рамка) применяется к любому HEX.
-- Бейдж стадии канбана на листе: цвет из `STAGE_COLORS` — аналогично, данные домена, не тема.
+```text
+BACKLOG 12       IN PROGRESS 4       REVIEW 2       DONE 18
+─────────────────────────────────────────────────────────────
+Task             Task                Task           Task
+Task             Task                Task           Task
+```
 
-## Интерактивная карта ИСР
+Шапка колонки: название статуса, количество задач, contextual actions. Статус допускается обозначать небольшим цветным маркером. Не заливать всю колонку цветом статуса.
 
-- Карта — основной обзорный режим `/wbs`, дерево остаётся отдельным режимом редактирования.
-- Отрисовка выполняется живым SVG из `/wbs/tree`; `docs/vera_wbs.svg` используется только как исторический визуальный референс.
-- Первый уровень детализации показывает восемь фаз с агрегированным прогрессом. Разделы и листовые задачи раскрываются по веткам или командой «Все задачи»; полный граф не должен быть стартовым состоянием и автоматически уменьшать текст до нечитаемого состояния.
-- Листовая карточка получает верхний маркер и рамку цвета стадии из API. Просрочка обозначается красной рамкой, но не заменяет цвет стадии.
-- Родительский узел остаётся нейтральным и показывает многосегментную полосу стадий, `done/total` и процент. При 100% завершения рамка становится зелёной.
-- Обязательные действия: pan, zoom, fit-to-view, раскрытие/сворачивание, поиск, фильтр фазы и стадии, открытие задачи.
-- Поиск раскрывает полный путь к совпадению и визуально выделяет найденный узел. Фильтр стадии приглушает остальные ветви, сохраняя топологию карты.
-- Управление картой доступно мышью, touch/pointer-событиями и клавиатурой; карточки имеют `role=button`, `tabIndex`, `aria-label` и обработку Enter/Space.
-- Рабочая область имеет явную высоту, технологичную координатную сетку и компактную строку подсказок. Элементы управления не перекрывают важный контент на мобильном экране.
+## 8. Task Card в Kanban
 
----
+Карточка должна позволять понять состояние задачи без открытия и оставаться компактной.
 
-## Состояния загрузки и пустые состояния
+```text
+TASK-142                                      HIGH
 
-- Спиннер: сетка анимированных точек (имитация ячейки Брайля), цвет точек переходит через `var(--border)` → `var(--accent)` (см. `@keyframes braille-dot` в `app.css`).
-- Пустое состояние: `text-center text-muted py-16`.
-- Ошибка: `border border-red-400/30 bg-red-400/10 text-red-400`, `role="alert"`.
+Реализовать фильтрацию проектов
 
----
+Добавить фильтрацию по статусу и владельцу.
+Описание максимум в 2 строки.
 
-## Доступность (обязательно)
+💬 Последний комментарий максимум в 1–2 строки…
 
-- Все интерактивные элементы — видимый `focus-visible:outline-2 outline-offset-2 outline-accent`.
-- `aria-label` на иконочных кнопках без текста.
-- `aria-required`, `aria-invalid`, `aria-describedby` на полях форм.
-- `role="alert"` на сообщениях об ошибках.
-- `aria-live="polite"` на динамических регионах.
-- Декоративные элементы — `aria-hidden="true"`.
-- Скринридер-текст — `className="sr-only"`.
-- Контраст: основной текст `#F0F0F0` на `#111827` — AAA. Акцент `#6366F1` с белым текстом (`#FFFFFF`) — проверен на AA для текста на кнопках.
+Backend / API
+
+📅 08 Sep                                  💬 4
+```
+
+Отсутствующие данные не должны оставлять пустые блоки.
+
+### Название
+Максимум 2 строки, далее line-clamp/ellipsis. Это главный визуальный элемент.
+
+### Описание
+Если есть — 1–2 строки secondary text. Не показывать сырой Markdown. Если нет — блок не рендерить.
+
+### Последний комментарий
+Если есть комментарии — показывать compact preview:
+
+```css
+background: rgba(255,255,255,.025);
+border-left: 2px solid rgba(88,166,255,.45);
+border-radius: 6px;
+padding: 6px 8px;
+```
+
+Можно показать иконку, автора и 1–2 строки текста. Полный поток находится внутри задачи.
+
+### Footer
+Показывать короткий breadcrumb группы/иерархии, дедлайн и количество комментариев. Внутри проекта не повторять название проекта на каждой карточке.
+
+## 9. Priority и Deadline
+
+```css
+--priority-low: #7d8793;
+--priority-medium: #58a6ff;
+--priority-high: #d29922;
+--priority-urgent: #f85149;
+```
+
+Приоритет отображать маленьким badge/icon/indicator. Не заливать карточку цветом приоритета.
+
+Deadline: обычный будущий — muted; близкий — warning; просроченный — danger. Просрочку обозначать индикатором, а не красной заливкой всей карточки.
+
+## 10. Состояния Task Card и Drag & Drop
+
+Hover:
+
+```css
+transition:
+  background-color 160ms ease,
+  border-color 160ms ease,
+  box-shadow 160ms ease,
+  transform 160ms ease;
+```
+
+Допустим `translateY(-1px)`.
+
+Selected:
+
+```css
+border-color: rgba(88,166,255,.55);
+box-shadow: 0 0 0 1px rgba(88,166,255,.12);
+```
+
+Dragging:
+
+```css
+transform: rotate(.5deg) scale(1.015);
+box-shadow: 0 18px 44px rgba(0,0,0,.42);
+```
+
+Drop target:
+
+```css
+background: rgba(88,166,255,.055);
+outline: 1px dashed rgba(88,166,255,.35);
+```
+
+Drag & Drop должен восприниматься как физическое перемещение: сохранять вид карточки, показывать позицию вставки и плавно завершать drop. Большинство переходов — 120–200 ms.
+
+## 11. Detail Panel задачи
+
+Для быстрого просмотра/редактирования предпочтительна правая detail panel/drawer шириной примерно **420–560 px**, чтобы не терять контекст Kanban/List.
+
+```text
+TASK-142
+Название задачи
+
+Status       Priority
+Deadline     Parent/Group
+
+Description
+Documents / Relations
+Comments
+Activity
+```
+
+Информацию разделять на секции.
+
+Комментарии оформлять как компактный activity feed, а не как огромные speech bubbles. Историю изменений показывать timeline.
+
+## 12. Tasks List
+
+Kanban не должен быть единственным представлением задач.
+
+```text
+ID       TASK                         STATUS       PRIORITY    DEADLINE
+142      Реализовать фильтрацию       In Progress High        08 Sep
+143      Исправить API                Review      Medium      09 Sep
+```
+
+Одна сущность Task должна визуально оставаться узнаваемой во всех представлениях. Статусы и приоритеты используют одни и те же design tokens.
+
+## 13. Статусы
+
+Статус — бизнес-состояние, а не декоративный цвет. Один статус во всём приложении должен иметь одинаковые label, icon/marker, semantic color и порядок. Не создавать разные палитры статусов в разных компонентах.
+
+## 14. Structure / ИСР из задач
+
+Если структура строится из `parent_task_id`, это представление тех же задач, а не отдельная сущность UI.
+
+```text
+Project
+├── Backend
+│   ├── Authentication
+│   │   ├── Login API
+│   │   └── Refresh token
+│   └── Users
+└── Frontend
+    └── Login screen
+```
+
+Поддержать expand/collapse, create subtask, indent/outdent, drag & drop и открытие той же detail panel. Изменение задачи в Structure сразу отражается в List и Kanban.
+
+Сначала реализовать качественное интерактивное дерево. Граф/React Flow использовать только если появится реальная потребность показывать произвольные зависимости.
+
+## 15. Controls и иконки
+
+Primary button — accent. Secondary — surface + border. Destructive — danger только для destructive actions.
+
+Все controls должны иметь hover, active, disabled и focus. Для icon-only действий обязателен tooltip и accessible label.
+
+Использовать один icon set во всём приложении, например **Lucide** или Material Symbols. Не смешивать визуально разные библиотеки. Основной размер иконок: 14–18 px.
+
+## 16. Accessibility
+
+Все основные действия должны быть доступны с клавиатуры.
+
+```css
+outline: 2px solid rgba(88,166,255,.8);
+outline-offset: 2px;
+```
+
+Не удалять focus outline без полноценной замены.
+
+Обязательно:
+
+- semantic HTML;
+- настоящие button/link элементы;
+- keyboard navigation;
+- labels и `aria-label` для icon-only controls;
+- достаточный контраст;
+- состояние не передаётся только цветом;
+- `prefers-reduced-motion`;
+- альтернативный мыши способ изменить статус/положение задачи.
+
+## 17. Анимации
+
+Анимация должна объяснять изменение состояния, а не украшать интерфейс.
+
+```css
+--duration-fast: 120ms;
+--duration-normal: 180ms;
+--duration-slow: 240ms;
+--ease-standard: cubic-bezier(.2, 0, 0, 1);
+```
+
+Анимировать hover, drawer, dropdown, drag/drop, selected state, toast и небольшие layout transitions. Не использовать bounce и чрезмерные spring-эффекты.
+
+## 18. Loading / Empty / Error
+
+Для каждого рабочего представления предусмотреть loading, empty, error и partial-data states. Для загрузки основного контента предпочтителен skeleton.
+
+Empty state должен объяснять следующее действие:
+
+```text
+В проекте пока нет задач.
+Создайте первую задачу, чтобы начать работу.
+
+[Создать задачу]
+```
+
+## 19. Адаптивность
+
+Приоритет — desktop, но layout не должен ломаться на небольших экранах.
+
+- Sidebar может сворачиваться.
+- Detail panel на узких экранах превращается в overlay/full-screen sheet.
+- Kanban сохраняет горизонтальный scroll вместо сжатия колонок до нечитаемого состояния.
+- Основные действия остаются доступными без hover.
+
+## 20. Чего избегать
+
+Не использовать:
+
+- чистый чёрный фон повсеместно;
+- яркие градиенты на каждой поверхности;
+- glassmorphism для каждой карточки;
+- neon/glow вокруг обычных controls;
+- разноцветные карточки по статусам;
+- чрезмерные тени;
+- слишком большие скругления;
+- крупные пустые пространства ради «воздуха»;
+- разные стили одинаковых сущностей на разных экранах;
+- анимации, замедляющие работу;
+- цвет как единственный способ передачи состояния.
+
+## 21. Порядок внедрения агентом
+
+Рекомендуемый порядок рефакторинга дизайна:
+
+1. Проанализировать текущие компоненты и не ломать рабочую функциональность.
+2. Ввести централизованные design tokens.
+3. Привести базовые surfaces, typography, borders, radius и controls к новой системе.
+4. Обновить глобальный layout и Project Workspace.
+5. Обновить Kanban columns и Task Card.
+6. Реализовать все состояния hover/selected/dragging/drop target/focus.
+7. Обновить detail panel, comments и activity.
+8. Привести Dashboard и Project Cards к общей системе.
+9. Привести Tasks List и Documents к тому же дизайн-языку.
+10. Проверить keyboard navigation, контраст, reduced motion и адаптивность.
+11. Удалить старые локальные CSS-значения, дублирующие design tokens.
+
+## 22. Итоговый критерий
+
+Интерфейс должен ощущаться как **«VS Code / Linear для управления проектами»**, но не быть их копией.
+
+Он должен быть тёмным, спокойным, технологичным, быстрым, компактным и визуально цельным. Glass, тени и metallic-like границы используются для ощущения глубины, а не как самоцель. Пользователь прежде всего должен видеть состояние проектов и задач, а декоративная система должна помогать этому, а не конкурировать с данными.
