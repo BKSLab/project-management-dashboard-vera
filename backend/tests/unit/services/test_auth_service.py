@@ -21,16 +21,13 @@ from src.utils.tokens import decode_access_token
 
 VALID_INVITE = get_settings().auth.registration_invite_code.get_secret_value()
 
+# Регистрация собирает минимум: контакты заполняются позже в профиле.
 REGISTRATION = {
     "username": "boris",
     "password": "pa$$word123",
     "password_confirm": "pa$$word123",
     "last_name": "Кузнецов",
     "first_name": "Борис",
-    "middle_name": None,
-    "email": None,
-    "phone": None,
-    "telegram": None,
     "invite_code": VALID_INVITE,
 }
 
@@ -77,6 +74,8 @@ async def test_register_hashes_password_and_drops_confirmation() -> None:
     assert "password" not in saved
     assert "password_confirm" not in saved
     assert "invite_code" not in saved
+    # Контакты в регистрации не участвуют и в запись не попадают.
+    assert set(saved) == {"username", "last_name", "first_name", "password_hash"}
     # Пароль должен уходить в БД только хешем.
     assert saved["password_hash"] != REGISTRATION["password"]
     assert saved["password_hash"].startswith("$2b$")

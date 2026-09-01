@@ -64,7 +64,12 @@ class PasswordPairMixin(BaseModel):
 
 
 class UserRegisterSchema(PasswordPairMixin):
-    """Тело запроса регистрации."""
+    """Тело запроса регистрации.
+
+    Собирается необходимый минимум: логин, пароль и как обращаться к человеку.
+    Отчество и контакты заполняются позже в профиле, чтобы не удлинять форму
+    входа в сервис.
+    """
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -99,22 +104,6 @@ class UserRegisterSchema(PasswordPairMixin):
         description="Имя.",
         examples=["Борис"],
     )
-    middle_name: str | None = Field(
-        None,
-        max_length=100,
-        description="Отчество; необязательно.",
-        examples=["Сергеевич"],
-    )
-    email: str | None = Field(
-        None,
-        max_length=255,
-        description="Электронная почта; необязательна и не подтверждается.",
-        examples=["boris@example.com"],
-    )
-    phone: str | None = Field(
-        None, max_length=32, description="Телефон.", examples=["+79000000000"]
-    )
-    telegram: str | None = Field(None, max_length=64, description="Telegram.", examples=["@boris"])
     invite_code: str = Field(
         ...,
         min_length=1,

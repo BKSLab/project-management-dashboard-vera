@@ -39,7 +39,7 @@ export function RegisterPage() {
 
     return (
         <div className="flex min-h-screen items-center justify-center bg-app px-4 py-10">
-            <div className="flex w-full max-w-lg flex-col gap-5">
+            <div className="flex w-full max-w-md flex-col gap-5">
                 <header className="flex flex-col gap-1 text-center">
                     <h1 className="text-lg font-semibold text-primary">Регистрация</h1>
                     <p className="text-[13px] text-muted">
@@ -63,31 +63,43 @@ export function RegisterPage() {
                         )}
 
                         <div className="grid gap-4 sm:grid-cols-2">
-                            <Field label="Логин" error={showError("username")}>
+                            <Field label="Фамилия" error={showError("lastName")}>
                                 {(id) => (
                                     <Input
                                         id={id}
                                         autoFocus
-                                        autoComplete="username"
-                                        placeholder="boris"
-                                        value={values.username}
-                                        onChange={(event) => update({ username: event.target.value })}
+                                        value={values.lastName}
+                                        onChange={(event) => update({ lastName: event.target.value })}
                                     />
                                 )}
                             </Field>
 
-                            <Field label="Код приглашения" error={showError("inviteCode")}>
+                            <Field label="Имя" error={showError("firstName")}>
                                 {(id) => (
                                     <Input
                                         id={id}
-                                        value={values.inviteCode}
+                                        value={values.firstName}
                                         onChange={(event) =>
-                                            update({ inviteCode: event.target.value })
+                                            update({ firstName: event.target.value })
                                         }
                                     />
                                 )}
                             </Field>
+                        </div>
 
+                        <Field label="Логин" error={showError("username")}>
+                            {(id) => (
+                                <Input
+                                    id={id}
+                                    autoComplete="username"
+                                    placeholder="boris"
+                                    value={values.username}
+                                    onChange={(event) => update({ username: event.target.value })}
+                                />
+                            )}
+                        </Field>
+
+                        <div className="grid gap-4 sm:grid-cols-2">
                             <Field
                                 label="Пароль"
                                 hint="Не короче 8 символов"
@@ -119,74 +131,18 @@ export function RegisterPage() {
                             </Field>
                         </div>
 
-                        <div className="grid gap-4 border-t border-line-subtle pt-4 sm:grid-cols-2">
-                            <Field label="Фамилия" error={showError("lastName")}>
-                                {(id) => (
-                                    <Input
-                                        id={id}
-                                        value={values.lastName}
-                                        onChange={(event) => update({ lastName: event.target.value })}
-                                    />
-                                )}
-                            </Field>
-
-                            <Field label="Имя" error={showError("firstName")}>
-                                {(id) => (
-                                    <Input
-                                        id={id}
-                                        value={values.firstName}
-                                        onChange={(event) =>
-                                            update({ firstName: event.target.value })
-                                        }
-                                    />
-                                )}
-                            </Field>
-
-                            <Field label="Отчество" hint="Необязательно">
-                                {(id) => (
-                                    <Input
-                                        id={id}
-                                        value={values.middleName}
-                                        onChange={(event) =>
-                                            update({ middleName: event.target.value })
-                                        }
-                                    />
-                                )}
-                            </Field>
-
-                            <Field label="Почта" hint="Необязательно" error={showError("email")}>
-                                {(id) => (
-                                    <Input
-                                        id={id}
-                                        type="email"
-                                        autoComplete="email"
-                                        value={values.email}
-                                        onChange={(event) => update({ email: event.target.value })}
-                                    />
-                                )}
-                            </Field>
-
-                            <Field label="Телефон" hint="Необязательно">
-                                {(id) => (
-                                    <Input
-                                        id={id}
-                                        value={values.phone}
-                                        onChange={(event) => update({ phone: event.target.value })}
-                                    />
-                                )}
-                            </Field>
-
-                            <Field label="Telegram" hint="Необязательно">
-                                {(id) => (
-                                    <Input
-                                        id={id}
-                                        placeholder="@boris"
-                                        value={values.telegram}
-                                        onChange={(event) => update({ telegram: event.target.value })}
-                                    />
-                                )}
-                            </Field>
-                        </div>
+                        <Field
+                            label="Код приглашения"
+                            error={showError("inviteCode")}
+                        >
+                            {(id) => (
+                                <Input
+                                    id={id}
+                                    value={values.inviteCode}
+                                    onChange={(event) => update({ inviteCode: event.target.value })}
+                                />
+                            )}
+                        </Field>
 
                         <Button
                             type="submit"
@@ -197,6 +153,10 @@ export function RegisterPage() {
                         >
                             Зарегистрироваться
                         </Button>
+
+                        <p className="text-center text-[12px] text-muted">
+                            Отчество, почту, телефон и фотографию можно добавить позже в профиле.
+                        </p>
                     </form>
                 </Card>
 

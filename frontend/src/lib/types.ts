@@ -11,16 +11,13 @@ export interface User {
     created_at: string;
 }
 
+/** Регистрация собирает минимум: остальное заполняется в профиле. */
 export interface RegisterPayload {
     username: string;
     password: string;
     password_confirm: string;
     last_name: string;
     first_name: string;
-    middle_name?: string | null;
-    email?: string | null;
-    phone?: string | null;
-    telegram?: string | null;
     invite_code: string;
 }
 

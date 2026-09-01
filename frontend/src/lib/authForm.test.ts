@@ -14,14 +14,12 @@ const VALID: RegisterFormValues = {
     passwordConfirm: "pa$$word123",
     lastName: "  Кузнецов  ",
     firstName: "Борис",
-    middleName: "   ",
-    email: "boris@example.com",
     inviteCode: " код ",
 };
 
 describe("validateRegisterForm", () => {
     it("принимает заполненную форму", () => {
-        expect(validateRegisterForm({ ...VALID, username: "boris" })).toEqual({});
+        expect(validateRegisterForm(VALID)).toEqual({});
     });
 
     it("требует совпадения паролей", () => {
@@ -55,27 +53,22 @@ describe("validateRegisterForm", () => {
         expect(errors.inviteCode).toBeDefined();
     });
 
-    it("не требует отчество и контакты", () => {
-        const errors = validateRegisterForm({
-            ...VALID,
-            username: "boris",
-            middleName: "",
-            email: "",
-            phone: "",
-            telegram: "",
-        });
-
-        expect(errors).toEqual({});
-    });
-
-    it("замечает опечатку в почте", () => {
-        expect(validateRegisterForm({ ...VALID, email: "boris.example.com" }).email).toBeDefined();
+    it("не спрашивает ничего сверх минимума", () => {
+        // Форма регистрации собирает ровно шесть полей: остальное — в профиле.
+        expect(Object.keys(EMPTY_REGISTER_FORM).sort()).toEqual([
+            "firstName",
+            "inviteCode",
+            "lastName",
+            "password",
+            "passwordConfirm",
+            "username",
+        ]);
     });
 });
 
 describe("isRegisterFormValid", () => {
     it("отражает наличие ошибок", () => {
-        expect(isRegisterFormValid({ ...VALID, username: "boris" })).toBe(true);
+        expect(isRegisterFormValid(VALID)).toBe(true);
         expect(isRegisterFormValid(EMPTY_REGISTER_FORM)).toBe(false);
     });
 });
@@ -89,12 +82,14 @@ describe("toRegisterPayload", () => {
         expect(payload.invite_code).toBe("код");
     });
 
-    it("превращает пустые необязательные поля в null", () => {
-        const payload = toRegisterPayload(VALID);
-
-        expect(payload.middle_name).toBeNull();
-        expect(payload.phone).toBeNull();
-        expect(payload.telegram).toBeNull();
-        expect(payload.email).toBe("boris@example.com");
+    it("отправляет только поля регистрации", () => {
+        expect(Object.keys(toRegisterPayload(VALID)).sort()).toEqual([
+            "first_name",
+            "invite_code",
+            "last_name",
+            "password",
+            "password_confirm",
+            "username",
+        ]);
     });
 });
