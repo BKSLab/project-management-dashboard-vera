@@ -128,10 +128,10 @@ async def test_overview_aggregates_projects_and_totals() -> None:
     assert result.totals.overdue_tasks == 2
     assert result.totals.completion_rate == pytest.approx(4 / 13)
 
-    vera, site = result.projects
-    assert vera.in_progress_tasks == 3
-    assert vera.completion_rate == pytest.approx(0.4)
-    assert vera.next_due_date == TODAY
+    first, site = result.projects
+    assert first.in_progress_tasks == 3
+    assert first.completion_rate == pytest.approx(0.4)
+    assert first.next_due_date == TODAY
     assert site.total_tasks == 3
     assert site.in_progress_tasks == 0
 

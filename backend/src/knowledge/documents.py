@@ -12,7 +12,7 @@ from src.db.models.wbs_nodes import WbsNode
 from src.knowledge.chunking import chunk_markdown, chunk_text
 from src.services.tasks import build_task_key
 
-POINT_NAMESPACE = "project-management-dashboard-vera:knowledge"
+POINT_NAMESPACE = "task-tracker:knowledge"
 
 
 @dataclass(frozen=True, slots=True)

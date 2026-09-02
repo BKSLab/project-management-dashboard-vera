@@ -135,7 +135,7 @@ async def test_resolve_project_allows_member(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(ctx, "ProjectsRepository", Projects)
     monkeypatch.setattr(ctx, "ProjectMembersRepository", Members)
 
-    project = await resolve_project(_tools(), "vera")
+    project = await resolve_project(_tools(), "proj")
 
     assert project.key == "PROJ"
 
