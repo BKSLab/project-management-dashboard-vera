@@ -1,0 +1,6 @@
+{
+  "predictions": [
+    {"id": "fixture-1", "source_ids": ["task:999", "task:1"]},
+    {"id": "fixture-2", "source_ids": ["document:2", "task:999", "comment:3"]}
+  ]
+}

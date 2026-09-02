@@ -82,6 +82,7 @@ class KnowledgeSettings(SettingsBase):
     qdrant_score_threshold: float = 0.35
     knowledge_index_poll_seconds: float = 2.0
     knowledge_index_max_attempts: int = 5
+    knowledge_job_retention_days: int = 30
     knowledge_embedding_batch_size: int = 32
     knowledge_chunk_target_chars: int = 2200
     knowledge_chunk_overlap_chars: int = 300

@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import Result, and_, func, select, union
+from sqlalchemy import Result, and_, case, func, or_, select, union
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -73,6 +73,47 @@ class DocumentsRepository:
             )
             raise DocumentsRepositoryError(
                 error_details=f"Ошибка при получении документов проекта id={project_id}."
+            ) from error
+
+    async def search_ranked(
+        self,
+        *,
+        project_id: int,
+        search: str,
+        limit: int = 30,
+    ) -> list[Document]:
+        """Возвращает ограниченный список документов по FTS-релевантности."""
+        search_text = search.strip()
+        if not search_text or limit < 1:
+            return []
+        try:
+            ts_query = build_ts_query(search_text)
+            rank = func.ts_rank_cd(Document.search_vector, ts_query)
+            escaped_slug = search_text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            slug_match = Document.slug.ilike(f"%{escaped_slug}%", escape="\\")
+            exact_slug = case(
+                (func.lower(Document.slug) == search_text.casefold(), 1),
+                else_=0,
+            )
+            result: Result = await self.db_session.execute(
+                select(Document)
+                .where(
+                    Document.project_id == project_id,
+                    or_(Document.search_vector.op("@@")(ts_query), slug_match),
+                )
+                .order_by(exact_slug.desc(), rank.desc(), Document.id)
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось ранжировать документы проекта id=%s.",
+                project_id,
+                exc_info=True,
+            )
+            raise DocumentsRepositoryError(
+                error_details="Ошибка ранжированного поиска документов."
             ) from error
 
     async def get_search_highlights(
@@ -232,7 +273,7 @@ class DocumentsRepository:
         try:
             document = Document(**data)
             self.db_session.add(document)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(document)
             return document
         except IntegrityError as error:
@@ -269,7 +310,7 @@ class DocumentsRepository:
         try:
             for field, value in data.items():
                 setattr(document, field, value)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(document)
             return document
         except IntegrityError as error:
@@ -308,7 +349,7 @@ class DocumentsRepository:
         """
         try:
             await self.db_session.delete(document)
-            await self.db_session.commit()
+            await self.db_session.flush()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось удалить документ id=%s.", document.id, exc_info=True)

@@ -324,6 +324,8 @@ CI в репозитории пока не настроен: проверки з
 - [`docs/PROJECT_DASHBOARD_PLAN.md`](docs/PROJECT_DASHBOARD_PLAN.md) — актуальная архитектура и принятые решения;
 - [`project_knowledge_ai_concept.md`](project_knowledge_ai_concept.md) — концепция AI-базы проекта;
 - [`docs/PROJECT_AI_WIKI_IMPLEMENTATION.md`](docs/PROJECT_AI_WIKI_IMPLEMENTATION.md) — подробная реализация AI-вики с трассировкой пунктов ТЗ;
+- [`docs/KNOWLEDGE_IMPROVEMENT_PLAN.md`](docs/KNOWLEDGE_IMPROVEMENT_PLAN.md) — план развития AI-вики: найденные проблемы и способы их решения;
+- [`docs/MCP_INTEGRATION_PLAN.md`](docs/MCP_INTEGRATION_PLAN.md) — план MCP-слоя: API-токены, инструменты и раздел в интерфейсе;
 - [`docs/AGENT_VERA_RISK_MANAGEMENT_PLAN.md`](docs/AGENT_VERA_RISK_MANAGEMENT_PLAN.md) — материалы проекта «Агент Вера».
 
 ## Аутентификация

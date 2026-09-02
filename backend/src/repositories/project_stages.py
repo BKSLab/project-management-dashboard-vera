@@ -141,7 +141,7 @@ class ProjectStagesRepository:
         try:
             stages = [ProjectStage(**item) for item in items]
             self.db_session.add_all(stages)
-            await self.db_session.commit()
+            await self.db_session.flush()
             for stage in stages:
                 await self.db_session.refresh(stage)
             return stages
@@ -166,7 +166,7 @@ class ProjectStagesRepository:
         try:
             stage = ProjectStage(**data)
             self.db_session.add(stage)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(stage)
             return stage
         except IntegrityError as error:
@@ -201,7 +201,7 @@ class ProjectStagesRepository:
         try:
             for field, value in data.items():
                 setattr(stage, field, value)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(stage)
             return stage
         except IntegrityError as error:
@@ -235,7 +235,7 @@ class ProjectStagesRepository:
         """
         try:
             await self.db_session.delete(stage)
-            await self.db_session.commit()
+            await self.db_session.flush()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось удалить стадию id=%s.", stage.id, exc_info=True)

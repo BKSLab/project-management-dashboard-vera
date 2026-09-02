@@ -16,6 +16,7 @@ class KnowledgeRuntime:
     embedding_client: EmbeddingClient
     llm_client: LlmClient
     qdrant_client: ProjectQdrantClient
+    payload_indexes_backfill_pending: bool = False
 
 
 _runtime: KnowledgeRuntime | None = None

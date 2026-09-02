@@ -8,6 +8,7 @@ from pathlib import Path
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.task_attachments import TaskAttachment
 from src.db.models.tasks import Task
+from src.exceptions.knowledge import KnowledgeEventsServiceError
 from src.exceptions.task_attachments import (
     TaskAttachmentLimitError,
     TaskAttachmentNotFoundError,
@@ -19,8 +20,10 @@ from src.exceptions.task_attachments import (
     TaskAttachmentValidationError,
 )
 from src.exceptions.tasks import TaskNotFoundError, TasksRepositoryError
+from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.schemas.task_attachments import TaskAttachmentSchema
 from src.services.knowledge_events import KnowledgeEvents
 from src.storage.task_attachments import TaskAttachmentStorage
@@ -81,11 +84,13 @@ class TaskAttachmentsService:
         attachments_repository: TaskAttachmentsRepository,
         tasks_repository: TasksRepository,
         storage: TaskAttachmentStorage,
+        unit_of_work: UnitOfWork,
         knowledge_events: KnowledgeEvents | None = None,
     ) -> None:
         self.attachments_repository = attachments_repository
         self.tasks_repository = tasks_repository
         self.storage = storage
+        self.unit_of_work = unit_of_work
         self.knowledge_events = knowledge_events
 
     @property
@@ -180,6 +185,7 @@ class TaskAttachmentsService:
                     entity_type=KnowledgeEntityType.ATTACHMENT,
                     entity_id=attachment.id,
                 )
+            await self.unit_of_work.commit()
             return self._to_schema(attachment)
         except (
             TaskNotFoundError,
@@ -193,6 +199,8 @@ class TaskAttachmentsService:
             TaskAttachmentStorageError,
             TaskAttachmentsRepositoryError,
             TasksRepositoryError,
+            KnowledgeEventsServiceError,
+            UnitOfWorkRepositoryError,
         ) as error:
             if storage_key is not None:
                 try:
@@ -264,6 +272,7 @@ class TaskAttachmentsService:
                     entity_type=KnowledgeEntityType.ATTACHMENT,
                     entity_id=attachment_id,
                 )
+            await self.unit_of_work.commit()
             try:
                 await self.storage.delete(storage_key)
             except TaskAttachmentStorageError:
@@ -275,7 +284,12 @@ class TaskAttachmentsService:
                 )
         except TaskAttachmentNotFoundError:
             raise
-        except TaskAttachmentsRepositoryError as error:
+        except (
+            TaskAttachmentsRepositoryError,
+            TasksRepositoryError,
+            KnowledgeEventsServiceError,
+            UnitOfWorkRepositoryError,
+        ) as error:
             logger.error("❌ Ошибка удаления файла задачи id=%s.", attachment_id, exc_info=True)
             raise TaskAttachmentsServiceError(str(error)) from error
 

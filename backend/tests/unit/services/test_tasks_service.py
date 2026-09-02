@@ -25,6 +25,7 @@ from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.wbs_nodes import WbsNodesRepository
 from src.services.knowledge_events import KnowledgeEvents
 from src.services.tasks import TasksService
@@ -82,6 +83,7 @@ def build_service(
         comments_repository=comments_repository,
         activity_repository=activity_repository or AsyncMock(spec=TaskActivityRepository),
         wbs_nodes_repository=wbs_nodes_repository or AsyncMock(spec=WbsNodesRepository),
+        unit_of_work=AsyncMock(spec=UnitOfWork),
         knowledge_events=knowledge_events,
     )
 

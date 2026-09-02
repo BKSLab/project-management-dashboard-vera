@@ -26,7 +26,8 @@ from src.api.v1.endpoints.wbs_nodes import router as wbs_nodes_router
 from src.core.config_logger import configure_logging
 from src.core.settings import get_settings
 from src.db.session import async_session_factory, engine
-from src.knowledge.runtime import close_knowledge_runtime
+from src.exceptions.knowledge import KnowledgeProviderError
+from src.knowledge.runtime import close_knowledge_runtime, get_knowledge_runtime
 from src.knowledge.worker import run_knowledge_worker
 from src.utils.check_db import check_db_connection
 
@@ -51,6 +52,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     worker_stop = asyncio.Event()
     worker_task: asyncio.Task | None = None
     if settings.knowledge.knowledge_enabled:
+        runtime = get_knowledge_runtime()
+        try:
+            await runtime.qdrant_client.backfill_payload_indexes()
+        except KnowledgeProviderError:
+            runtime.payload_indexes_backfill_pending = True
+            logger.warning(
+                "⚠️ Qdrant недоступен при старте; backfill payload-индексов отложен.",
+                exc_info=True,
+            )
         worker_task = asyncio.create_task(
             run_knowledge_worker(worker_stop),
             name="project-knowledge-indexer",

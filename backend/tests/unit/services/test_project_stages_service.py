@@ -17,6 +17,7 @@ from src.exceptions.projects import ProjectNotFoundError
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.services.project_stages import ProjectStagesService
 
 
@@ -33,6 +34,7 @@ def build_service(
         stages_repository=stages_repository or AsyncMock(spec=ProjectStagesRepository),
         projects_repository=projects,
         tasks_repository=tasks_repository or AsyncMock(spec=TasksRepository),
+        unit_of_work=AsyncMock(spec=UnitOfWork),
     )
 
 

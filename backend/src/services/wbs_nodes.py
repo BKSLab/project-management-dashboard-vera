@@ -7,6 +7,7 @@ from src.db.models.projects import Project
 from src.db.models.task_activity import TaskActivityEventType
 from src.db.models.tasks import Task
 from src.db.models.wbs_nodes import WbsNode
+from src.exceptions.knowledge import KnowledgeEventsServiceError
 from src.exceptions.project_stages import ProjectStagesRepositoryError
 from src.exceptions.projects import ProjectNotFoundError, ProjectsRepositoryError
 from src.exceptions.task_activity import TaskActivityRepositoryError
@@ -15,6 +16,7 @@ from src.exceptions.tasks import (
     TaskNotFoundError,
     TasksRepositoryError,
 )
+from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.exceptions.wbs_nodes import (
     WbsNodeCycleError,
     WbsNodeForeignProjectError,
@@ -26,6 +28,7 @@ from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.wbs_nodes import WbsNodesRepository
 from src.schemas.tasks import TaskCompactSchema
 from src.schemas.wbs_nodes import (
@@ -48,6 +51,8 @@ RepositoryErrors = (
     ProjectStagesRepositoryError,
     TasksRepositoryError,
     TaskActivityRepositoryError,
+    KnowledgeEventsServiceError,
+    UnitOfWorkRepositoryError,
 )
 
 
@@ -66,6 +71,7 @@ class WbsNodesService:
         stages_repository: ProjectStagesRepository,
         tasks_repository: TasksRepository,
         activity_repository: TaskActivityRepository,
+        unit_of_work: UnitOfWork,
         knowledge_events: KnowledgeEvents | None = None,
     ):
         self.wbs_nodes_repository = wbs_nodes_repository
@@ -73,6 +79,7 @@ class WbsNodesService:
         self.stages_repository = stages_repository
         self.tasks_repository = tasks_repository
         self.activity_repository = activity_repository
+        self.unit_of_work = unit_of_work
         self.knowledge_events = knowledge_events
 
     async def get_structure(self, project_id: int) -> WbsStructureSchema:
@@ -176,8 +183,7 @@ class WbsNodesService:
                     "position": position,
                 }
             )
-            if self.knowledge_events is not None:
-                await self.knowledge_events.reindex_project(project_id)
+            await self.unit_of_work.commit()
             logger.info("✅ Раздел ИСР %r создан в проекте id=%s.", title, project_id)
             return WbsNodeSchema.model_validate(node)
         except (ProjectNotFoundError, WbsNodeNotFoundError, WbsNodeForeignProjectError):
@@ -206,9 +212,17 @@ class WbsNodesService:
         """
         try:
             node = await self._get_node_in_project(node_id=node_id, project_id=project_id)
+            nodes = await self.wbs_nodes_repository.get_by_project(project_id=project_id)
             updated = await self.wbs_nodes_repository.update(node=node, data={"title": title})
             if self.knowledge_events is not None:
-                await self.knowledge_events.reindex_project(project_id)
+                affected_ids = _collect_subtree_ids(nodes=nodes, root_id=node_id)
+                task_ids = await self.tasks_repository.get_ids_by_wbs_nodes(affected_ids)
+                await self.knowledge_events.upsert_many(
+                    project_id=project_id,
+                    entity_type=KnowledgeEntityType.TASK,
+                    entity_ids=task_ids,
+                )
+            await self.unit_of_work.commit()
             return WbsNodeSchema.model_validate(updated)
         except (WbsNodeNotFoundError, WbsNodeForeignProjectError):
             raise
@@ -243,6 +257,7 @@ class WbsNodesService:
         try:
             nodes = await self.wbs_nodes_repository.get_by_project(project_id=project_id)
             node = self._require_node(nodes=nodes, node_id=node_id, project_id=project_id)
+            parent_changed = node.parent_id != parent_id
             if parent_id is not None:
                 self._require_node(nodes=nodes, node_id=parent_id, project_id=project_id)
                 self._ensure_no_cycle(nodes=nodes, node_id=node_id, parent_id=parent_id)
@@ -267,8 +282,15 @@ class WbsNodesService:
                 node=node,
                 data={"parent_id": parent_id, "position": position},
             )
-            if self.knowledge_events is not None:
-                await self.knowledge_events.reindex_project(project_id)
+            if self.knowledge_events is not None and parent_changed:
+                affected_ids = _collect_subtree_ids(nodes=nodes, root_id=node_id)
+                task_ids = await self.tasks_repository.get_ids_by_wbs_nodes(affected_ids)
+                await self.knowledge_events.upsert_many(
+                    project_id=project_id,
+                    entity_type=KnowledgeEntityType.TASK,
+                    entity_ids=task_ids,
+                )
+            await self.unit_of_work.commit()
             logger.info("✅ Раздел ИСР id=%s перемещён в родителя %s.", node_id, parent_id)
             return WbsNodeSchema.model_validate(updated)
         except (WbsNodeNotFoundError, WbsNodeForeignProjectError, WbsNodeCycleError):
@@ -299,10 +321,20 @@ class WbsNodesService:
             nodes = await self.wbs_nodes_repository.get_by_project(project_id=project_id)
             node = self._require_node(nodes=nodes, node_id=node_id, project_id=project_id)
             affected_ids = _collect_subtree_ids(nodes=nodes, root_id=node_id)
+            task_ids = (
+                await self.tasks_repository.get_ids_by_wbs_nodes(affected_ids)
+                if self.knowledge_events is not None
+                else []
+            )
             released_tasks = await self.tasks_repository.clear_wbs_node(node_ids=affected_ids)
             await self.wbs_nodes_repository.delete(node=node)
             if self.knowledge_events is not None:
-                await self.knowledge_events.reindex_project(project_id)
+                await self.knowledge_events.upsert_many(
+                    project_id=project_id,
+                    entity_type=KnowledgeEntityType.TASK,
+                    entity_ids=task_ids,
+                )
+            await self.unit_of_work.commit()
             logger.info(
                 "✅ Раздел ИСР id=%s удалён: разделов %s, задач возвращено в пул %s.",
                 node_id,
@@ -409,7 +441,9 @@ class WbsNodesService:
                     entity_type=KnowledgeEntityType.TASK,
                     entity_id=task_id,
                 )
-            return await self._to_compact(task=updated, project=project)
+            result = await self._to_compact(task=updated, project=project)
+            await self.unit_of_work.commit()
+            return result
         except (
             ProjectNotFoundError,
             TaskNotFoundError,

@@ -109,7 +109,7 @@ def build_comment_document(
     text = "\n".join(
         (
             "Тип: комментарий к задаче",
-            f"Задача: {task_key} · {task.title}",
+            f"Задача: {task_key}",
             f"Автор: {comment.author_name or 'не указан'}",
             f"Комментарий:\n{comment.body_md}",
         )
@@ -191,7 +191,7 @@ def build_attachment_chunks(
             chunk_index=index,
             text=(
                 "Тип: вложение задачи\n"
-                f"Задача: {task_key} · {task.title}\n"
+                f"Задача: {task_key}\n"
                 f"Файл: {attachment.original_name}\n"
                 f"Содержимое:\n{chunk}"
             ),

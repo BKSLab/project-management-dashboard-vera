@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from datetime import date
 
 from sqlalchemy import Result, Row, and_, case, func, or_, select, update
@@ -22,6 +23,17 @@ from src.utils.fts import (
 logger = logging.getLogger(__name__)
 
 TASK_NUMBER_CONSTRAINTS = frozenset({"uq_tasks_project_number"})
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectTaskStatistics:
+    """Ограниченный набор агрегатов задач для Project Agent."""
+
+    total: int
+    overdue: int
+    by_stage: dict[int, int]
+    by_priority: dict[str, int]
+    by_assignee: dict[str, int]
 
 
 class TasksRepository:
@@ -111,6 +123,169 @@ class TasksRepository:
             await self.db_session.rollback()
             logger.error("❌ Не удалось получить набор задач.", exc_info=True)
             raise TasksRepositoryError("Ошибка получения набора задач.") from error
+
+    async def get_ids_by_wbs_nodes(self, node_ids: set[int]) -> list[int]:
+        """Возвращает идентификаторы задач, назначенных указанным разделам ИСР."""
+        if not node_ids:
+            return []
+        try:
+            result: Result = await self.db_session.execute(
+                select(Task.id).where(Task.wbs_node_id.in_(node_ids)).order_by(Task.id)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить задачи разделов ИСР.", exc_info=True)
+            raise TasksRepositoryError("Ошибка получения задач разделов ИСР.") from error
+
+    async def search_ranked(
+        self,
+        *,
+        project_id: int,
+        search: str,
+        limit: int = 30,
+    ) -> list[Task]:
+        """Возвращает ограниченный список задач по убыванию FTS-релевантности."""
+        if not search.strip() or limit < 1:
+            return []
+        try:
+            ts_query = build_ts_query(search)
+            rank = func.ts_rank_cd(Task.search_vector, ts_query)
+            number = _extract_task_number(search)
+            condition = Task.search_vector.op("@@")(ts_query)
+            exact_number = case((Task.number == number, 1), else_=0) if number else 0
+            if number is not None:
+                condition = or_(condition, Task.number == number)
+            result: Result = await self.db_session.execute(
+                select(Task)
+                .where(Task.project_id == project_id, condition)
+                .order_by(exact_number.desc() if number else rank.desc(), rank.desc(), Task.id)
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось ранжировать задачи проекта id=%s.", project_id, exc_info=True
+            )
+            raise TasksRepositoryError("Ошибка ранжированного поиска задач.") from error
+
+    async def get_project_statistics(
+        self,
+        *,
+        project_id: int,
+        today: date,
+    ) -> ProjectTaskStatistics:
+        """Возвращает агрегаты задач проекта без загрузки самих задач."""
+        try:
+            rows = (
+                await self.db_session.execute(
+                    select(
+                        Task.stage_id,
+                        Task.priority,
+                        Task.assignee,
+                        func.count(Task.id).label("tasks_count"),
+                        func.count(Task.id)
+                        .filter(ProjectStage.is_done_stage.is_(False), Task.due_date < today)
+                        .label("overdue_count"),
+                    )
+                    .join(ProjectStage, ProjectStage.id == Task.stage_id)
+                    .where(Task.project_id == project_id)
+                    .group_by(Task.stage_id, Task.priority, Task.assignee)
+                )
+            ).all()
+            by_stage: dict[int, int] = {}
+            by_priority: dict[str, int] = {}
+            by_assignee: dict[str, int] = {}
+            total = 0
+            overdue = 0
+            for stage_id, priority, assignee, count, overdue_count in rows:
+                count_value = int(count)
+                total += count_value
+                overdue += int(overdue_count)
+                by_stage[stage_id] = by_stage.get(stage_id, 0) + count_value
+                priority_key = priority.value
+                by_priority[priority_key] = by_priority.get(priority_key, 0) + count_value
+                assignee_key = assignee or "не назначен"
+                by_assignee[assignee_key] = by_assignee.get(assignee_key, 0) + count_value
+            return ProjectTaskStatistics(
+                total=total,
+                overdue=overdue,
+                by_stage=by_stage,
+                by_priority=by_priority,
+                by_assignee=by_assignee,
+            )
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось получить агрегаты проекта id=%s.", project_id, exc_info=True
+            )
+            raise TasksRepositoryError("Ошибка получения агрегатов задач.") from error
+
+    async def get_by_stage_limited(
+        self,
+        *,
+        project_id: int,
+        stage_id: int,
+        limit: int = 30,
+    ) -> list[Task]:
+        """Возвращает ограниченный список задач выбранной стадии проекта."""
+        try:
+            result: Result = await self.db_session.execute(
+                select(Task)
+                .where(Task.project_id == project_id, Task.stage_id == stage_id)
+                .order_by(Task.position, Task.id)
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить задачи стадии id=%s.", stage_id, exc_info=True)
+            raise TasksRepositoryError("Ошибка получения задач стадии.") from error
+
+    async def get_overdue_limited(
+        self,
+        *,
+        project_id: int,
+        today: date,
+        limit: int = 30,
+    ) -> list[Task]:
+        """Возвращает ограниченный список незавершённых просроченных задач."""
+        try:
+            result: Result = await self.db_session.execute(
+                select(Task)
+                .join(ProjectStage, ProjectStage.id == Task.stage_id)
+                .where(
+                    Task.project_id == project_id,
+                    ProjectStage.is_done_stage.is_(False),
+                    Task.due_date < today,
+                )
+                .order_by(Task.due_date, Task.id)
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось получить просроченные задачи id=%s.", project_id, exc_info=True
+            )
+            raise TasksRepositoryError("Ошибка получения просроченных задач.") from error
+
+    async def get_wbs_counts(self, project_id: int) -> dict[int, int]:
+        """Возвращает число задач по узлам ИСР без загрузки задач."""
+        try:
+            rows = (
+                await self.db_session.execute(
+                    select(Task.wbs_node_id, func.count(Task.id))
+                    .where(Task.project_id == project_id, Task.wbs_node_id.is_not(None))
+                    .group_by(Task.wbs_node_id)
+                )
+            ).all()
+            return {int(node_id): int(count) for node_id, count in rows if node_id is not None}
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить агрегаты ИСР id=%s.", project_id, exc_info=True)
+            raise TasksRepositoryError("Ошибка получения агрегатов ИСР.") from error
 
     async def get_next_number(self, project_id: int) -> int:
         """Возвращает следующий свободный номер задачи в проекте.
@@ -456,7 +631,7 @@ class TasksRepository:
                 .values(wbs_node_id=None)
                 .execution_options(synchronize_session="fetch")
             )
-            await self.db_session.commit()
+            await self.db_session.flush()
             return int(result.rowcount or 0)
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
@@ -479,7 +654,7 @@ class TasksRepository:
         try:
             task = Task(**data)
             self.db_session.add(task)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(task)
             return task
         except IntegrityError as error:
@@ -515,7 +690,7 @@ class TasksRepository:
         try:
             for field, value in data.items():
                 setattr(task, field, value)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(task)
             return task
         except (SQLAlchemyError, Exception) as error:
@@ -537,7 +712,7 @@ class TasksRepository:
         """
         try:
             await self.db_session.delete(task)
-            await self.db_session.commit()
+            await self.db_session.flush()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось удалить задачу id=%s.", task.id, exc_info=True)

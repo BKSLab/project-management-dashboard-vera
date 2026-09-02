@@ -14,6 +14,7 @@ from src.dependencies.repositories import (
     TaskAttachmentsRepositoryDep,
     TaskCommentsRepositoryDep,
     TasksRepositoryDep,
+    UnitOfWorkDep,
     UsersRepositoryDep,
     WbsNodesRepositoryDep,
 )
@@ -67,6 +68,7 @@ def get_projects_service(
     tasks_repository: TasksRepositoryDep,
     storage: TaskAttachmentStorageDep,
     knowledge_events: KnowledgeEventsDep,
+    unit_of_work: UnitOfWorkDep,
 ) -> ProjectsService:
     """Создаёт сервис проектов."""
     return ProjectsService(
@@ -76,6 +78,7 @@ def get_projects_service(
         tasks_repository=tasks_repository,
         attachment_storage=storage,
         knowledge_events=knowledge_events,
+        unit_of_work=unit_of_work,
     )
 
 
@@ -83,12 +86,14 @@ def get_project_stages_service(
     stages_repository: ProjectStagesRepositoryDep,
     projects_repository: ProjectsRepositoryDep,
     tasks_repository: TasksRepositoryDep,
+    unit_of_work: UnitOfWorkDep,
 ) -> ProjectStagesService:
     """Создаёт сервис стадий проекта."""
     return ProjectStagesService(
         stages_repository=stages_repository,
         projects_repository=projects_repository,
         tasks_repository=tasks_repository,
+        unit_of_work=unit_of_work,
     )
 
 
@@ -101,6 +106,7 @@ def get_tasks_service(
     wbs_nodes_repository: WbsNodesRepositoryDep,
     storage: TaskAttachmentStorageDep,
     knowledge_events: KnowledgeEventsDep,
+    unit_of_work: UnitOfWorkDep,
 ) -> TasksService:
     """Создаёт сервис задач со всеми доменными зависимостями."""
     return TasksService(
@@ -112,6 +118,7 @@ def get_tasks_service(
         wbs_nodes_repository=wbs_nodes_repository,
         attachment_storage=storage,
         knowledge_events=knowledge_events,
+        unit_of_work=unit_of_work,
     )
 
 
@@ -122,6 +129,7 @@ def get_wbs_nodes_service(
     tasks_repository: TasksRepositoryDep,
     activity_repository: TaskActivityRepositoryDep,
     knowledge_events: KnowledgeEventsDep,
+    unit_of_work: UnitOfWorkDep,
 ) -> WbsNodesService:
     """Создаёт сервис структуры ИСР."""
     return WbsNodesService(
@@ -131,6 +139,7 @@ def get_wbs_nodes_service(
         tasks_repository=tasks_repository,
         activity_repository=activity_repository,
         knowledge_events=knowledge_events,
+        unit_of_work=unit_of_work,
     )
 
 
@@ -153,12 +162,14 @@ def get_documents_service(
     documents_repository: DocumentsRepositoryDep,
     projects_repository: ProjectsRepositoryDep,
     knowledge_events: KnowledgeEventsDep,
+    unit_of_work: UnitOfWorkDep,
 ) -> DocumentsService:
     """Создаёт сервис документов проекта."""
     return DocumentsService(
         documents_repository=documents_repository,
         projects_repository=projects_repository,
         knowledge_events=knowledge_events,
+        unit_of_work=unit_of_work,
     )
 
 
@@ -169,6 +180,7 @@ def get_project_agent_service(
     documents_repository: DocumentsRepositoryDep,
     activity_repository: TaskActivityRepositoryDep,
     jobs_repository: KnowledgeIndexJobsRepositoryDep,
+    unit_of_work: UnitOfWorkDep,
 ) -> ProjectAgentService:
     """Создаёт Project Agent в рамках сессии доступного проекта."""
     return ProjectAgentService(
@@ -178,6 +190,7 @@ def get_project_agent_service(
         documents_repository=documents_repository,
         activity_repository=activity_repository,
         jobs_repository=jobs_repository,
+        unit_of_work=unit_of_work,
     )
 
 
@@ -203,6 +216,7 @@ def get_task_comments_service(
     tasks_repository: TasksRepositoryDep,
     activity_repository: TaskActivityRepositoryDep,
     knowledge_events: KnowledgeEventsDep,
+    unit_of_work: UnitOfWorkDep,
 ) -> TaskCommentsService:
     """Создаёт сервис комментариев задач."""
     return TaskCommentsService(
@@ -210,6 +224,7 @@ def get_task_comments_service(
         tasks_repository=tasks_repository,
         activity_repository=activity_repository,
         knowledge_events=knowledge_events,
+        unit_of_work=unit_of_work,
     )
 
 
@@ -229,6 +244,7 @@ def get_task_attachments_service(
     tasks_repository: TasksRepositoryDep,
     storage: TaskAttachmentStorageDep,
     knowledge_events: KnowledgeEventsDep,
+    unit_of_work: UnitOfWorkDep,
 ) -> TaskAttachmentsService:
     """Создаёт сервис файлов задач."""
     return TaskAttachmentsService(
@@ -236,6 +252,7 @@ def get_task_attachments_service(
         tasks_repository=tasks_repository,
         storage=storage,
         knowledge_events=knowledge_events,
+        unit_of_work=unit_of_work,
     )
 
 

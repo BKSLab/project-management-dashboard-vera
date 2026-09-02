@@ -9,15 +9,23 @@ from src.exceptions.documents import (
     DocumentsRepositoryError,
     DocumentsServiceError,
 )
+from src.exceptions.knowledge import KnowledgeEventsServiceError
 from src.exceptions.projects import ProjectNotFoundError, ProjectsRepositoryError
+from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.repositories.documents import DocumentsRepository
 from src.repositories.projects import ProjectsRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.schemas.documents import DocumentDetailSchema, DocumentSchema
 from src.services.knowledge_events import KnowledgeEvents
 
 logger = logging.getLogger(__name__)
 
-RepositoryErrors = (DocumentsRepositoryError, ProjectsRepositoryError)
+RepositoryErrors = (
+    DocumentsRepositoryError,
+    ProjectsRepositoryError,
+    KnowledgeEventsServiceError,
+    UnitOfWorkRepositoryError,
+)
 
 
 def slugify(title: str) -> str:
@@ -35,10 +43,12 @@ class DocumentsService:
         self,
         documents_repository: DocumentsRepository,
         projects_repository: ProjectsRepository,
+        unit_of_work: UnitOfWork,
         knowledge_events: KnowledgeEvents | None = None,
     ):
         self.documents_repository = documents_repository
         self.projects_repository = projects_repository
+        self.unit_of_work = unit_of_work
         self.knowledge_events = knowledge_events
 
     async def get_document_list(
@@ -154,6 +164,7 @@ class DocumentsService:
                     entity_type=KnowledgeEntityType.DOCUMENT,
                     entity_id=document.id,
                 )
+            await self.unit_of_work.commit()
             return DocumentDetailSchema.model_validate(document)
         except ProjectNotFoundError:
             raise
@@ -190,6 +201,7 @@ class DocumentsService:
                     entity_type=KnowledgeEntityType.DOCUMENT,
                     entity_id=updated.id,
                 )
+            await self.unit_of_work.commit()
             return DocumentDetailSchema.model_validate(updated)
         except DocumentNotFoundError:
             raise
@@ -225,6 +237,7 @@ class DocumentsService:
                     entity_type=KnowledgeEntityType.DOCUMENT,
                     entity_id=document_id,
                 )
+            await self.unit_of_work.commit()
         except DocumentNotFoundError:
             raise
         except RepositoryErrors as error:

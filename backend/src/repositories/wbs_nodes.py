@@ -87,7 +87,7 @@ class WbsNodesRepository:
         try:
             node = WbsNode(**data)
             self.db_session.add(node)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(node)
             return node
         except (SQLAlchemyError, Exception) as error:
@@ -111,7 +111,7 @@ class WbsNodesRepository:
         try:
             for field, value in data.items():
                 setattr(node, field, value)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(node)
             return node
         except (SQLAlchemyError, Exception) as error:
@@ -142,7 +142,7 @@ class WbsNodesRepository:
             )
             for node in result.scalars().all():
                 node.position = positions[node.id]
-            await self.db_session.commit()
+            await self.db_session.flush()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось обновить позиции узлов ИСР.", exc_info=True)
@@ -162,7 +162,7 @@ class WbsNodesRepository:
         """
         try:
             await self.db_session.delete(node)
-            await self.db_session.commit()
+            await self.db_session.flush()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось удалить узел ИСР id=%s.", node.id, exc_info=True)

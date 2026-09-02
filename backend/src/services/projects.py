@@ -1,9 +1,11 @@
 import logging
 from datetime import date, timedelta
 
+from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.project_members import ProjectRole
 from src.db.models.project_stages import ProjectStage
 from src.db.models.tasks import Task
+from src.exceptions.knowledge import KnowledgeEventsServiceError
 from src.exceptions.project_stages import ProjectStagesRepositoryError
 from src.exceptions.projects import (
     ProjectKeyAlreadyExistsRepositoryError,
@@ -14,16 +16,18 @@ from src.exceptions.projects import (
 )
 from src.exceptions.task_attachments import TaskAttachmentStorageError
 from src.exceptions.tasks import TasksRepositoryError
+from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.schemas.projects import ProjectSchema, ProjectStatsSchema, StageBreakdownSchema
 from src.services.knowledge_events import KnowledgeEvents
 from src.storage.task_attachments import TaskAttachmentStorage
 
 logger = logging.getLogger(__name__)
-PROJECT_SEMANTIC_FIELDS = frozenset({"key", "name", "description_md"})
+PROJECT_POINT_FIELDS = frozenset({"name", "description_md"})
 
 DUE_SOON_DAYS = 7
 
@@ -39,6 +43,8 @@ RepositoryErrors = (
     ProjectsRepositoryError,
     ProjectStagesRepositoryError,
     TasksRepositoryError,
+    KnowledgeEventsServiceError,
+    UnitOfWorkRepositoryError,
 )
 
 
@@ -51,6 +57,7 @@ class ProjectsService:
         members_repository: ProjectMembersRepository,
         stages_repository: ProjectStagesRepository,
         tasks_repository: TasksRepository,
+        unit_of_work: UnitOfWork,
         attachment_storage: TaskAttachmentStorage | None = None,
         knowledge_events: KnowledgeEvents | None = None,
     ):
@@ -58,6 +65,7 @@ class ProjectsService:
         self.members_repository = members_repository
         self.stages_repository = stages_repository
         self.tasks_repository = tasks_repository
+        self.unit_of_work = unit_of_work
         self.attachment_storage = attachment_storage
         self.knowledge_events = knowledge_events
 
@@ -146,6 +154,7 @@ class ProjectsService:
             )
             if self.knowledge_events is not None:
                 await self.knowledge_events.reindex_project(project.id)
+            await self.unit_of_work.commit()
             logger.info("✅ Проект %s создан со стадиями по умолчанию.", project.key)
             return ProjectSchema.model_validate(project)
         except ProjectKeyAlreadyExistsRepositoryError as error:
@@ -175,8 +184,16 @@ class ProjectsService:
             if project is None:
                 raise ProjectNotFoundError(project_id=project_id)
             updated = await self.projects_repository.update(project=project, data=data)
-            if self.knowledge_events is not None and PROJECT_SEMANTIC_FIELDS.intersection(data):
-                await self.knowledge_events.reindex_project(project_id)
+            if self.knowledge_events is not None:
+                if "key" in data:
+                    await self.knowledge_events.reindex_project(project_id)
+                elif PROJECT_POINT_FIELDS.intersection(data):
+                    await self.knowledge_events.upsert(
+                        project_id=project_id,
+                        entity_type=KnowledgeEntityType.PROJECT,
+                        entity_id=project_id,
+                    )
+            await self.unit_of_work.commit()
             return ProjectSchema.model_validate(updated)
         except ProjectNotFoundError:
             raise
@@ -209,6 +226,7 @@ class ProjectsService:
             await self.projects_repository.delete(project=project)
             if self.knowledge_events is not None:
                 await self.knowledge_events.delete_collection(project_id)
+            await self.unit_of_work.commit()
             await self._cleanup_task_files(task_ids=task_ids)
             logger.info("✅ Проект id=%s удалён вместе с %s задачами.", project_id, len(task_ids))
         except ProjectNotFoundError:

@@ -13,6 +13,7 @@ from src.exceptions.task_attachments import (
 from src.exceptions.tasks import TaskNotFoundError
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.services.task_attachments import TaskAttachmentsService
 from src.storage.task_attachments import TaskAttachmentStorage
 
@@ -31,6 +32,7 @@ def create_service() -> tuple[
         attachments_repository=attachments_repository,
         tasks_repository=tasks_repository,
         storage=storage,
+        unit_of_work=AsyncMock(spec=UnitOfWork),
     )
     return service, attachments_repository, tasks_repository, storage
 

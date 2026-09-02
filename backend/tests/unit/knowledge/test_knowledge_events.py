@@ -3,21 +3,22 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType
-from src.exceptions.knowledge import KnowledgeIndexJobsRepositoryError
+from src.exceptions.knowledge import KnowledgeEventsServiceError, KnowledgeIndexJobsRepositoryError
 from src.services.knowledge_events import KnowledgeEvents
 
 
 @pytest.mark.asyncio
-async def test_event_queue_failure_does_not_break_domain_operation() -> None:
+async def test_event_queue_failure_is_propagated() -> None:
     repository = AsyncMock()
     repository.enqueue.side_effect = KnowledgeIndexJobsRepositoryError("database unavailable")
     events = KnowledgeEvents(repository=repository)
 
-    await events.upsert(
-        project_id=7,
-        entity_type=KnowledgeEntityType.TASK,
-        entity_id=42,
-    )
+    with pytest.raises(KnowledgeEventsServiceError):
+        await events.upsert(
+            project_id=7,
+            entity_type=KnowledgeEntityType.TASK,
+            entity_id=42,
+        )
 
     repository.enqueue.assert_awaited_once()
 

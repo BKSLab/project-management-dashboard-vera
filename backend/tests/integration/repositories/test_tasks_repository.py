@@ -78,6 +78,54 @@ async def test_search_finds_task_by_number_and_text(
 
 
 @pytest.mark.asyncio
+async def test_ranked_search_returns_at_most_top_30(
+    db_session: AsyncSession,
+    stage: ProjectStage,
+) -> None:
+    repository = TasksRepository(db_session)
+    for number in range(1, 36):
+        await repository.save(data=task_data(stage, number, title=f"Поисковая задача {number}"))
+
+    tasks = await repository.search_ranked(
+        project_id=stage.project_id,
+        search="поисковая",
+        limit=30,
+    )
+
+    assert len(tasks) == 30
+    assert all("Поисковая" in task.title for task in tasks)
+
+
+@pytest.mark.asyncio
+async def test_project_statistics_are_aggregated_without_loading_tasks(
+    db_session: AsyncSession,
+    stage: ProjectStage,
+) -> None:
+    repository = TasksRepository(db_session)
+    await repository.save(
+        data=task_data(
+            stage,
+            1,
+            priority="HIGH",
+            assignee="Анна",
+            due_date=TODAY - timedelta(days=1),
+        )
+    )
+    await repository.save(data=task_data(stage, 2, priority="LOW", assignee=None))
+
+    statistics = await repository.get_project_statistics(
+        project_id=stage.project_id,
+        today=TODAY,
+    )
+
+    assert statistics.total == 2
+    assert statistics.overdue == 1
+    assert statistics.by_stage == {stage.id: 2}
+    assert statistics.by_priority == {"HIGH": 1, "LOW": 1}
+    assert statistics.by_assignee == {"Анна": 1, "не назначен": 1}
+
+
+@pytest.mark.asyncio
 async def test_portfolio_counters_split_done_and_overdue(
     db_session: AsyncSession,
     stage: ProjectStage,

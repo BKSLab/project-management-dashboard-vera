@@ -4,14 +4,17 @@ from src.db.models.knowledge_index_jobs import (
     KnowledgeEntityType,
     KnowledgeIndexOperation,
 )
-from src.exceptions.knowledge import KnowledgeIndexJobsRepositoryError
+from src.exceptions.knowledge import (
+    KnowledgeEventsServiceError,
+    KnowledgeIndexJobsRepositoryError,
+)
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 
 logger = logging.getLogger(__name__)
 
 
 class KnowledgeEvents:
-    """Best-effort постановка доменных изменений в очередь индексации."""
+    """Атомарная постановка доменных изменений в outbox индексации."""
 
     def __init__(self, repository: KnowledgeIndexJobsRepository, enabled: bool = True) -> None:
         self.repository = repository
@@ -61,6 +64,34 @@ class KnowledgeEvents:
             operation=KnowledgeIndexOperation.DELETE_COLLECTION,
         )
 
+    async def upsert_many(
+        self,
+        *,
+        project_id: int,
+        entity_type: KnowledgeEntityType,
+        entity_ids: list[int],
+    ) -> None:
+        """Добавляет набор UPSERT-заданий в текущую транзакцию."""
+        if not self.enabled or not entity_ids:
+            return
+        try:
+            await self.repository.enqueue_many(
+                project_id=project_id,
+                entity_type=entity_type,
+                entity_ids=entity_ids,
+                operation=KnowledgeIndexOperation.UPSERT,
+            )
+        except KnowledgeIndexJobsRepositoryError as error:
+            logger.error(
+                "❌ Не удалось поставить пакет изменений в очередь знаний: "
+                "project=%s, entity=%s, count=%s.",
+                project_id,
+                entity_type.value,
+                len(entity_ids),
+                exc_info=True,
+            )
+            raise KnowledgeEventsServiceError(str(error)) from error
+
     async def _enqueue(
         self,
         *,
@@ -78,11 +109,9 @@ class KnowledgeEvents:
                 entity_id=entity_id,
                 operation=operation,
             )
-        except KnowledgeIndexJobsRepositoryError:
-            # Пользовательская операция уже сохранена в PostgreSQL. Недоступность
-            # производного AI-контура не должна откатывать основной CRUD.
-            logger.warning(
-                "⚠️ Изменение сохранено, но не поставлено в очередь знаний: project=%s, "
+        except KnowledgeIndexJobsRepositoryError as error:
+            logger.error(
+                "❌ Не удалось поставить изменение в очередь знаний: project=%s, "
                 "entity=%s:%s, operation=%s.",
                 project_id,
                 entity_type.value,
@@ -90,3 +119,4 @@ class KnowledgeEvents:
                 operation.value,
                 exc_info=True,
             )
+            raise KnowledgeEventsServiceError(str(error)) from error

@@ -1,14 +1,16 @@
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
+from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.task_activity import TaskActivityEventType
 from src.db.models.tasks import TaskPriority
 from src.exceptions.tasks import TaskForeignProjectError, TaskNotFoundError
 from src.exceptions.wbs_nodes import (
     WbsNodeCycleError,
+    WbsNodeForeignProjectError,
     WbsNodeNotFoundError,
     WbsNodesRepositoryError,
     WbsNodesServiceError,
@@ -17,7 +19,9 @@ from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.wbs_nodes import WbsNodesRepository
+from src.services.knowledge_events import KnowledgeEvents
 from src.services.wbs_nodes import POSITION_STEP, WbsNodesService, _next_position
 
 PROJECT = SimpleNamespace(id=1, key="VERA")
@@ -69,6 +73,8 @@ def build_service(
     tasks_repository: AsyncMock | None = None,
     activity_repository: AsyncMock | None = None,
     stages_repository: AsyncMock | None = None,
+    knowledge_events: AsyncMock | None = None,
+    unit_of_work: AsyncMock | None = None,
 ) -> WbsNodesService:
     """Собирает сервис структуры ИСР с подменёнными репозиториями."""
     projects_repository = AsyncMock(spec=ProjectsRepository)
@@ -85,6 +91,8 @@ def build_service(
         stages_repository=stages,
         tasks_repository=tasks_repository or AsyncMock(spec=TasksRepository),
         activity_repository=activity_repository or AsyncMock(spec=TaskActivityRepository),
+        unit_of_work=unit_of_work or AsyncMock(spec=UnitOfWork),
+        knowledge_events=knowledge_events,
     )
 
 
@@ -139,6 +147,21 @@ async def test_create_first_node_of_level_uses_base_position() -> None:
     await build_service(wbs_repository).create_node(project_id=1, title="API", parent_id=1)
 
     assert wbs_repository.save.await_args.kwargs["data"]["position"] == POSITION_STEP
+
+
+@pytest.mark.asyncio
+async def test_create_node_does_not_enqueue_index_job() -> None:
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = []
+    wbs_repository.save.return_value = node(1)
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+
+    await build_service(
+        wbs_repository,
+        knowledge_events=knowledge_events,
+    ).create_node(project_id=1, title="Backend", parent_id=None)
+
+    assert knowledge_events.method_calls == []
 
 
 @pytest.mark.asyncio
@@ -213,6 +236,99 @@ async def test_move_node_before_sibling_lands_between_neighbours() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reorder_siblings_does_not_enqueue_index_job() -> None:
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [
+        node(1, position=1000.0),
+        node(2, position=2000.0),
+    ]
+    wbs_repository.update.return_value = node(2, position=500.0)
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+
+    await build_service(
+        wbs_repository,
+        knowledge_events=knowledge_events,
+    ).move_node(project_id=1, node_id=2, parent_id=None, before_id=1)
+
+    knowledge_events.upsert_many.assert_not_awaited()
+    knowledge_events.reindex_project.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rename_node_enqueues_tasks_from_subtree_before_commit() -> None:
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    root = node(1)
+    wbs_repository.get_by_id.return_value = root
+    wbs_repository.get_by_project.return_value = [root, node(2, parent_id=1), node(3)]
+    wbs_repository.update.return_value = node(1, title="Platform")
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_ids_by_wbs_nodes.return_value = [11, 12]
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    unit_of_work = AsyncMock(spec=UnitOfWork)
+    manager = MagicMock()
+    manager.attach_mock(knowledge_events.upsert_many, "enqueue_many")
+    manager.attach_mock(unit_of_work.commit, "commit")
+
+    await build_service(
+        wbs_repository,
+        tasks_repository,
+        knowledge_events=knowledge_events,
+        unit_of_work=unit_of_work,
+    ).update_node(project_id=1, node_id=1, title="Platform")
+
+    tasks_repository.get_ids_by_wbs_nodes.assert_awaited_once_with({1, 2})
+    knowledge_events.upsert_many.assert_awaited_once_with(
+        project_id=1,
+        entity_type=KnowledgeEntityType.TASK,
+        entity_ids=[11, 12],
+    )
+    assert manager.mock_calls[-2:] == [
+        call.enqueue_many(**knowledge_events.upsert_many.await_args.kwargs),
+        call.commit(),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rename_node_rejects_node_from_another_project() -> None:
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_id.return_value = node(1, project_id=2)
+
+    with pytest.raises(WbsNodeForeignProjectError):
+        await build_service(wbs_repository).update_node(
+            project_id=1,
+            node_id=1,
+            title="Platform",
+        )
+
+    wbs_repository.get_by_project.assert_not_awaited()
+    wbs_repository.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reparent_node_enqueues_only_tasks_from_subtree() -> None:
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [
+        node(1),
+        node(2, parent_id=1),
+        node(3),
+    ]
+    wbs_repository.update.return_value = node(1, parent_id=3)
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_ids_by_wbs_nodes.return_value = [20, 21]
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+
+    await build_service(
+        wbs_repository,
+        tasks_repository,
+        knowledge_events=knowledge_events,
+    ).move_node(project_id=1, node_id=1, parent_id=3, before_id=None)
+
+    tasks_repository.get_ids_by_wbs_nodes.assert_awaited_once_with({1, 2})
+    assert knowledge_events.upsert_many.await_args.kwargs["entity_ids"] == [20, 21]
+    knowledge_events.reindex_project.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_move_node_to_level_end_when_before_is_absent() -> None:
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [
@@ -279,6 +395,29 @@ async def test_delete_node_releases_tasks_without_deleting_them() -> None:
     assert result.released_tasks == 8
     tasks_repository.delete.assert_not_awaited()
     wbs_repository.delete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_node_enqueues_released_tasks_from_deleted_subtree() -> None:
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [node(1), node(2, parent_id=1), node(3)]
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_ids_by_wbs_nodes.return_value = [31, 32]
+    tasks_repository.clear_wbs_node.return_value = 2
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+
+    await build_service(
+        wbs_repository,
+        tasks_repository,
+        knowledge_events=knowledge_events,
+    ).delete_node(project_id=1, node_id=1)
+
+    knowledge_events.upsert_many.assert_awaited_once_with(
+        project_id=1,
+        entity_type=KnowledgeEntityType.TASK,
+        entity_ids=[31, 32],
+    )
+    knowledge_events.reindex_project.assert_not_awaited()
 
 
 @pytest.mark.asyncio

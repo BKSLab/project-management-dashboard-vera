@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 from src.db.models.knowledge_index_jobs import (
     KnowledgeEntityType,
@@ -29,6 +30,17 @@ from src.repositories.wbs_nodes import WbsNodesRepository
 from src.storage.task_attachments import TaskAttachmentStorage
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedIndexAction:
+    """Подготовленное по PostgreSQL действие без открытой DB-сессии."""
+
+    project_id: int
+    entity_type: KnowledgeEntityType
+    operation: KnowledgeIndexOperation
+    entity_id: int | None
+    documents: tuple[KnowledgeDocument, ...] = ()
 
 
 class KnowledgeIndexService:
@@ -61,29 +73,102 @@ class KnowledgeIndexService:
         self.chunk_overlap_chars = chunk_overlap_chars
         self.runtime = runtime or get_knowledge_runtime()
 
-    async def process(self, job: KnowledgeIndexJob) -> None:
-        """Выполняет одно идемпотентное задание очереди."""
+    async def process(self, job: KnowledgeIndexJob) -> int:
+        """Готовит и выполняет одно идемпотентное задание очереди."""
+        return await self.execute_prepared(await self.prepare(job))
+
+    async def prepare(self, job: KnowledgeIndexJob) -> PreparedIndexAction:
+        """Читает PostgreSQL и готовит действие до внешних вызовов."""
         if job.operation is KnowledgeIndexOperation.DELETE_COLLECTION:
-            await self.runtime.qdrant_client.delete_collection(job.project_id)
-            return
+            return PreparedIndexAction(
+                project_id=job.project_id,
+                entity_type=job.entity_type,
+                operation=job.operation,
+                entity_id=None,
+            )
         if job.operation is KnowledgeIndexOperation.REINDEX_PROJECT:
-            await self.reindex_project(job.project_id)
-            return
+            return PreparedIndexAction(
+                project_id=job.project_id,
+                entity_type=job.entity_type,
+                operation=job.operation,
+                entity_id=None,
+                documents=tuple(await self._reindex_documents(job.project_id)),
+            )
         if job.entity_id is None:
             raise ValueError("Для операции над сущностью отсутствует entity_id.")
 
         entity_id = int(job.entity_id)
-        if job.operation is KnowledgeIndexOperation.DELETE:
-            await self._delete(job.project_id, job.entity_type, entity_id)
-            return
-        await self._upsert(job.project_id, job.entity_type, entity_id)
+        documents: tuple[KnowledgeDocument, ...] = ()
+        if job.operation is KnowledgeIndexOperation.UPSERT:
+            builders: dict[
+                KnowledgeEntityType, Callable[[int, int], Awaitable[list[KnowledgeDocument]]]
+            ] = {
+                KnowledgeEntityType.PROJECT: self._project_documents,
+                KnowledgeEntityType.TASK: self._task_documents,
+                KnowledgeEntityType.DOCUMENT: self._wiki_documents,
+                KnowledgeEntityType.COMMENT: self._comment_documents,
+                KnowledgeEntityType.ATTACHMENT: self._attachment_documents,
+            }
+            documents = tuple(await builders[job.entity_type](job.project_id, entity_id))
+        return PreparedIndexAction(
+            project_id=job.project_id,
+            entity_type=job.entity_type,
+            operation=job.operation,
+            entity_id=entity_id,
+            documents=documents,
+        )
+
+    async def execute_prepared(self, action: PreparedIndexAction) -> int:
+        """Выполняет embeddings/Qdrant без обращения к PostgreSQL."""
+        if action.operation is KnowledgeIndexOperation.DELETE_COLLECTION:
+            await self.runtime.qdrant_client.delete_collection(action.project_id)
+            return 0
+        if action.operation is KnowledgeIndexOperation.REINDEX_PROJECT:
+            if not action.documents:
+                await self.runtime.qdrant_client.delete_collection(action.project_id)
+                return 0
+            documents = list(action.documents)
+            vectors = await self._embed(documents)
+            await self.runtime.qdrant_client.recreate_collection(action.project_id)
+            await self._write_batches(action.project_id, documents, vectors)
+            logger.info(
+                "✅ Индекс проекта id=%s пересобран: %s chunks.",
+                action.project_id,
+                len(documents),
+            )
+            return len(documents)
+        if action.entity_id is None:
+            raise ValueError("Для операции над сущностью отсутствует entity_id.")
+        if action.operation is KnowledgeIndexOperation.DELETE:
+            await self._delete(action.project_id, action.entity_type, action.entity_id)
+            return 0
+
+        documents = list(action.documents)
+        if not documents:
+            await self._delete(action.project_id, action.entity_type, action.entity_id)
+            return 0
+        vectors = await self._embed(documents)
+        if action.entity_type is not KnowledgeEntityType.TASK:
+            await self._delete(action.project_id, action.entity_type, action.entity_id)
+        await self._write_batches(action.project_id, documents, vectors)
+        return len(documents)
 
     async def reindex_project(self, project_id: int) -> int:
         """Полностью пересобирает collection проекта и возвращает число chunks."""
+        action = PreparedIndexAction(
+            project_id=project_id,
+            entity_type=KnowledgeEntityType.PROJECT,
+            operation=KnowledgeIndexOperation.REINDEX_PROJECT,
+            entity_id=None,
+            documents=tuple(await self._reindex_documents(project_id)),
+        )
+        return await self.execute_prepared(action)
+
+    async def _reindex_documents(self, project_id: int) -> list[KnowledgeDocument]:
+        """Загружает и строит все документы проекта без сетевых вызовов."""
         project = await self.projects_repository.get_by_id(project_id)
         if project is None:
-            await self.runtime.qdrant_client.delete_collection(project_id)
-            return 0
+            return []
 
         tasks = await self.tasks_repository.get_by_project(project_id)
         task_ids = {task.id for task in tasks}
@@ -114,36 +199,83 @@ class KnowledgeIndexService:
             if task is not None:
                 chunks.extend(await self._attachment_chunks(attachment, task, project))
 
-        # Сначала получаем и валидируем все embeddings. Если внешний API упал,
-        # рабочая collection остаётся нетронутой.
-        vectors = await self._embed(chunks)
-        await self.runtime.qdrant_client.recreate_collection(project_id)
-        await self._write_batches(project_id, chunks, vectors)
-        logger.info("✅ Индекс проекта id=%s пересобран: %s chunks.", project_id, len(chunks))
-        return len(chunks)
+        return chunks
 
-    async def _upsert(
+    async def upsert_tasks(self, project_id: int, entity_ids: list[int]) -> dict[int, int]:
+        """Индексирует несколько задач одним чтением данных и одним embedding-батчем."""
+        actions = await self.prepare_task_upserts(project_id, entity_ids)
+        return await self.execute_task_upserts(actions)
+
+    async def prepare_task_upserts(
         self,
         project_id: int,
-        entity_type: KnowledgeEntityType,
-        entity_id: int,
-    ) -> None:
-        builders: dict[
-            KnowledgeEntityType, Callable[[int, int], Awaitable[list[KnowledgeDocument]]]
-        ] = {
-            KnowledgeEntityType.PROJECT: self._project_documents,
-            KnowledgeEntityType.TASK: self._task_documents,
-            KnowledgeEntityType.DOCUMENT: self._wiki_documents,
-            KnowledgeEntityType.COMMENT: self._comment_documents,
-            KnowledgeEntityType.ATTACHMENT: self._attachment_documents,
+        entity_ids: list[int],
+    ) -> list[PreparedIndexAction]:
+        """Одним набором запросов готовит TASK UPSERT без сетевых вызовов."""
+        unique_ids = list(dict.fromkeys(entity_ids))
+        if not unique_ids:
+            return []
+        project = await self.projects_repository.get_by_id(project_id)
+        tasks = await self.tasks_repository.get_by_ids(set(unique_ids))
+        nodes = await self.wbs_nodes_repository.get_by_project(project_id)
+        paths = build_wbs_paths(nodes)
+        tasks_by_id = {
+            task.id: task for task in tasks if project is not None and task.project_id == project_id
         }
-        chunks = await builders[entity_type](project_id, entity_id)
-        if not chunks:
-            await self._delete(project_id, entity_type, entity_id)
-            return
-        vectors = await self._embed(chunks)
-        await self._delete(project_id, entity_type, entity_id)
-        await self._write_batches(project_id, chunks, vectors)
+        return [
+            PreparedIndexAction(
+                project_id=project_id,
+                entity_type=KnowledgeEntityType.TASK,
+                operation=KnowledgeIndexOperation.UPSERT,
+                entity_id=entity_id,
+                documents=(
+                    build_task_document(
+                        tasks_by_id[entity_id],
+                        project=project,
+                        wbs_path=(
+                            paths.get(tasks_by_id[entity_id].wbs_node_id)
+                            if tasks_by_id[entity_id].wbs_node_id
+                            else None
+                        ),
+                    ),
+                )
+                if entity_id in tasks_by_id
+                else (),
+            )
+            for entity_id in unique_ids
+        ]
+
+    async def execute_task_upserts(
+        self,
+        actions: list[PreparedIndexAction],
+    ) -> dict[int, int]:
+        """Выполняет подготовленную TASK-пачку одним embedding-вызовом."""
+        if not actions:
+            return {}
+        project_id = actions[0].project_id
+        if any(
+            action.project_id != project_id
+            or action.entity_type is not KnowledgeEntityType.TASK
+            or action.operation is not KnowledgeIndexOperation.UPSERT
+            or action.entity_id is None
+            for action in actions
+        ):
+            raise ValueError("TASK-пачка содержит несовместимые действия.")
+        for action in actions:
+            if not action.documents:
+                await self.runtime.qdrant_client.delete_task_context(
+                    project_id=project_id,
+                    task_id=action.entity_id,
+                )
+        documents = [document for action in actions for document in action.documents]
+        if documents:
+            vectors = await self._embed(documents)
+            await self._write_batches(project_id, documents, vectors)
+        return {
+            action.entity_id: len(action.documents)
+            for action in actions
+            if action.entity_id is not None
+        }
 
     async def _delete(
         self,

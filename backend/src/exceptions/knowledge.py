@@ -15,6 +15,12 @@ class KnowledgeServiceError(ServiceError):
     detail = "Не удалось выполнить операцию с базой знаний проекта."
 
 
+class KnowledgeEventsServiceError(KnowledgeServiceError):
+    """Ошибка записи доменного события в outbox."""
+
+    detail = "Не удалось поставить изменение в очередь базы знаний."
+
+
 class KnowledgeProviderError(KnowledgeServiceError):
     """Ошибка Qdrant, embedding API или LLM API."""
 

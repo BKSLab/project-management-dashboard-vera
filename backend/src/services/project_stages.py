@@ -12,9 +12,11 @@ from src.exceptions.project_stages import (
 )
 from src.exceptions.projects import ProjectNotFoundError, ProjectsRepositoryError
 from src.exceptions.tasks import TasksRepositoryError
+from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.schemas.project_stages import StageSchema
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,7 @@ RepositoryErrors = (
     ProjectStagesRepositoryError,
     ProjectsRepositoryError,
     TasksRepositoryError,
+    UnitOfWorkRepositoryError,
 )
 
 
@@ -34,10 +37,12 @@ class ProjectStagesService:
         stages_repository: ProjectStagesRepository,
         projects_repository: ProjectsRepository,
         tasks_repository: TasksRepository,
+        unit_of_work: UnitOfWork,
     ):
         self.stages_repository = stages_repository
         self.projects_repository = projects_repository
         self.tasks_repository = tasks_repository
+        self.unit_of_work = unit_of_work
 
     async def get_stage_list(self, project_id: int) -> list[StageSchema]:
         """Возвращает стадии проекта в порядке отображения.
@@ -83,6 +88,7 @@ class ProjectStagesService:
             stage = await self.stages_repository.save(
                 data={**data, "project_id": project_id, "order_index": order_index + 1}
             )
+            await self.unit_of_work.commit()
             return StageSchema.model_validate(stage)
         except ProjectNotFoundError:
             raise
@@ -113,6 +119,7 @@ class ProjectStagesService:
             if stage is None:
                 raise ProjectStageNotFoundError(stage_id=stage_id)
             updated = await self.stages_repository.update(stage=stage, data=data)
+            await self.unit_of_work.commit()
             return StageSchema.model_validate(updated)
         except ProjectStageNotFoundError:
             raise
@@ -148,6 +155,7 @@ class ProjectStagesService:
             if len(stages) <= 1:
                 raise ProjectLastStageDeleteError(stage_id=stage_id)
             await self.stages_repository.delete(stage=stage)
+            await self.unit_of_work.commit()
         except (
             ProjectStageNotFoundError,
             ProjectStageHasTasksError,

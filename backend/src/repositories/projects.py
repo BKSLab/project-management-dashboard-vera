@@ -126,7 +126,7 @@ class ProjectsRepository:
         try:
             project = Project(**data)
             self.db_session.add(project)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(project)
             return project
         except IntegrityError as error:
@@ -161,7 +161,7 @@ class ProjectsRepository:
         try:
             for field, value in data.items():
                 setattr(project, field, value)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(project)
             return project
         except IntegrityError as error:
@@ -193,7 +193,7 @@ class ProjectsRepository:
         """
         try:
             await self.db_session.delete(project)
-            await self.db_session.commit()
+            await self.db_session.flush()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось удалить проект id=%s.", project.id, exc_info=True)

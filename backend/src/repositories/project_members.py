@@ -109,7 +109,7 @@ class ProjectMembersRepository:
         try:
             member = ProjectMember(**data)
             self.db_session.add(member)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(member)
             return member
         except (SQLAlchemyError, Exception) as error:

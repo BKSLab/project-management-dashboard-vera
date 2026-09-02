@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "examples": [
+    {
+      "id": "fixture-1",
+      "split": "test",
+      "kind": "semantic",
+      "approval_status": "TEST_FIXTURE",
+      "question": "Синтетический вопрос один",
+      "gold_source_ids": ["task:1"]
+    },
+    {
+      "id": "fixture-2",
+      "split": "test",
+      "kind": "hybrid",
+      "approval_status": "TEST_FIXTURE",
+      "question": "Синтетический вопрос два",
+      "gold_source_ids": ["document:2", "comment:3"]
+    }
+  ]
+}

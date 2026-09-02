@@ -160,7 +160,7 @@ class TaskAttachmentsRepository:
                 size=size,
             )
             self.db_session.add(attachment)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(attachment)
             return attachment
         except (SQLAlchemyError, Exception) as error:
@@ -184,7 +184,7 @@ class TaskAttachmentsRepository:
         """
         try:
             await self.db_session.delete(attachment)
-            await self.db_session.commit()
+            await self.db_session.flush()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось удалить файл задачи id=%s.", attachment.id, exc_info=True)

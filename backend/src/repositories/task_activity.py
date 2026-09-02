@@ -94,7 +94,7 @@ class TaskActivityRepository:
                 to_value=to_value,
             )
             self.db_session.add(activity)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(activity)
             return activity
         except (SQLAlchemyError, Exception) as error:

@@ -2,6 +2,7 @@ import logging
 
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.task_activity import TaskActivityEventType
+from src.exceptions.knowledge import KnowledgeEventsServiceError
 from src.exceptions.task_activity import TaskActivityRepositoryError
 from src.exceptions.task_comments import (
     TaskCommentNotFoundError,
@@ -9,9 +10,11 @@ from src.exceptions.task_comments import (
     TaskCommentsServiceError,
 )
 from src.exceptions.tasks import TaskNotFoundError, TasksRepositoryError
+from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.schemas.task_comments import CommentSchema
 from src.services.knowledge_events import KnowledgeEvents
 
@@ -26,11 +29,13 @@ class TaskCommentsService:
         comments_repository: TaskCommentsRepository,
         tasks_repository: TasksRepository,
         activity_repository: TaskActivityRepository,
+        unit_of_work: UnitOfWork,
         knowledge_events: KnowledgeEvents | None = None,
     ):
         self.comments_repository = comments_repository
         self.tasks_repository = tasks_repository
         self.activity_repository = activity_repository
+        self.unit_of_work = unit_of_work
         self.knowledge_events = knowledge_events
 
     async def get_comments(self, task_id: int) -> list[CommentSchema]:
@@ -99,6 +104,7 @@ class TaskCommentsService:
                     entity_type=KnowledgeEntityType.COMMENT,
                     entity_id=comment.id,
                 )
+            await self.unit_of_work.commit()
             return CommentSchema.model_validate(comment)
         except TaskNotFoundError:
             raise
@@ -106,6 +112,8 @@ class TaskCommentsService:
             TaskCommentsRepositoryError,
             TasksRepositoryError,
             TaskActivityRepositoryError,
+            KnowledgeEventsServiceError,
+            UnitOfWorkRepositoryError,
         ) as error:
             logger.error("❌ Ошибка добавления комментария задачи id=%s.", task_id, exc_info=True)
             raise TaskCommentsServiceError(str(error)) from error
@@ -135,8 +143,14 @@ class TaskCommentsService:
                     entity_type=KnowledgeEntityType.COMMENT,
                     entity_id=comment_id,
                 )
+            await self.unit_of_work.commit()
         except TaskCommentNotFoundError:
             raise
-        except (TaskCommentsRepositoryError, TasksRepositoryError) as error:
+        except (
+            TaskCommentsRepositoryError,
+            TasksRepositoryError,
+            KnowledgeEventsServiceError,
+            UnitOfWorkRepositoryError,
+        ) as error:
             logger.error("❌ Ошибка удаления комментария id=%s.", comment_id, exc_info=True)
             raise TaskCommentsServiceError(str(error)) from error

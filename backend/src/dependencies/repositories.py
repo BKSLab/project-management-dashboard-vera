@@ -13,6 +13,7 @@ from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.users import UsersRepository
 from src.repositories.wbs_nodes import WbsNodesRepository
 
@@ -77,6 +78,11 @@ def get_task_attachments_repository(session: DbSessionDep) -> TaskAttachmentsRep
     return TaskAttachmentsRepository(session)
 
 
+def get_unit_of_work(session: DbSessionDep) -> UnitOfWork:
+    """Создаёт координатор общей транзакции в рамках сессии запроса."""
+    return UnitOfWork(session)
+
+
 UsersRepositoryDep = Annotated[UsersRepository, Depends(get_users_repository)]
 ProjectMembersRepositoryDep = Annotated[
     ProjectMembersRepository,
@@ -110,3 +116,4 @@ TaskAttachmentsRepositoryDep = Annotated[
     TaskAttachmentsRepository,
     Depends(get_task_attachments_repository),
 ]
+UnitOfWorkDep = Annotated[UnitOfWork, Depends(get_unit_of_work)]

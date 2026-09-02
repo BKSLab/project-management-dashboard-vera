@@ -212,7 +212,7 @@ class TaskCommentsRepository:
         try:
             comment = TaskComment(task_id=task_id, author_name=author_name, body_md=body_md)
             self.db_session.add(comment)
-            await self.db_session.commit()
+            await self.db_session.flush()
             await self.db_session.refresh(comment)
             return comment
         except (SQLAlchemyError, Exception) as error:
@@ -238,7 +238,7 @@ class TaskCommentsRepository:
         """
         try:
             await self.db_session.delete(comment)
-            await self.db_session.commit()
+            await self.db_session.flush()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось удалить комментарий id=%s.", comment.id, exc_info=True)

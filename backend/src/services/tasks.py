@@ -3,6 +3,7 @@ import logging
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.task_activity import TaskActivityEventType
 from src.db.models.tasks import Task
+from src.exceptions.knowledge import KnowledgeEventsServiceError
 from src.exceptions.project_stages import (
     ProjectStageForeignProjectError,
     ProjectStageNotFoundError,
@@ -19,6 +20,7 @@ from src.exceptions.tasks import (
     TasksRepositoryError,
     TasksServiceError,
 )
+from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.exceptions.wbs_nodes import (
     WbsNodeForeignProjectError,
     WbsNodeNotFoundError,
@@ -29,6 +31,7 @@ from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.wbs_nodes import WbsNodesRepository
 from src.schemas.tasks import TaskSchema
 from src.services.knowledge_events import KnowledgeEvents
@@ -47,6 +50,8 @@ RepositoryErrors = (
     TaskActivityRepositoryError,
     TaskCommentsRepositoryError,
     WbsNodesRepositoryError,
+    KnowledgeEventsServiceError,
+    UnitOfWorkRepositoryError,
 )
 
 
@@ -61,6 +66,7 @@ class TasksService:
         comments_repository: TaskCommentsRepository,
         activity_repository: TaskActivityRepository,
         wbs_nodes_repository: WbsNodesRepository,
+        unit_of_work: UnitOfWork,
         attachment_storage: TaskAttachmentStorage | None = None,
         knowledge_events: KnowledgeEvents | None = None,
     ):
@@ -70,6 +76,7 @@ class TasksService:
         self.comments_repository = comments_repository
         self.activity_repository = activity_repository
         self.wbs_nodes_repository = wbs_nodes_repository
+        self.unit_of_work = unit_of_work
         self.attachment_storage = attachment_storage
         self.knowledge_events = knowledge_events
 
@@ -208,6 +215,7 @@ class TasksService:
                     entity_type=KnowledgeEntityType.TASK,
                     entity_id=task.id,
                 )
+            await self.unit_of_work.commit()
             logger.info("✅ Задача %s-%s создана.", project.key, task.number)
             return to_task_schema(task=task, project_key=project.key)
         except (
@@ -248,6 +256,7 @@ class TasksService:
                     entity_type=KnowledgeEntityType.TASK,
                     entity_id=updated.id,
                 )
+            await self.unit_of_work.commit()
             return to_task_schema(task=updated, project_key=project.key)
         except (TaskNotFoundError, ProjectNotFoundError):
             raise
@@ -309,6 +318,7 @@ class TasksService:
                 task=task,
                 data={"stage_id": stage_id, "position": target_position},
             )
+            await self.unit_of_work.commit()
             return to_task_schema(task=updated, project_key=project.key)
         except (
             TaskNotFoundError,
@@ -344,6 +354,7 @@ class TasksService:
                     entity_type=KnowledgeEntityType.TASK,
                     entity_id=task_id,
                 )
+            await self.unit_of_work.commit()
             await self._cleanup_deleted_task_files(task_id=task_id)
         except TaskNotFoundError:
             raise

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.project_members import ProjectRole
 from src.exceptions.projects import (
     ProjectKeyAlreadyExistsRepositoryError,
@@ -16,6 +17,8 @@ from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
+from src.services.knowledge_events import KnowledgeEvents
 from src.services.projects import DEFAULT_STAGES, ProjectsService, build_project_stats
 
 TODAY = date(2026, 9, 1)
@@ -72,6 +75,8 @@ def build_service(
     stages_repository: AsyncMock | None = None,
     tasks_repository: AsyncMock | None = None,
     members_repository: AsyncMock | None = None,
+    knowledge_events: AsyncMock | None = None,
+    unit_of_work: AsyncMock | None = None,
 ) -> ProjectsService:
     """Собирает сервис проектов с подменёнными репозиториями."""
     members = members_repository or AsyncMock(spec=ProjectMembersRepository)
@@ -82,6 +87,8 @@ def build_service(
         members_repository=members,
         stages_repository=stages_repository or AsyncMock(spec=ProjectStagesRepository),
         tasks_repository=tasks_repository or AsyncMock(spec=TasksRepository),
+        unit_of_work=unit_of_work or AsyncMock(spec=UnitOfWork),
+        knowledge_events=knowledge_events,
     )
 
 
@@ -141,6 +148,43 @@ async def test_get_project_when_missing_raises_not_found() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [("name", "Новое имя"), ("description_md", "Описание")])
+async def test_update_project_point_fields_enqueues_project_upsert(field: str, value: str) -> None:
+    projects_repository = AsyncMock(spec=ProjectsRepository)
+    projects_repository.get_by_id.return_value = make_project()
+    projects_repository.update.return_value = make_project()
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+
+    await build_service(
+        projects_repository=projects_repository,
+        knowledge_events=knowledge_events,
+    ).update_project(project_id=7, data={field: value})
+
+    knowledge_events.upsert.assert_awaited_once_with(
+        project_id=7,
+        entity_type=KnowledgeEntityType.PROJECT,
+        entity_id=7,
+    )
+    knowledge_events.reindex_project.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_project_key_enqueues_full_reindex() -> None:
+    projects_repository = AsyncMock(spec=ProjectsRepository)
+    projects_repository.get_by_id.return_value = make_project()
+    projects_repository.update.return_value = make_project(key="NEW")
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+
+    await build_service(
+        projects_repository=projects_repository,
+        knowledge_events=knowledge_events,
+    ).update_project(project_id=7, data={"key": "NEW", "name": "Новое имя"})
+
+    knowledge_events.reindex_project.assert_awaited_once_with(7)
+    knowledge_events.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_delete_project_removes_attachment_directories() -> None:
     projects_repository = AsyncMock(spec=ProjectsRepository)
     projects_repository.get_by_id.return_value = SimpleNamespace(id=1)
@@ -153,6 +197,7 @@ async def test_delete_project_removes_attachment_directories() -> None:
         stages_repository=AsyncMock(spec=ProjectStagesRepository),
         tasks_repository=tasks_repository,
         attachment_storage=storage,
+        unit_of_work=AsyncMock(spec=UnitOfWork),
     )
 
     await service.delete_project(project_id=1)

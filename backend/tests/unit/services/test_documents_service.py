@@ -14,6 +14,7 @@ from src.exceptions.documents import (
 from src.exceptions.projects import ProjectNotFoundError
 from src.repositories.documents import DocumentsRepository
 from src.repositories.projects import ProjectsRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.services.documents import DocumentsService
 
 
@@ -45,6 +46,7 @@ def build_service(
     return DocumentsService(
         documents_repository=documents_repository,
         projects_repository=projects,
+        unit_of_work=AsyncMock(spec=UnitOfWork),
     )
 
 
