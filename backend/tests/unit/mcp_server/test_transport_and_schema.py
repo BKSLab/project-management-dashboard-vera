@@ -16,13 +16,37 @@ READ_TOOLS = {
     "search_tasks",
     "search_project_knowledge",
 }
+WRITE_TOOLS = {
+    "create_task",
+    "update_task",
+    "move_task",
+    "delete_task",
+    "add_comment",
+}
 
 
-async def test_all_read_tools_are_registered() -> None:
+async def test_all_planned_tools_are_registered() -> None:
     """Объявлен ровно тот набор инструментов, который описан в плане."""
     tools = await mcp_server.list_tools()
 
-    assert {tool.name for tool in tools} == READ_TOOLS
+    assert {tool.name for tool in tools} == READ_TOOLS | WRITE_TOOLS
+
+
+async def test_delete_tool_requires_explicit_confirmation() -> None:
+    """У необратимого удаления есть отдельное поле подтверждения."""
+    tools = {tool.name: tool for tool in await mcp_server.list_tools()}
+    properties = tools["delete_task"].input_schema["properties"]
+
+    assert "confirm" in properties
+    assert properties["confirm"].get("default") is False
+
+
+async def test_write_tools_announce_required_scope() -> None:
+    """Описание изменяющего инструмента предупреждает о праве записи."""
+    tools = {tool.name: tool for tool in await mcp_server.list_tools()}
+
+    for name in WRITE_TOOLS:
+        assert "право" in tools[name].description or "записи" in tools[name].description
 
 
 async def test_every_tool_has_russian_description() -> None:

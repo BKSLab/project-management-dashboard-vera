@@ -421,3 +421,27 @@ export const PROJECT_COLORS = [
     "#db61a2",
     "#7d8793",
 ];
+
+export type ApiTokenScope = "READ" | "WRITE";
+
+export interface ApiToken {
+    id: number;
+    name: string;
+    prefix: string;
+    scope: ApiTokenScope;
+    created_at: string;
+    expires_at: string | null;
+    revoked_at: string | null;
+    last_used_at: string | null;
+}
+
+export interface ApiTokenCreatePayload {
+    name: string;
+    scope: ApiTokenScope;
+    ttl_days: number | null;
+}
+
+export interface ApiTokenCreated {
+    token: ApiToken;
+    secret: string;
+}

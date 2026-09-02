@@ -1,6 +1,13 @@
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { FolderKanban, LayoutDashboard, PanelLeftClose, PanelLeftOpen, Plus } from "lucide-react";
+import {
+    FolderKanban,
+    LayoutDashboard,
+    PanelLeftClose,
+    PanelLeftOpen,
+    Plug,
+    Plus,
+} from "lucide-react";
 import { api, endpoints, queryKeys } from "@/lib/api";
 import type { Project } from "@/lib/types";
 import { cn } from "@/lib/cn";
@@ -13,6 +20,7 @@ import { useCurrentUser } from "@/lib/useAuth";
 const GLOBAL_ITEMS = [
     { to: "/", label: "Дашборд", icon: LayoutDashboard, end: true },
     { to: "/projects", label: "Проекты", icon: FolderKanban, end: false },
+    { to: "/mcp", label: "MCP", icon: Plug, end: false },
 ];
 
 function navLinkClass(isActive: boolean, collapsed: boolean): string {

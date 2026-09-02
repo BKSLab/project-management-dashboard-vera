@@ -321,3 +321,9 @@ def build_mcp_app() -> Starlette:
         Starlette-приложение транспорта Streamable HTTP.
     """
     return mcp_server.streamable_http_app(streamable_http_path="/")
+
+
+# Инструменты записи регистрируются импортом: декоратор привязывает их к
+# тому же серверу. Импорт в конце файла, потому что модуль записи опирается
+# на уже созданный ``mcp_server``.
+from src.mcp_server import write_tools  # noqa: E402,F401  isort:skip
