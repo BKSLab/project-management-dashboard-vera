@@ -151,7 +151,10 @@ class TaskCreateSchema(BaseModel):
     stage_id: int | None = Field(
         None,
         gt=0,
-        description="Начальная стадия; без значения берётся первая стадия проекта.",
+        description=(
+            "Стадия задачи. Без значения берётся начальная стадия проекта — "
+            "крайняя левая колонка доски, обычно «Бэклог»."
+        ),
         examples=[1],
     )
     wbs_node_id: int | None = Field(

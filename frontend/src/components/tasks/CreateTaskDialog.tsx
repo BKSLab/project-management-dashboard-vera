@@ -34,6 +34,11 @@ export function CreateTaskDialog({
     const [startDate, setStartDate] = useState("");
     const [dueDate, setDueDate] = useState("");
 
+    // Пустое значение означает «пользователь не выбирал», а не «нет стадии»:
+    // стадии приходят запросом, поэтому подстановка вычисляется при отрисовке.
+    const defaultStageId = stages.length > 0 ? String(stages[0].id) : "";
+    const selectedStageId = stageId || defaultStageId;
+
     function reset() {
         setTitle("");
         setDescription("");
@@ -49,7 +54,7 @@ export function CreateTaskDialog({
                 title: title.trim(),
                 description_md: description.trim() || null,
                 priority,
-                stage_id: stageId === "" ? null : Number(stageId),
+                stage_id: selectedStageId === "" ? null : Number(selectedStageId),
                 wbs_node_id: wbsNodeId,
                 start_date: startDate || null,
                 due_date: dueDate || null,
@@ -121,10 +126,9 @@ export function CreateTaskDialog({
                         {(id) => (
                             <Select
                                 id={id}
-                                value={stageId}
+                                value={selectedStageId}
                                 onChange={(event) => setStageId(event.target.value)}
                             >
-                                <option value="">Первая стадия</option>
                                 {stages.map((stage) => (
                                     <option key={stage.id} value={stage.id}>
                                         {stage.name}

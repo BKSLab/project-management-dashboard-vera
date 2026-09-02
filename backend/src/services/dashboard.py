@@ -148,7 +148,7 @@ def _collect_backlog_stage_ids(stages: list[ProjectStage]) -> set[int]:
 
 
 def _collect_backlog_counts(stage_counts: list, backlog_stage_ids: set[int]) -> dict[int, int]:
-    """Возвращает количество задач в первой стадии по каждому проекту."""
+    """Возвращает число задач в начальной стадии (бэклоге) каждого проекта."""
     counts: dict[int, int] = {}
     for row in stage_counts:
         if row.stage_id in backlog_stage_ids:
