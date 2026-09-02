@@ -44,7 +44,7 @@ async def test_lifespan_starts_application_when_qdrant_is_unavailable(
         main_module,
         "settings",
         SimpleNamespace(
-            app=SimpleNamespace(app_name="Test app"),
+            app=SimpleNamespace(app_name="Test app", mcp_path="/mcp"),
             knowledge=SimpleNamespace(knowledge_enabled=True),
         ),
     )
