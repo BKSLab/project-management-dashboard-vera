@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
+    from .api_tokens import ApiToken
     from .project_members import ProjectMember
     from .projects import Project
 
@@ -98,6 +99,12 @@ class User(Base, TimestampMixin):
     )
     memberships: Mapped[list[ProjectMember]] = relationship(
         "ProjectMember",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    api_tokens: Mapped[list[ApiToken]] = relationship(
+        "ApiToken",
         back_populates="user",
         cascade="all, delete-orphan",
         passive_deletes=True,

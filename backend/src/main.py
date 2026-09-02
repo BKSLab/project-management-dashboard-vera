@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.v1.endpoints.api_tokens import router as api_tokens_router
 from src.api.v1.endpoints.auth import router as auth_router
 from src.api.v1.endpoints.dashboard import router as dashboard_router
 from src.api.v1.endpoints.document_links import router as document_links_router
@@ -116,6 +117,7 @@ async def validation_exception_handler(
 for api_router in (
     auth_router,
     users_router,
+    api_tokens_router,
     dashboard_router,
     projects_router,
     project_stages_router,

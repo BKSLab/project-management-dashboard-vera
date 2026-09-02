@@ -38,6 +38,8 @@ class AuthSettings(SettingsBase):
     jwt_algorithm: str = "HS256"
     access_token_ttl_hours: int = 24 * 14
     registration_invite_code: SecretStr
+    api_token_default_ttl_days: int = 90
+    api_token_max_active: int = 10
     session_cookie_name: str = "tracker_session"
     session_cookie_secure: bool = False
     avatars_path: Path = BASE_DIR / "uploads" / "avatars"

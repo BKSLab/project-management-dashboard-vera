@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from src.dependencies.db_session import DbSessionDep
+from src.repositories.api_tokens import ApiTokensRepository
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
@@ -15,6 +16,11 @@ from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.users import UsersRepository
 from src.repositories.wbs_nodes import WbsNodesRepository
+
+
+def get_api_tokens_repository(session: DbSessionDep) -> ApiTokensRepository:
+    """Создаёт репозиторий токенов доступа в рамках сессии запроса."""
+    return ApiTokensRepository(session)
 
 
 def get_users_repository(session: DbSessionDep) -> UsersRepository:
@@ -78,6 +84,7 @@ def get_task_attachments_repository(session: DbSessionDep) -> TaskAttachmentsRep
 
 
 UsersRepositoryDep = Annotated[UsersRepository, Depends(get_users_repository)]
+ApiTokensRepositoryDep = Annotated[ApiTokensRepository, Depends(get_api_tokens_repository)]
 ProjectMembersRepositoryDep = Annotated[
     ProjectMembersRepository,
     Depends(get_project_members_repository),
