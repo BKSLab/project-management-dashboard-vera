@@ -13,6 +13,7 @@ import { ProjectDocumentsPage } from "@/routes/ProjectDocumentsPage";
 import { DocumentDetailPage } from "@/routes/DocumentDetailPage";
 import { ProjectSettingsPage } from "@/routes/ProjectSettingsPage";
 import { ProjectKnowledgePage } from "@/routes/ProjectKnowledgePage";
+import { McpPage } from "@/routes/McpPage";
 import { ProfilePage } from "@/routes/ProfilePage";
 import { LoginPage } from "@/routes/LoginPage";
 import { RegisterPage } from "@/routes/RegisterPage";
@@ -46,6 +47,7 @@ function ProtectedApp() {
                     <Route path="/projects" element={<ProjectsPage />} />
                     <Route path="/projects/new" element={<NewProjectPage />} />
                     <Route path="/profile" element={<ProfilePage />} />
+                    <Route path="/mcp" element={<McpPage />} />
                     <Route path="/projects/:projectKey" element={<ProjectLayout />}>
                         <Route index element={<ProjectOverviewPage />} />
                         <Route path="board" element={<BoardPage />} />

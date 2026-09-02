@@ -22,6 +22,7 @@ class AppSettings(SettingsBase):
     app_name: str = "Project Management Dashboard Vera"
     app_version: str = "1.0.0"
     api_v1_prefix: str = "/api/v1"
+    mcp_path: str = "/mcp"
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
     logging_config_path: Path = BASE_DIR / "logging.ini"
     uploads_path: Path = BASE_DIR / "uploads"
@@ -38,6 +39,8 @@ class AuthSettings(SettingsBase):
     jwt_algorithm: str = "HS256"
     access_token_ttl_hours: int = 24 * 14
     registration_invite_code: SecretStr
+    api_token_default_ttl_days: int = 90
+    api_token_max_active: int = 10
     session_cookie_name: str = "tracker_session"
     session_cookie_secure: bool = False
     avatars_path: Path = BASE_DIR / "uploads" / "avatars"

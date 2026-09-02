@@ -80,6 +80,8 @@ export const authEndpoints = {
     profile: () => `${V1}/users/me`,
     password: () => `${V1}/users/me/password`,
     avatar: () => `${V1}/users/me/avatar`,
+    apiTokens: () => `${V1}/users/me/tokens`,
+    apiToken: (tokenId: number) => `${V1}/users/me/tokens/${tokenId}`,
 };
 
 /** Единый источник правды по адресам API — маршруты не разъезжаются по экранам. */
@@ -123,6 +125,7 @@ export const endpoints = {
 /** Ключи кэша TanStack Query: всё, что относится к проекту, инвалидируется вместе. */
 export const queryKeys = {
     currentUser: ["auth", "me"] as const,
+    apiTokens: ["auth", "me", "tokens"] as const,
     dashboard: ["dashboard"] as const,
     projects: ["projects"] as const,
     project: (projectId: number) => ["projects", projectId] as const,

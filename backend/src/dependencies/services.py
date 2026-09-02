@@ -4,6 +4,7 @@ from fastapi import Depends
 
 from src.core.settings import get_settings
 from src.dependencies.repositories import (
+    ApiTokensRepositoryDep,
     DocumentLinksRepositoryDep,
     DocumentsRepositoryDep,
     KnowledgeIndexJobsRepositoryDep,
@@ -19,6 +20,7 @@ from src.dependencies.repositories import (
     WbsNodesRepositoryDep,
 )
 from src.dependencies.storage import AvatarStorageDep, TaskAttachmentStorageDep
+from src.services.api_tokens import ApiTokensService
 from src.services.auth import AuthService
 from src.services.dashboard import DashboardService
 from src.services.document_links import DocumentLinksService
@@ -51,6 +53,11 @@ KnowledgeEventsDep = Annotated[KnowledgeEvents, Depends(get_knowledge_events)]
 def get_auth_service(users_repository: UsersRepositoryDep) -> AuthService:
     """Создаёт сервис регистрации и входа."""
     return AuthService(users_repository=users_repository)
+
+
+def get_api_tokens_service(tokens_repository: ApiTokensRepositoryDep) -> ApiTokensService:
+    """Создаёт сервис токенов доступа в рамках сессии запроса."""
+    return ApiTokensService(tokens_repository=tokens_repository)
 
 
 def get_users_service(
@@ -258,6 +265,7 @@ def get_task_attachments_service(
 
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
 UsersServiceDep = Annotated[UsersService, Depends(get_users_service)]
+ApiTokensServiceDep = Annotated[ApiTokensService, Depends(get_api_tokens_service)]
 ProjectsServiceDep = Annotated[ProjectsService, Depends(get_projects_service)]
 ProjectStagesServiceDep = Annotated[
     ProjectStagesService,

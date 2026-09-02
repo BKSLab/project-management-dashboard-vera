@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.v1.endpoints.api_tokens import router as api_tokens_router
 from src.api.v1.endpoints.auth import router as auth_router
 from src.api.v1.endpoints.dashboard import router as dashboard_router
 from src.api.v1.endpoints.document_links import router as document_links_router
@@ -29,6 +30,7 @@ from src.db.session import async_session_factory, engine
 from src.exceptions.knowledge import KnowledgeProviderError
 from src.knowledge.runtime import close_knowledge_runtime, get_knowledge_runtime
 from src.knowledge.worker import run_knowledge_worker
+from src.mcp_server.server import build_mcp_app, mcp_server
 from src.utils.check_db import check_db_connection
 
 configure_logging()
@@ -66,9 +68,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             name="project-knowledge-indexer",
         )
         logger.info("✅ Фоновый индексатор базы знаний запущен.")
-    logger.info("✅ Приложение успешно запущено.")
     try:
-        yield
+        # Сессионный менеджер MCP обязан работать всё время жизни приложения:
+        # смонтированное ASGI-приложение своего lifespan не получает.
+        async with mcp_server.session_manager.run():
+            logger.info("✅ MCP-сервер доступен на %s.", settings.app.mcp_path)
+            logger.info("✅ Приложение успешно запущено.")
+            yield
     finally:
         worker_stop.set()
         if worker_task is not None:
@@ -126,6 +132,7 @@ async def validation_exception_handler(
 for api_router in (
     auth_router,
     users_router,
+    api_tokens_router,
     dashboard_router,
     projects_router,
     project_stages_router,
@@ -139,3 +146,9 @@ for api_router in (
     knowledge_router,
 ):
     app.include_router(api_router, prefix=settings.app.api_v1_prefix)
+
+
+# MCP монтируется отдельным ASGI-приложением: его транспорт держит долгие
+# соединения и не вписывается в контур обычных JSON-эндпоинтов.
+mcp_app = build_mcp_app()
+app.mount(settings.app.mcp_path, mcp_app)
