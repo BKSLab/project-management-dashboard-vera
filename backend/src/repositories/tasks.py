@@ -64,12 +64,19 @@ class TasksRepository:
         assignee: str | None = None,
         wbs_node_id: int | None = None,
     ) -> list[Task]:
-        """Возвращает задачи, чьи плановые интервалы пересекают диапазон."""
+        """Возвращает задачи, чьи известные плановые интервалы пересекают диапазон.
+
+        Для интервала с одной известной границей отсутствующая граница
+        подменяется известной датой. Задача только с ``start_date`` поэтому
+        показывается на временной карте и не входит в список без плана.
+        """
         try:
+            interval_start = func.coalesce(Task.start_date, Task.due_date)
+            interval_end = func.coalesce(Task.due_date, Task.start_date)
             stmt = select(Task).where(
                 Task.project_id == project_id,
-                Task.due_date >= date_from,
-                func.coalesce(Task.start_date, Task.due_date) <= date_to,
+                interval_start <= date_to,
+                interval_end >= date_from,
             )
             stmt = _apply_calendar_filters(
                 stmt,
@@ -102,9 +109,17 @@ class TasksRepository:
         assignee: str | None = None,
         wbs_node_id: int | None = None,
     ) -> list[Task]:
-        """Возвращает страницу задач без дедлайна с курсором по id."""
+        """Возвращает страницу задач без обеих плановых дат с курсором по id.
+
+        Задача с известным ``start_date`` относится только к временной карте,
+        даже если её открытый конец ``due_date`` ещё не задан.
+        """
         try:
-            stmt = select(Task).where(Task.project_id == project_id, Task.due_date.is_(None))
+            stmt = select(Task).where(
+                Task.project_id == project_id,
+                Task.start_date.is_(None),
+                Task.due_date.is_(None),
+            )
             if cursor is not None:
                 stmt = stmt.where(Task.id > cursor)
             stmt = _apply_calendar_filters(
@@ -159,7 +174,9 @@ class TasksRepository:
                         )
                     )
                     .label("due_soon"),
-                    func.count(Task.id).filter(Task.due_date.is_(None)).label("unscheduled"),
+                    func.count(Task.id)
+                    .filter(Task.start_date.is_(None), Task.due_date.is_(None))
+                    .label("unscheduled"),
                     func.count(Task.id)
                     .filter(
                         Task.baseline_due_date.is_not(None),

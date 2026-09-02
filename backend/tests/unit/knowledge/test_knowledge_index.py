@@ -46,6 +46,8 @@ def build_service(tmp_path):
     documents = AsyncMock(spec=DocumentsRepository)
     comments = AsyncMock(spec=TaskCommentsRepository)
     attachments = AsyncMock(spec=TaskAttachmentsRepository)
+    milestones = AsyncMock(spec=MilestonesRepository)
+    milestones.get_by_project.return_value = []
     storage = Mock()
     storage.resolve.return_value = tmp_path / "attachment.txt"
 
@@ -65,6 +67,7 @@ def build_service(tmp_path):
         comments_repository=comments,
         attachments_repository=attachments,
         attachment_storage=storage,
+        milestones_repository=milestones,
         embedding_batch_size=32,
         chunk_target_chars=2200,
         chunk_overlap_chars=300,
@@ -96,7 +99,7 @@ async def test_upsert_existing_task_replaces_point_without_deleting_task_context
 @pytest.mark.asyncio
 async def test_milestone_semantic_document_excludes_operational_dates(tmp_path) -> None:
     service, _, _, runtime, _, _ = build_service(tmp_path)
-    milestones = AsyncMock(spec=MilestonesRepository)
+    milestones = service.milestones_repository
     milestones.get_by_id.return_value = ProjectMilestone(
         id=7,
         project_id=1,

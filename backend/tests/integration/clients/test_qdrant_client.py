@@ -188,6 +188,7 @@ async def test_task_upsert_preserves_comment_and_attachment_points(qdrant_url: s
         comments_repository=SimpleNamespace(),
         attachments_repository=SimpleNamespace(),
         attachment_storage=SimpleNamespace(),
+        milestones_repository=SimpleNamespace(),
         embedding_batch_size=32,
         chunk_target_chars=2200,
         chunk_overlap_chars=300,

@@ -13,7 +13,6 @@ import { ProjectDocumentsPage } from "@/routes/ProjectDocumentsPage";
 import { DocumentDetailPage } from "@/routes/DocumentDetailPage";
 import { ProjectSettingsPage } from "@/routes/ProjectSettingsPage";
 import { ProjectKnowledgePage } from "@/routes/ProjectKnowledgePage";
-import { ProjectCalendarPage } from "@/routes/ProjectCalendarPage";
 import { McpPage } from "@/routes/McpPage";
 import { ProfilePage } from "@/routes/ProfilePage";
 import { LoginPage } from "@/routes/LoginPage";
@@ -28,10 +27,24 @@ import { Skeleton } from "@/components/ui/States";
 const StructurePage = lazy(() =>
     import("@/routes/StructurePage").then((module) => ({ default: module.StructurePage })),
 );
+const ProjectCalendarPage = lazy(() =>
+    import("@/routes/ProjectCalendarPage").then((module) => ({
+        default: module.ProjectCalendarPage,
+    })),
+);
 
 function StructureFallback() {
     return (
         <div role="status" aria-label="Загрузка структуры" className="flex h-full gap-3 p-4">
+            <Skeleton className="h-full w-72 shrink-0" />
+            <Skeleton className="h-full flex-1" />
+        </div>
+    );
+}
+
+function CalendarFallback() {
+    return (
+        <div role="status" aria-label="Загрузка календаря" className="flex h-full gap-3 p-4">
             <Skeleton className="h-full w-72 shrink-0" />
             <Skeleton className="h-full flex-1" />
         </div>
@@ -53,7 +66,14 @@ function ProtectedApp() {
                         <Route index element={<ProjectOverviewPage />} />
                         <Route path="board" element={<BoardPage />} />
                         <Route path="tasks" element={<TasksListPage />} />
-                        <Route path="calendar" element={<ProjectCalendarPage />} />
+                        <Route
+                            path="calendar"
+                            element={
+                                <Suspense fallback={<CalendarFallback />}>
+                                    <ProjectCalendarPage />
+                                </Suspense>
+                            }
+                        />
                         <Route
                             path="structure"
                             element={

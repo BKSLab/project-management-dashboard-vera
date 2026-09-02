@@ -63,6 +63,7 @@ export function TimelineTaskBar({
                 isDragging && "opacity-45 shadow-panel",
                 geometry.clippedStart && "rounded-l-none border-l-0",
                 geometry.clippedEnd && "rounded-r-none border-r-0",
+                geometry.openEnd && "rounded-r-none border-r-2 border-r-dashed border-r-accent",
             )}
             style={{
                 left: geometry.left,

@@ -36,7 +36,7 @@ export function CalendarAgenda({
                 {tasks.length === 0 ? (
                     <div className="flex items-center gap-2 py-2 text-[12px] text-muted">
                         <CalendarX2 size={14} aria-hidden="true" />
-                        На этот день дедлайнов нет
+                        На этот день плановых задач нет
                     </div>
                 ) : (
                     <div className="flex flex-col gap-1.5">

@@ -31,9 +31,11 @@ export interface TimelineTaskRow {
 export type TimelineWbsRow = TimelineNodeRow | TimelineTaskRow;
 
 function aggregate(tasks: CalendarTask[]): TimelineAggregate {
-    const scheduled = tasks.filter((task) => task.due_date !== null);
+    const scheduled = tasks.filter(
+        (task) => task.start_date !== null || task.due_date !== null,
+    );
     const starts = scheduled.map((task) => task.start_date ?? (task.due_date as string));
-    const ends = scheduled.map((task) => task.due_date as string);
+    const ends = scheduled.map((task) => task.due_date ?? (task.start_date as string));
     const done = tasks.filter((task) => task.is_done).length;
     return {
         total: tasks.length,

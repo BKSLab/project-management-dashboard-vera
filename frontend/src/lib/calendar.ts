@@ -20,6 +20,7 @@ export interface TaskInterval {
     startDate: string;
     dueDate: string;
     durationDays: number;
+    openEnd: boolean;
 }
 
 export interface TimelineBarGeometry {
@@ -27,6 +28,7 @@ export interface TimelineBarGeometry {
     width: number;
     clippedStart: boolean;
     clippedEnd: boolean;
+    openEnd: boolean;
 }
 
 export interface TimelineDependencyGeometry {
@@ -102,12 +104,11 @@ export function buildMonthGrid(month: string, today = localToday()): CalendarDay
 export function tasksByDate(tasks: CalendarTask[]): Map<string, CalendarTask[]> {
     const grouped = new Map<string, CalendarTask[]>();
     for (const task of tasks) {
-        if (task.due_date === null) {
-            continue;
-        }
-        const bucket = grouped.get(task.due_date) ?? [];
+        const date = task.due_date ?? task.start_date;
+        if (date === null) continue;
+        const bucket = grouped.get(date) ?? [];
         bucket.push(task);
-        grouped.set(task.due_date, bucket);
+        grouped.set(date, bucket);
     }
     return grouped;
 }
@@ -265,18 +266,21 @@ export function buildTimelineDays(range: TimelineRange, today = localToday()): C
 }
 
 export function taskInterval(task: CalendarTask): TaskInterval | null {
-    if (task.due_date === null) return null;
     const startDate = task.start_date ?? task.due_date;
+    const dueDate = task.due_date ?? task.start_date;
+    if (startDate === null || dueDate === null) return null;
     return {
         startDate,
-        dueDate: task.due_date,
-        durationDays: Math.max(calendarDaysBetween(startDate, task.due_date), 0),
+        dueDate,
+        durationDays: Math.max(calendarDaysBetween(startDate, dueDate), 0),
+        openEnd: task.due_date === null,
     };
 }
 
 export function moveTaskInterval(task: CalendarTask, targetStart: string) {
     const interval = taskInterval(task);
     if (interval === null) return { startDate: targetStart, dueDate: targetStart };
+    if (interval.openEnd) return { startDate: targetStart, dueDate: null };
     if (task.start_date === null) return { startDate: null, dueDate: targetStart };
     return {
         startDate: targetStart,
@@ -293,6 +297,7 @@ export function resizeTaskInterval(
     if (interval === null) return null;
     if (edge === "start") {
         const startDate = addDateDays(interval.startDate, deltaDays);
+        if (interval.openEnd) return { startDate, dueDate: null };
         return startDate <= interval.dueDate
             ? { startDate, dueDate: interval.dueDate }
             : null;
@@ -323,6 +328,7 @@ export function timelineBarGeometry(
         width: (calendarDaysBetween(visibleStart, visibleEnd) + 1) * dayWidth,
         clippedStart: interval.startDate < range.dateFrom,
         clippedEnd: interval.dueDate > range.dateTo,
+        openEnd: interval.openEnd,
     };
 }
 

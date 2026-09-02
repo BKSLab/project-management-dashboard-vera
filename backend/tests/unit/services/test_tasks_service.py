@@ -462,6 +462,61 @@ async def test_move_task_sets_and_clears_completed_at_at_stage_transition() -> N
 
 
 @pytest.mark.asyncio
+async def test_move_task_preserves_and_resets_completed_at_across_repeated_transitions() -> None:
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    first_completed_at = datetime(2026, 9, 2, 10, tzinfo=UTC)
+    tasks_repository.get_by_id.side_effect = [
+        make_task(stage_id=1),
+        make_task(stage_id=2, completed_at=first_completed_at),
+        make_task(stage_id=3, completed_at=first_completed_at),
+        make_task(stage_id=1),
+    ]
+    tasks_repository.update.side_effect = [
+        make_task(stage_id=2, completed_at=first_completed_at),
+        make_task(stage_id=3, completed_at=first_completed_at),
+        make_task(stage_id=1),
+        make_task(stage_id=2, completed_at=datetime(2026, 9, 2, 11, tzinfo=UTC)),
+    ]
+    open_stage = SimpleNamespace(id=1, project_id=1, name="Работа", is_done_stage=False)
+    first_done_stage = SimpleNamespace(
+        id=2,
+        project_id=1,
+        name="Готово",
+        is_done_stage=True,
+    )
+    second_done_stage = SimpleNamespace(
+        id=3,
+        project_id=1,
+        name="Архив",
+        is_done_stage=True,
+    )
+    stages_repository = AsyncMock(spec=ProjectStagesRepository)
+    stages_repository.get_by_id.side_effect = [
+        first_done_stage,
+        open_stage,
+        second_done_stage,
+        first_done_stage,
+        open_stage,
+        second_done_stage,
+        first_done_stage,
+        open_stage,
+    ]
+    service = build_service(tasks_repository, stages_repository)
+
+    await service.move_task(10, 2, 1000)
+    await service.move_task(10, 3, 1000)
+    await service.move_task(10, 1, 1000)
+    await service.move_task(10, 2, 1000)
+
+    payloads = [item.kwargs["data"] for item in tasks_repository.update.await_args_list]
+    assert payloads[0]["completed_at"].tzinfo is UTC
+    assert "completed_at" not in payloads[1]
+    assert payloads[2]["completed_at"] is None
+    assert payloads[3]["completed_at"].tzinfo is UTC
+    assert payloads[3]["completed_at"] >= payloads[0]["completed_at"]
+
+
+@pytest.mark.asyncio
 async def test_fix_baseline_copies_current_plan_and_records_history() -> None:
     tasks_repository = AsyncMock(spec=TasksRepository)
     task = make_task(start_date=date(2026, 9, 2), due_date=date(2026, 9, 8))

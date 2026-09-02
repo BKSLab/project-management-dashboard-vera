@@ -71,7 +71,7 @@ async def get_project_calendar(
     dependencies=[Depends(get_accessible_project)],
     status_code=status.HTTP_200_OK,
     summary="Получить задачи проекта без срока",
-    description="Возвращает курсорную страницу задач, у которых не задан due_date.",
+    description="Возвращает курсорную страницу задач без start_date и due_date.",
     operation_id="getProjectUnscheduledTasks",
     response_description="Страница задач без срока.",
     responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
@@ -91,7 +91,7 @@ async def get_unscheduled_tasks(
     ] = None,
     wbs_node_id: Annotated[int | None, Query(gt=0, description="Фильтр по узлу ИСР.")] = None,
 ) -> UnscheduledTasksPageSchema:
-    """Получает ограниченную страницу задач проекта без срока."""
+    """Получает ограниченную страницу задач проекта без плановых дат."""
     logger.info("🚀 Запрос GET /projects/%s/calendar/unscheduled.", project_id)
     try:
         return await service.get_unscheduled(

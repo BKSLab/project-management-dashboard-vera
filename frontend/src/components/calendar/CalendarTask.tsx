@@ -26,7 +26,15 @@ export function CalendarTask({
 }: CalendarTaskProps) {
     const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
         id: calendarTaskDragId(task.id),
-        data: { task, dragKind: task.due_date === null ? "unscheduled" : "deadline" },
+        data: {
+            task,
+            dragKind:
+                task.due_date !== null
+                    ? "deadline"
+                    : task.start_date !== null
+                      ? "interval"
+                      : "unscheduled",
+        },
         disabled: !draggable,
     });
     const stateLabel = task.is_done

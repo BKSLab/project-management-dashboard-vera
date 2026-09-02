@@ -270,7 +270,7 @@ class CalendarService:
         assignee: str | None = None,
         wbs_node_id: int | None = None,
     ) -> UnscheduledTasksPageSchema:
-        """Возвращает курсорную страницу задач без дедлайна."""
+        """Возвращает курсорную страницу задач без обеих плановых дат."""
         try:
             project = await self.projects_repository.get_by_id(project_id=project_id)
             if project is None:

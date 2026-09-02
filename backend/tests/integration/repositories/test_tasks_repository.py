@@ -220,6 +220,30 @@ async def test_calendar_range_includes_intervals_that_cross_window(
 
 
 @pytest.mark.asyncio
+async def test_calendar_range_includes_start_only_but_unscheduled_does_not_duplicate_it(
+    db_session: AsyncSession,
+    stage: ProjectStage,
+) -> None:
+    repository = TasksRepository(db_session)
+    start_only = await repository.save(data=task_data(stage, 20, start_date=TODAY, due_date=None))
+    without_dates = await repository.save(data=task_data(stage, 21, start_date=None, due_date=None))
+
+    ranged = await repository.get_calendar_range(
+        project_id=stage.project_id,
+        date_from=TODAY,
+        date_to=TODAY + timedelta(days=1),
+    )
+    unscheduled = await repository.get_unscheduled_page(
+        project_id=stage.project_id,
+        cursor=None,
+        limit=10,
+    )
+
+    assert [task.id for task in ranged] == [start_only.id]
+    assert [task.id for task in unscheduled] == [without_dates.id]
+
+
+@pytest.mark.asyncio
 async def test_calendar_counts_ignore_done_deadlines_and_count_unscheduled(
     db_session: AsyncSession,
     stage: ProjectStage,
@@ -237,6 +261,7 @@ async def test_calendar_counts_ignore_done_deadlines_and_count_unscheduled(
     await repository.save(data=task_data(stage, 1, due_date=TODAY - timedelta(days=1)))
     await repository.save(data=task_data(stage, 2, due_date=TODAY + timedelta(days=3)))
     await repository.save(data=task_data(stage, 3, due_date=None))
+    await repository.save(data=task_data(stage, 6, start_date=TODAY, due_date=None))
     await repository.save(
         data=task_data(stage, 4, stage_id=done_stage.id, due_date=TODAY - timedelta(days=3))
     )

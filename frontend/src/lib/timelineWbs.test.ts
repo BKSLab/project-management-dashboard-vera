@@ -56,4 +56,17 @@ describe("timeline WBS rows", () => {
             expect(root.aggregate.dueDate).toBe("2026-09-05");
         }
     });
+
+    it("includes a task with an open end in the subtree dates", () => {
+        const openTask = { ...task(1, 1), start_date: "2026-09-03", due_date: null };
+
+        const rows = buildTimelineWbsRows(nodes, [openTask], new Set([1]));
+
+        const root = rows[0];
+        expect(root.kind).toBe("node");
+        if (root.kind === "node") {
+            expect(root.aggregate.startDate).toBe("2026-09-03");
+            expect(root.aggregate.dueDate).toBe("2026-09-03");
+        }
+    });
 });

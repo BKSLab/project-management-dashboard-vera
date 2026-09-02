@@ -151,6 +151,28 @@ async def test_get_range_rejects_reversed_and_excessive_ranges() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_range_accepts_exact_limit_and_rejects_one_day_more() -> None:
+    service, projects, _, _, _, _ = build_service()
+
+    result = await service.get_range(
+        project_id=1,
+        date_from=TODAY,
+        date_to=TODAY + timedelta(days=MAX_CALENDAR_RANGE_DAYS),
+        today=TODAY,
+    )
+
+    assert result.range.date_to == TODAY + timedelta(days=MAX_CALENDAR_RANGE_DAYS)
+    with pytest.raises(CalendarRangeError):
+        await service.get_range(
+            project_id=1,
+            date_from=TODAY,
+            date_to=TODAY + timedelta(days=MAX_CALENDAR_RANGE_DAYS + 1),
+            today=TODAY,
+        )
+    projects.get_by_id.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_get_range_rejects_foreign_reference_filters() -> None:
     service, _, tasks, _, _, _ = build_service()
 
@@ -269,6 +291,26 @@ async def test_get_range_returns_system_and_user_milestones_with_plan_drift() ->
         ("MVP", False),
         ("Дедлайн проекта", True),
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_range_handles_each_partially_filled_baseline() -> None:
+    service, _, tasks, _, _, _ = build_service()
+    only_start = make_task(task_id=1, due_date=date(2026, 9, 12))
+    only_start.baseline_start_date = date(2026, 9, 1)
+    only_due = make_task(task_id=2, due_date=date(2026, 9, 12))
+    only_due.baseline_due_date = date(2026, 9, 8)
+    tasks.get_calendar_range.return_value = [only_start, only_due]
+
+    result = await service.get_range(
+        project_id=1,
+        date_from=date(2026, 9, 1),
+        date_to=date(2026, 9, 30),
+        today=TODAY,
+    )
+
+    assert result.tasks[0].drift_days is None
+    assert result.tasks[1].drift_days == 4
 
 
 @pytest.mark.asyncio

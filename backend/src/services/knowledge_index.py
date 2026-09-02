@@ -58,10 +58,10 @@ class KnowledgeIndexService:
         comments_repository: TaskCommentsRepository,
         attachments_repository: TaskAttachmentsRepository,
         attachment_storage: TaskAttachmentStorage,
+        milestones_repository: MilestonesRepository,
         embedding_batch_size: int,
         chunk_target_chars: int,
         chunk_overlap_chars: int,
-        milestones_repository: MilestonesRepository | None = None,
         runtime: KnowledgeRuntime | None = None,
     ) -> None:
         self.projects_repository = projects_repository
@@ -181,11 +181,7 @@ class KnowledgeIndexService:
         documents = await self.documents_repository.get_by_project(project_id)
         comments = await self.comments_repository.get_for_tasks(task_ids)
         attachments = await self.attachments_repository.get_for_tasks(task_ids)
-        milestones = (
-            await self.milestones_repository.get_by_project(project_id)
-            if self.milestones_repository is not None
-            else []
-        )
+        milestones = await self.milestones_repository.get_by_project(project_id)
 
         task_by_id = {task.id: task for task in tasks}
         wbs_paths = build_wbs_paths(nodes)
@@ -363,8 +359,6 @@ class KnowledgeIndexService:
         project_id: int,
         entity_id: int,
     ) -> list[KnowledgeDocument]:
-        if self.milestones_repository is None:
-            return []
         milestone = await self.milestones_repository.get_by_id(entity_id)
         if milestone is None or milestone.project_id != project_id:
             return []

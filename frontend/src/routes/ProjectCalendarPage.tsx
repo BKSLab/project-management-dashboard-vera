@@ -185,11 +185,16 @@ export function ProjectCalendarPage() {
                 queryClient.setQueryData<ProjectCalendar>(calendarKey, (old) => {
                     if (!old) return old;
                     const intervalStart = changed.start_date ?? changed.due_date;
+                    const intervalEnd = changed.due_date ?? changed.start_date;
                     const willBeVisible =
-                        changed.due_date !== null &&
                         intervalStart !== null &&
-                        changed.due_date >= old.range.date_from &&
+                        intervalEnd !== null &&
+                        intervalEnd >= old.range.date_from &&
                         intervalStart <= old.range.date_to;
+                    const wasUnscheduled =
+                        sourceTask.start_date === null && sourceTask.due_date === null;
+                    const isUnscheduled =
+                        changed.start_date === null && changed.due_date === null;
                     const tasks = old.tasks.filter((task) => task.id !== taskId);
                     if (willBeVisible) tasks.push(changed);
                     return {
@@ -207,8 +212,8 @@ export function ProjectCalendarPage() {
                                 Number(changed.is_due_soon),
                             unscheduled:
                                 old.summary.unscheduled +
-                                Number(dueDate === null) -
-                                Number(sourceTask.due_date === null),
+                                Number(isUnscheduled) -
+                                Number(wasUnscheduled),
                             drifted:
                                 old.summary.drifted -
                                 Number(
@@ -227,7 +232,11 @@ export function ProjectCalendarPage() {
                             ...page,
                             items: page.items.filter((task) => task.id !== taskId),
                         }));
-                        if (dueDate === null && pages[0]) {
+                        if (
+                            changed.start_date === null &&
+                            changed.due_date === null &&
+                            pages[0]
+                        ) {
                             pages[0] = { ...pages[0], items: [changed, ...pages[0].items] };
                         }
                         return { ...old, pages };

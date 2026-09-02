@@ -193,7 +193,65 @@ describe("calendar date-only helpers", () => {
                 { dateFrom: "2026-09-04", dateTo: "2026-09-10" },
                 20,
             ),
-        ).toEqual({ left: 0, width: 60, clippedStart: true, clippedEnd: false });
+        ).toEqual({
+            left: 0,
+            width: 60,
+            clippedStart: true,
+            clippedEnd: false,
+            openEnd: false,
+        });
+    });
+
+    it("shows a task with only a start date as an open interval", () => {
+        const task = {
+            id: 2,
+            key: "TEST-2",
+            title: "Открытый интервал",
+            start_date: "2026-09-03",
+            due_date: null,
+            baseline_start_date: null,
+            baseline_due_date: null,
+            drift_days: null,
+            stage_id: 1,
+            wbs_node_id: null,
+            priority: "MEDIUM",
+            assignee: null,
+            is_done: false,
+            is_overdue: false,
+            is_due_soon: false,
+            risk_level: "medium",
+            risk_reasons: [],
+            updated_at: "2026-09-02T00:00:00Z",
+        } satisfies CalendarTask;
+
+        expect(tasksByDate([task]).get("2026-09-03")).toEqual([task]);
+        expect(taskInterval(task)).toEqual({
+            startDate: "2026-09-03",
+            dueDate: "2026-09-03",
+            durationDays: 0,
+            openEnd: true,
+        });
+        expect(
+            timelineBarGeometry(
+                task,
+                { dateFrom: "2026-09-01", dateTo: "2026-09-30" },
+                20,
+            ),
+        ).toEqual({
+            left: 40,
+            width: 20,
+            clippedStart: false,
+            clippedEnd: false,
+            openEnd: true,
+        });
+        expect(moveTaskInterval(task, "2026-09-10")).toEqual({
+            startDate: "2026-09-10",
+            dueDate: null,
+        });
+        expect(resizeTaskInterval(task, "start", 2)).toEqual({
+            startDate: "2026-09-05",
+            dueDate: null,
+        });
     });
 
     it("builds an orthogonal dependency path in both timeline directions", () => {

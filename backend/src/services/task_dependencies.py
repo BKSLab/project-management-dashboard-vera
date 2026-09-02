@@ -92,6 +92,16 @@ class TaskDependenciesService:
             ):
                 raise TaskDependencyCycleError()
             dependency = await self.dependencies_repository.save({**data, "project_id": project_id})
+            dependencies_after_insert = await self.dependencies_repository.get_by_project(
+                project_id
+            )
+            if _would_create_cycle(
+                dependencies_after_insert,
+                predecessor_id=predecessor_id,
+                successor_id=successor_id,
+            ):
+                await self.unit_of_work.rollback()
+                raise TaskDependencyCycleError()
             await self.unit_of_work.commit()
             return TaskDependencySchema.model_validate(dependency)
         except (

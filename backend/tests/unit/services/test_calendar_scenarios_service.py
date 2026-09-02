@@ -96,6 +96,43 @@ async def test_preview_cascades_successors_without_writes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_preview_cascades_dates_through_three_successors() -> None:
+    service, tasks, dependencies, _, _, _ = build_service()
+    tasks.get_by_project.return_value = [
+        task(1, date(2026, 9, 1), date(2026, 9, 5)),
+        task(2, date(2026, 9, 6), date(2026, 9, 8)),
+        task(3, date(2026, 9, 9), date(2026, 9, 10)),
+        task(4, date(2026, 9, 11), date(2026, 9, 12)),
+    ]
+    dependencies.get_by_project.return_value = [
+        dependency(1, 2, lag_days=1),
+        dependency(2, 3, lag_days=1),
+        dependency(3, 4, lag_days=1),
+    ]
+
+    result = await service.preview(
+        1,
+        [
+            {
+                "task_id": 1,
+                "start_date": date(2026, 9, 4),
+                "due_date": date(2026, 9, 10),
+            }
+        ],
+    )
+
+    assert result.consequences_count == 3
+    assert [
+        (item.task_id, item.proposed.start_date, item.proposed.due_date) for item in result.changes
+    ] == [
+        (1, date(2026, 9, 4), date(2026, 9, 10)),
+        (2, date(2026, 9, 11), date(2026, 9, 13)),
+        (3, date(2026, 9, 14), date(2026, 9, 15)),
+        (4, date(2026, 9, 16), date(2026, 9, 17)),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_preview_marks_milestone_impact_but_remains_applicable() -> None:
     service, tasks, dependencies, milestones, _, _ = build_service()
     item = task(1, date(2026, 9, 1), date(2026, 9, 5))

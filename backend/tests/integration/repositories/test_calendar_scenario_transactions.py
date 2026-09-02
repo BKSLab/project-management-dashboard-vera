@@ -153,4 +153,7 @@ async def test_stale_scenario_rejects_whole_batch_before_first_update(
         )
 
     assert (await tasks.get_by_id(predecessor.id)).due_date == date(2026, 9, 5)
-    assert (await tasks.get_by_id(successor.id)).start_date == date(2026, 9, 6)
+    persisted_successor = await tasks.get_by_id(successor.id)
+    assert persisted_successor.start_date == date(2026, 9, 6)
+    assert persisted_successor.title == "Изменено параллельно"
+    assert await TaskActivityRepository(db_session).get_for_task(predecessor.id) == []

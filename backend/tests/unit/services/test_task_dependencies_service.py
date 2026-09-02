@@ -124,6 +124,32 @@ async def test_dependency_rejects_indirect_cycle() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dependency_rolls_back_when_cycle_appears_after_insert() -> None:
+    service, repository, _, uow = build_service()
+    inserted = dependency(predecessor_id=1, successor_id=2)
+    repository.save.return_value = inserted
+    repository.get_by_project.side_effect = [
+        [],
+        [inserted, dependency(dependency_id=2, predecessor_id=2, successor_id=1)],
+    ]
+
+    with pytest.raises(TaskDependencyCycleError):
+        await service.create_dependency(
+            1,
+            {
+                "predecessor_task_id": 1,
+                "successor_task_id": 2,
+                "dependency_type": TaskDependencyType.FINISH_TO_START,
+                "lag_days": 0,
+            },
+        )
+
+    repository.save.assert_awaited_once()
+    uow.rollback.assert_awaited_once()
+    uow.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_delete_dependency_uses_same_transaction_boundary() -> None:
     service, repository, _, uow = build_service()
     item = dependency()
