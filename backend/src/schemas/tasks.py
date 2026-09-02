@@ -41,11 +41,19 @@ class TaskSchema(BaseModel):
         description="Подпись исполнителя.",
         examples=["Иван"],
     )
+    start_date: date | None = Field(
+        None,
+        description="Плановая дата начала.",
+        examples=["2026-09-01"],
+    )
     due_date: date | None = Field(
         None,
         description="Плановая дата завершения.",
         examples=["2026-09-08"],
     )
+    baseline_start_date: date | None = Field(None, description="Зафиксированное начало baseline.")
+    baseline_due_date: date | None = Field(None, description="Зафиксированное завершение baseline.")
+    completed_at: datetime | None = Field(None, description="Фактическое время завершения.")
     position: float = Field(..., description="Позиция задачи внутри стадии.", examples=[1000.0])
     created_at: datetime = Field(
         ...,
@@ -101,6 +109,7 @@ class TaskCompactSchema(BaseModel):
     wbs_node_id: int | None = Field(None, description="Раздел ИСР.", examples=[32])
     priority: TaskPriority = Field(..., description="Приоритет задачи.", examples=["HIGH"])
     assignee: str | None = Field(None, description="Подпись исполнителя.", examples=["Иван"])
+    start_date: date | None = Field(None, description="Плановая дата начала.")
     due_date: date | None = Field(
         None,
         description="Плановая дата завершения.",
@@ -163,6 +172,11 @@ class TaskCreateSchema(BaseModel):
         description="Подпись исполнителя.",
         examples=["Иван"],
     )
+    start_date: date | None = Field(
+        None,
+        description="Плановая дата начала.",
+        examples=["2026-09-01"],
+    )
     due_date: date | None = Field(
         None,
         description="Плановая дата завершения.",
@@ -198,6 +212,11 @@ class TaskUpdateSchema(BaseModel):
         max_length=255,
         description="Новая подпись исполнителя или null для очистки.",
         examples=["Мария"],
+    )
+    start_date: date | None = Field(
+        None,
+        description="Новая дата начала или null для очистки.",
+        examples=["2026-09-03"],
     )
     due_date: date | None = Field(
         None,

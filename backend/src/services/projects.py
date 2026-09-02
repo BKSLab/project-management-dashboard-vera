@@ -25,11 +25,10 @@ from src.repositories.unit_of_work import UnitOfWork
 from src.schemas.projects import ProjectSchema, ProjectStatsSchema, StageBreakdownSchema
 from src.services.knowledge_events import KnowledgeEvents
 from src.storage.task_attachments import TaskAttachmentStorage
+from src.utils.deadlines import DUE_SOON_DAYS, is_task_due_soon, is_task_overdue
 
 logger = logging.getLogger(__name__)
 PROJECT_POINT_FIELDS = frozenset({"name", "description_md"})
-
-DUE_SOON_DAYS = 7
 
 DEFAULT_STAGES: tuple[dict, ...] = (
     {"name": "Бэклог", "color": "#7d8793", "is_done_stage": False},
@@ -319,10 +318,15 @@ def build_project_stats(
             in_progress_tasks += 1
         if task.due_date is None:
             continue
-        if task.due_date < current_day:
+        if is_task_overdue(due_date=task.due_date, is_done=False, today=current_day):
             overdue_tasks += 1
             continue
-        if task.due_date <= soon_until:
+        if is_task_due_soon(
+            due_date=task.due_date,
+            is_done=False,
+            today=current_day,
+            soon_until=soon_until,
+        ):
             due_soon_tasks += 1
         if next_due_date is None or task.due_date < next_due_date:
             next_due_date = task.due_date

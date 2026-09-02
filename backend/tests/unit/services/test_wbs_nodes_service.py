@@ -64,6 +64,7 @@ def task(
         wbs_node_id=wbs_node_id,
         priority=TaskPriority.MEDIUM,
         assignee=None,
+        start_date=None,
         due_date=due_date,
     )
 

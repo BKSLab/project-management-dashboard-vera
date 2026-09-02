@@ -19,10 +19,10 @@ from src.schemas.dashboard import (
     DashboardTotalsSchema,
 )
 from src.services.tasks import build_task_key
+from src.utils.deadlines import DUE_SOON_DAYS, is_task_overdue
 
 logger = logging.getLogger(__name__)
 
-DUE_SOON_DAYS = 7
 ATTENTION_TASKS_LIMIT = 8
 RECENT_TASKS_LIMIT = 8
 
@@ -222,8 +222,10 @@ def _build_task_card(
         stage_name=stage.name,
         priority=task.priority,
         due_date=task.due_date,
-        is_overdue=(
-            not stage.is_done_stage and task.due_date is not None and task.due_date < today
+        is_overdue=is_task_overdue(
+            due_date=task.due_date,
+            is_done=stage.is_done_stage,
+            today=today,
         ),
         updated_at=task.updated_at,
     )

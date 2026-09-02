@@ -8,6 +8,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from src.db.models.api_tokens import ApiTokenScope
 from src.db.models.project_members import ProjectMember, ProjectRole
+from src.db.models.project_milestones import ProjectMilestoneStatus
 from src.db.models.project_stages import ProjectStage
 from src.db.models.projects import Project, ProjectStatus
 from src.db.models.tasks import Task, TaskPriority
@@ -48,6 +49,7 @@ class FakeTasksService:
         self.updated: dict | None = None
         self.moved: dict | None = None
         self.deleted: int | None = None
+        self.milestones_service = FakeMilestonesService()
 
     async def create_task(self, *, project_id: int, data: dict):
         if self.error:
@@ -59,7 +61,15 @@ class FakeTasksService:
         if self.error:
             raise self.error
         self.updated = {"task_id": task_id, **data}
-        return type("T", (), {"key": "PROJ-142"})()
+        return type(
+            "T",
+            (),
+            {
+                "key": "PROJ-142",
+                "start_date": data.get("start_date", TASK.start_date),
+                "due_date": data.get("due_date", TASK.due_date),
+            },
+        )()
 
     async def move_task(self, *, task_id: int, stage_id: int):
         if self.error:
@@ -85,6 +95,25 @@ class FakeCommentsService:
             "C",
             (),
             {"author_name": author_name, "created_at": datetime.now(UTC)},
+        )()
+
+
+class FakeMilestonesService:
+    """Сервис вех, фиксирующий MCP-вызов."""
+
+    def __init__(self):
+        self.created: dict | None = None
+
+    async def create_milestone(self, project_id: int, data: dict):
+        self.created = {"project_id": project_id, **data}
+        return type(
+            "M",
+            (),
+            {
+                "title": data["title"],
+                "due_date": data["due_date"],
+                "status": data["status"],
+            },
         )()
 
 
@@ -151,6 +180,11 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(wt, "ProjectStagesRepository", Stages)
     monkeypatch.setattr(wt, "build_tasks_service", lambda session: tasks_service)
     monkeypatch.setattr(wt, "build_comments_service", lambda session: comments_service)
+    monkeypatch.setattr(
+        wt,
+        "build_milestones_service",
+        lambda session: tasks_service.milestones_service,
+    )
     monkeypatch.setattr(ctx, "ProjectsRepository", Projects)
     monkeypatch.setattr(ctx, "ProjectMembersRepository", Members)
     monkeypatch.setattr(ctx, "TasksRepository", Tasks)
@@ -320,6 +354,46 @@ async def test_add_comment_uses_explicit_author(tracker) -> None:
     assert comments_service.added["author_name"] == "Борис"
 
 
+async def test_set_task_dates_uses_domain_task_service(tracker) -> None:
+    """Календарный write-tool меняет даты через общий TasksService."""
+    tasks_service, _ = tracker
+
+    result = await wt.set_task_dates(
+        FakeContext(),
+        task_key="PROJ-142",
+        start_date="2026-09-03",
+        due_date="2026-09-10",
+    )
+
+    assert tasks_service.updated == {
+        "task_id": 10,
+        "start_date": date(2026, 9, 3),
+        "due_date": date(2026, 9, 10),
+    }
+    assert result["start_date"] == "2026-09-03"
+
+
+async def test_create_milestone_uses_display_project_key_and_write_service(tracker) -> None:
+    """Веха создаётся через сервис и наружу не отдаёт числовой id."""
+    tasks_service, _ = tracker
+
+    result = await wt.create_milestone(
+        FakeContext(),
+        project_key="PROJ",
+        title="MVP",
+        due_date="2026-09-30",
+    )
+
+    assert tasks_service.milestones_service.created["status"] is ProjectMilestoneStatus.PLANNED
+    assert result == {
+        "project_key": "PROJ",
+        "title": "MVP",
+        "due_date": "2026-09-30",
+        "status": "PLANNED",
+        "created": True,
+    }
+
+
 async def test_domain_error_is_translated(monkeypatch: pytest.MonkeyPatch, tracker) -> None:
     """Доменная ошибка отдаётся как понятная ошибка инструмента."""
     tasks_service, _ = tracker
@@ -352,3 +426,12 @@ async def test_read_scope_cannot_use_write_tools(monkeypatch: pytest.MonkeyPatch
         await wt.delete_task(FakeContext(), task_key="PROJ-142", confirm=True)
     with pytest.raises(ToolError):
         await wt.add_comment(FakeContext(), task_key="PROJ-142", body="Текст")
+    with pytest.raises(ToolError):
+        await wt.set_task_dates(FakeContext(), task_key="PROJ-142", due_date="2026-09-30")
+    with pytest.raises(ToolError):
+        await wt.create_milestone(
+            FakeContext(),
+            project_key="PROJ",
+            title="MVP",
+            due_date="2026-09-30",
+        )

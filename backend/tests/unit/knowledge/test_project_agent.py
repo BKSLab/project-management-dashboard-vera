@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -18,7 +18,21 @@ from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.tasks import ProjectTaskStatistics, TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.wbs_nodes import WbsNodesRepository
+from src.schemas.calendar import (
+    CalendarRangeSchema,
+    CalendarRiskReasonSchema,
+    CalendarSummarySchema,
+    CalendarTaskSchema,
+)
+from src.schemas.calendar_scenarios import (
+    ScenarioChangeSource,
+    ScenarioNormalizedChangeSchema,
+    ScenarioPreviewResponseSchema,
+    ScenarioTaskDatesSchema,
+)
 from src.schemas.knowledge import KnowledgeChatMessageSchema
+from src.services.calendar import CalendarService
+from src.services.calendar_scenarios import CalendarScenarioService
 from src.services.project_agent import (
     PROJECT_DESCRIPTION_LIMIT,
     AgentOutput,
@@ -501,3 +515,175 @@ async def test_query_condensation_receives_history_and_drives_both_searches() ->
         limit=30,
     )
     runtime.embedding_client.get_embedding.assert_awaited_once_with("Кто выполняет задачу PROJ-12?")
+
+
+@pytest.mark.asyncio
+async def test_agent_calendar_tool_explains_backend_risk_result() -> None:
+    service, project, runtime = build_service()
+    now = datetime.now(UTC)
+    service.calendar_service = AsyncMock(spec=CalendarService)
+    service.calendar_service.get_range.return_value = SimpleNamespace(
+        range=CalendarRangeSchema(
+            date_from=date(2026, 9, 1),
+            date_to=date(2026, 9, 30),
+            today=date(2026, 9, 2),
+        ),
+        summary=CalendarSummarySchema(
+            overdue=1,
+            due_soon=0,
+            unscheduled=0,
+            drifted=0,
+            dependency_risks=1,
+        ),
+        tasks=[
+            CalendarTaskSchema(
+                id=7,
+                key="PROJ-12",
+                title="Подготовить паспорт рисков",
+                start_date=date(2026, 9, 1),
+                due_date=date(2026, 9, 5),
+                baseline_start_date=None,
+                baseline_due_date=None,
+                drift_days=None,
+                stage_id=3,
+                wbs_node_id=None,
+                priority=TaskPriority.HIGH,
+                assignee="Анна",
+                is_done=False,
+                is_overdue=False,
+                is_due_soon=False,
+                risk_level="high",
+                risk_reasons=[
+                    CalendarRiskReasonSchema(
+                        code="NEGATIVE_SLACK",
+                        message="Отрицательный резерв 2 дн.",
+                        days=2,
+                        task_key="PROJ-11",
+                    )
+                ],
+                updated_at=now,
+            )
+        ],
+        milestones=[],
+    )
+
+    async def select_calendar(*, schema, content, **_kwargs):
+        if schema is AgentToolPlan:
+            return AgentToolPlan(
+                calls=[
+                    AgentToolCall(
+                        name=StructuredToolName.CALENDAR,
+                        date_from=date(2026, 9, 1),
+                        date_to=date(2026, 9, 30),
+                    )
+                ]
+            )
+        payload = json.loads(content)
+        calendar = payload["current_postgres_state"]["tool_results"]["get_calendar"]
+        assert calendar["tasks"][0]["risk_reasons"][0]["code"] == "NEGATIVE_SLACK"
+        return AgentOutput(answer="Риск рассчитан календарным сервисом.", source_ids=[])
+
+    runtime.llm_client.get_structured_response.side_effect = select_calendar
+
+    await service.ask(project=project, question="Почему сроки под угрозой?", history=[])
+
+    service.calendar_service.get_range.assert_awaited_once()
+    assert service.calendar_service.get_range.await_args.kwargs["date_from"] == date(2026, 9, 1)
+
+
+@pytest.mark.asyncio
+async def test_agent_preview_tool_calls_read_only_scenario_service() -> None:
+    service, project, runtime = build_service()
+    task = service.tasks_repository.search_ranked.return_value[0]
+    task.start_date = date(2026, 9, 1)
+    task.due_date = date(2026, 9, 5)
+    service.tasks_repository.get_by_project_number.return_value = task
+    service.scenario_service = AsyncMock(spec=CalendarScenarioService)
+    service.scenario_service.preview.return_value = ScenarioPreviewResponseSchema(
+        changes=[
+            ScenarioNormalizedChangeSchema(
+                task_id=task.id,
+                task_key="PROJ-12",
+                task_title=task.title,
+                current=ScenarioTaskDatesSchema(
+                    start_date=date(2026, 9, 1),
+                    due_date=date(2026, 9, 5),
+                ),
+                proposed=ScenarioTaskDatesSchema(
+                    start_date=date(2026, 9, 6),
+                    due_date=date(2026, 9, 10),
+                ),
+                expected_updated_at=task.updated_at,
+                source=ScenarioChangeSource.DIRECT,
+                reasons=[],
+            )
+        ],
+        conflicts=[],
+        consequences_count=0,
+        can_apply=True,
+    )
+
+    async def select_preview(*, schema, content, **_kwargs):
+        if schema is AgentToolPlan:
+            return AgentToolPlan(
+                calls=[
+                    AgentToolCall(
+                        name=StructuredToolName.PREVIEW_SCHEDULE_CHANGE,
+                        task_key="PROJ-12",
+                        shift_days=5,
+                    )
+                ]
+            )
+        payload = json.loads(content)
+        preview = payload["current_postgres_state"]["tool_results"]["preview_schedule_change"]
+        assert preview["changes"][0]["proposed"]["due_date"] == "2026-09-10"
+        return AgentOutput(answer="Это только preview, изменения не применены.", source_ids=[])
+
+    runtime.llm_client.get_structured_response.side_effect = select_preview
+
+    answer = await service.ask(project=project, question="Что если сдвинуть PROJ-12?", history=[])
+
+    assert "не применены" in answer.answer
+    service.scenario_service.preview.assert_awaited_once_with(
+        project.id,
+        [
+            {
+                "task_id": task.id,
+                "start_date": date(2026, 9, 6),
+                "due_date": date(2026, 9, 10),
+            }
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_accepts_validated_milestone_semantic_source() -> None:
+    service, project, runtime = build_service()
+    runtime.qdrant_client.search.return_value = [
+        KnowledgeSearchHit(
+            score=0.9,
+            payload={
+                "source_id": "milestone:4",
+                "entity_type": "milestone",
+                "entity_id": "4",
+                "title": "MVP",
+                "text": "Описание контрольной точки.",
+            },
+        )
+    ]
+
+    async def cite_milestone(*, schema, content, **_kwargs):
+        if schema is AgentToolPlan:
+            return AgentToolPlan(entity_type="milestone")
+        payload = json.loads(content)
+        milestone = next(
+            item for item in payload["retrieval_context"] if item["entity_type"] == "milestone"
+        )
+        return AgentOutput(answer="Веха описана.", source_ids=[milestone["source_handle"]])
+
+    runtime.llm_client.get_structured_response.side_effect = cite_milestone
+
+    answer = await service.ask(project=project, question="Что входит в MVP?", history=[])
+
+    assert answer.sources[0].source_id == "milestone:4"
+    assert answer.sources[0].entity_type == "milestone"

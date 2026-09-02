@@ -71,3 +71,13 @@ class TaskNumberAllocationError(TasksServiceError):
     @property
     def detail(self) -> str:
         return "Не удалось выделить номер задачи. Повторите попытку."
+
+
+class TaskDateRangeError(TasksServiceError):
+    """Начало задачи находится после её дедлайна."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    detail = "Дата начала задачи не может быть позже даты завершения."
+
+    def __init__(self):
+        super().__init__(error_details=self.detail)

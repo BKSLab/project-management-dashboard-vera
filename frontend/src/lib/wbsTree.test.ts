@@ -34,6 +34,7 @@ function task(
         wbs_node_id: wbsNodeId,
         priority: "MEDIUM",
         assignee: null,
+        start_date: null,
         due_date: dueDate,
         is_done: isDone,
     };

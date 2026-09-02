@@ -65,6 +65,36 @@ class TaskActivityRepository:
                 f"Ошибка получения истории проекта id={project_id}."
             ) from error
 
+    async def get_recent_due_date_changes(
+        self,
+        *,
+        project_id: int,
+        limit: int = 12,
+    ) -> list[TaskActivity]:
+        """Возвращает последние переносы дедлайнов задач проекта."""
+        try:
+            result: Result = await self.db_session.execute(
+                select(TaskActivity)
+                .join(Task, Task.id == TaskActivity.task_id)
+                .where(
+                    Task.project_id == project_id,
+                    TaskActivity.event_type == TaskActivityEventType.DUE_DATE_CHANGED,
+                )
+                .order_by(TaskActivity.created_at.desc(), TaskActivity.id.desc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось получить переносы сроков проекта id=%s.",
+                project_id,
+                exc_info=True,
+            )
+            raise TaskActivityRepositoryError(
+                f"Ошибка получения переносов сроков проекта id={project_id}."
+            ) from error
+
     async def save(
         self,
         task_id: int,

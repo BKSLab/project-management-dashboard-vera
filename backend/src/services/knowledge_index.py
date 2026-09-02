@@ -15,6 +15,7 @@ from src.knowledge.documents import (
     build_attachment_chunks,
     build_comment_document,
     build_document_chunks,
+    build_milestone_document,
     build_project_document,
     build_task_document,
     build_wbs_paths,
@@ -22,6 +23,7 @@ from src.knowledge.documents import (
 from src.knowledge.extract import extract_indexable_text
 from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
 from src.repositories.documents import DocumentsRepository
+from src.repositories.milestones import MilestonesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
@@ -59,6 +61,7 @@ class KnowledgeIndexService:
         embedding_batch_size: int,
         chunk_target_chars: int,
         chunk_overlap_chars: int,
+        milestones_repository: MilestonesRepository | None = None,
         runtime: KnowledgeRuntime | None = None,
     ) -> None:
         self.projects_repository = projects_repository
@@ -71,6 +74,7 @@ class KnowledgeIndexService:
         self.embedding_batch_size = embedding_batch_size
         self.chunk_target_chars = chunk_target_chars
         self.chunk_overlap_chars = chunk_overlap_chars
+        self.milestones_repository = milestones_repository
         self.runtime = runtime or get_knowledge_runtime()
 
     async def process(self, job: KnowledgeIndexJob) -> int:
@@ -108,6 +112,7 @@ class KnowledgeIndexService:
                 KnowledgeEntityType.DOCUMENT: self._wiki_documents,
                 KnowledgeEntityType.COMMENT: self._comment_documents,
                 KnowledgeEntityType.ATTACHMENT: self._attachment_documents,
+                KnowledgeEntityType.MILESTONE: self._milestone_documents,
             }
             documents = tuple(await builders[job.entity_type](job.project_id, entity_id))
         return PreparedIndexAction(
@@ -176,10 +181,16 @@ class KnowledgeIndexService:
         documents = await self.documents_repository.get_by_project(project_id)
         comments = await self.comments_repository.get_for_tasks(task_ids)
         attachments = await self.attachments_repository.get_for_tasks(task_ids)
+        milestones = (
+            await self.milestones_repository.get_by_project(project_id)
+            if self.milestones_repository is not None
+            else []
+        )
 
         task_by_id = {task.id: task for task in tasks}
         wbs_paths = build_wbs_paths(nodes)
         chunks: list[KnowledgeDocument] = [build_project_document(project)]
+        chunks.extend(build_milestone_document(milestone) for milestone in milestones)
         chunks.extend(
             build_task_document(
                 task,
@@ -346,6 +357,18 @@ class KnowledgeIndexService:
         if task is None or project is None or task.project_id != project_id:
             return []
         return await self._attachment_chunks(attachment, task, project)
+
+    async def _milestone_documents(
+        self,
+        project_id: int,
+        entity_id: int,
+    ) -> list[KnowledgeDocument]:
+        if self.milestones_repository is None:
+            return []
+        milestone = await self.milestones_repository.get_by_id(entity_id)
+        if milestone is None or milestone.project_id != project_id:
+            return []
+        return [build_milestone_document(milestone)]
 
     def _document_chunks(self, document) -> list[KnowledgeDocument]:
         return build_document_chunks(

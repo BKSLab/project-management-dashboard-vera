@@ -7,12 +7,13 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.project_stages import ProjectStage
-from src.db.models.tasks import Task
+from src.db.models.tasks import Task, TaskPriority
 from src.exceptions.tasks import (
     TaskNumberAlreadyExistsRepositoryError,
     TasksRepositoryError,
 )
 from src.utils.db_errors import get_integrity_constraint_name
+from src.utils.deadlines import due_soon_sql, overdue_sql
 from src.utils.fts import (
     EXCERPT_HEADLINE_OPTIONS,
     HIGHLIGHT_START,
@@ -36,11 +37,185 @@ class ProjectTaskStatistics:
     by_assignee: dict[str, int]
 
 
+@dataclass(frozen=True, slots=True)
+class CalendarTaskCounts:
+    """Счётчики задач для сводки календаря."""
+
+    overdue: int
+    due_soon: int
+    unscheduled: int
+    drifted: int
+
+
 class TasksRepository:
     """Репозиторий задач проекта."""
 
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
+
+    async def get_calendar_range(
+        self,
+        *,
+        project_id: int,
+        date_from: date,
+        date_to: date,
+        stage_id: int | None = None,
+        priority: TaskPriority | None = None,
+        assignee: str | None = None,
+        wbs_node_id: int | None = None,
+    ) -> list[Task]:
+        """Возвращает задачи, чьи плановые интервалы пересекают диапазон."""
+        try:
+            stmt = select(Task).where(
+                Task.project_id == project_id,
+                Task.due_date >= date_from,
+                func.coalesce(Task.start_date, Task.due_date) <= date_to,
+            )
+            stmt = _apply_calendar_filters(
+                stmt,
+                stage_id=stage_id,
+                priority=priority,
+                assignee=assignee,
+                wbs_node_id=wbs_node_id,
+            )
+            result: Result = await self.db_session.execute(
+                stmt.order_by(Task.due_date, Task.position, Task.id)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось получить диапазон календаря проекта id=%s.",
+                project_id,
+                exc_info=True,
+            )
+            raise TasksRepositoryError("Ошибка получения диапазона календаря.") from error
+
+    async def get_unscheduled_page(
+        self,
+        *,
+        project_id: int,
+        cursor: int | None,
+        limit: int,
+        stage_id: int | None = None,
+        priority: TaskPriority | None = None,
+        assignee: str | None = None,
+        wbs_node_id: int | None = None,
+    ) -> list[Task]:
+        """Возвращает страницу задач без дедлайна с курсором по id."""
+        try:
+            stmt = select(Task).where(Task.project_id == project_id, Task.due_date.is_(None))
+            if cursor is not None:
+                stmt = stmt.where(Task.id > cursor)
+            stmt = _apply_calendar_filters(
+                stmt,
+                stage_id=stage_id,
+                priority=priority,
+                assignee=assignee,
+                wbs_node_id=wbs_node_id,
+            )
+            result: Result = await self.db_session.execute(stmt.order_by(Task.id).limit(limit + 1))
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось получить задачи без срока проекта id=%s.",
+                project_id,
+                exc_info=True,
+            )
+            raise TasksRepositoryError("Ошибка получения задач без срока.") from error
+
+    async def get_calendar_counts(
+        self,
+        *,
+        project_id: int,
+        today: date,
+        soon_until: date,
+        stage_id: int | None = None,
+        priority: TaskPriority | None = None,
+        assignee: str | None = None,
+        wbs_node_id: int | None = None,
+    ) -> CalendarTaskCounts:
+        """Считает сигналы срока по всему проекту с учётом фильтров."""
+        try:
+            stmt = (
+                select(
+                    func.count(Task.id)
+                    .filter(
+                        overdue_sql(
+                            due_date_column=Task.due_date,
+                            is_done_column=ProjectStage.is_done_stage,
+                            today=today,
+                        )
+                    )
+                    .label("overdue"),
+                    func.count(Task.id)
+                    .filter(
+                        due_soon_sql(
+                            due_date_column=Task.due_date,
+                            is_done_column=ProjectStage.is_done_stage,
+                            today=today,
+                            soon_until=soon_until,
+                        )
+                    )
+                    .label("due_soon"),
+                    func.count(Task.id).filter(Task.due_date.is_(None)).label("unscheduled"),
+                    func.count(Task.id)
+                    .filter(
+                        Task.baseline_due_date.is_not(None),
+                        Task.due_date.is_not(None),
+                        Task.due_date != Task.baseline_due_date,
+                    )
+                    .label("drifted"),
+                )
+                .join(ProjectStage, ProjectStage.id == Task.stage_id)
+                .where(Task.project_id == project_id)
+            )
+            stmt = _apply_calendar_filters(
+                stmt,
+                stage_id=stage_id,
+                priority=priority,
+                assignee=assignee,
+                wbs_node_id=wbs_node_id,
+            )
+            row = (await self.db_session.execute(stmt)).one()
+            return CalendarTaskCounts(
+                overdue=int(row.overdue),
+                due_soon=int(row.due_soon),
+                unscheduled=int(row.unscheduled),
+                drifted=int(row.drifted),
+            )
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось посчитать календарь проекта id=%s.",
+                project_id,
+                exc_info=True,
+            )
+            raise TasksRepositoryError("Ошибка подсчёта календаря.") from error
+
+    async def get_calendar_assignees(self, *, project_id: int) -> list[str]:
+        """Возвращает уникальные непустые подписи исполнителей проекта."""
+        try:
+            result = await self.db_session.execute(
+                select(Task.assignee)
+                .where(
+                    Task.project_id == project_id,
+                    Task.assignee.is_not(None),
+                    Task.assignee != "",
+                )
+                .distinct()
+                .order_by(Task.assignee)
+            )
+            return [value for value in result.scalars().all() if value]
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось получить исполнителей проекта id=%s.",
+                project_id,
+                exc_info=True,
+            )
+            raise TasksRepositoryError("Ошибка получения исполнителей календаря.") from error
 
     async def get_by_project(
         self,
@@ -99,6 +274,23 @@ class TasksRepository:
             await self.db_session.rollback()
             logger.error("❌ Не удалось получить задачу id=%s.", task_id, exc_info=True)
             raise TasksRepositoryError(f"Ошибка получения задачи id={task_id}.") from error
+
+    async def get_by_project_number(self, project_id: int, number: int) -> Task | None:
+        """Возвращает задачу по отображаемому номеру внутри проекта."""
+        try:
+            result: Result = await self.db_session.execute(
+                select(Task).where(Task.project_id == project_id, Task.number == number)
+            )
+            return result.scalar_one_or_none()
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось получить задачу номер=%s проекта id=%s.",
+                number,
+                project_id,
+                exc_info=True,
+            )
+            raise TasksRepositoryError("Ошибка получения задачи по номеру.") from error
 
     async def get_by_ids(self, task_ids: set[int]) -> list[Task]:
         """Возвращает задачи по набору идентификаторов.
@@ -186,7 +378,13 @@ class TasksRepository:
                         Task.assignee,
                         func.count(Task.id).label("tasks_count"),
                         func.count(Task.id)
-                        .filter(ProjectStage.is_done_stage.is_(False), Task.due_date < today)
+                        .filter(
+                            overdue_sql(
+                                due_date_column=Task.due_date,
+                                is_done_column=ProjectStage.is_done_stage,
+                                today=today,
+                            )
+                        )
                         .label("overdue_count"),
                     )
                     .join(ProjectStage, ProjectStage.id == Task.stage_id)
@@ -257,8 +455,11 @@ class TasksRepository:
                 .join(ProjectStage, ProjectStage.id == Task.stage_id)
                 .where(
                     Task.project_id == project_id,
-                    ProjectStage.is_done_stage.is_(False),
-                    Task.due_date < today,
+                    overdue_sql(
+                        due_date_column=Task.due_date,
+                        is_done_column=ProjectStage.is_done_stage,
+                        today=today,
+                    ),
                 )
                 .order_by(Task.due_date, Task.id)
                 .limit(limit)
@@ -499,15 +700,21 @@ class TasksRepository:
                     func.count().label("total"),
                     func.count().filter(ProjectStage.is_done_stage.is_(True)).label("done"),
                     func.count()
-                    .filter(and_(is_open, Task.due_date.is_not(None), Task.due_date < today))
+                    .filter(
+                        overdue_sql(
+                            due_date_column=Task.due_date,
+                            is_done_column=ProjectStage.is_done_stage,
+                            today=today,
+                        )
+                    )
                     .label("overdue"),
                     func.count()
                     .filter(
-                        and_(
-                            is_open,
-                            Task.due_date.is_not(None),
-                            Task.due_date >= today,
-                            Task.due_date <= soon_until,
+                        due_soon_sql(
+                            due_date_column=Task.due_date,
+                            is_done_column=ProjectStage.is_done_stage,
+                            today=today,
+                            soon_until=soon_until,
                         )
                     )
                     .label("due_soon"),
@@ -562,7 +769,17 @@ class TasksRepository:
                     )
                 )
                 .order_by(
-                    case((Task.due_date < today, 0), else_=1),
+                    case(
+                        (
+                            overdue_sql(
+                                due_date_column=Task.due_date,
+                                is_done_column=ProjectStage.is_done_stage,
+                                today=today,
+                            ),
+                            0,
+                        ),
+                        else_=1,
+                    ),
                     Task.due_date,
                     Task.id,
                 )
@@ -723,3 +940,23 @@ def _extract_task_number(search: str) -> int | None:
     """Возвращает номер задачи из запроса вида ``PROJ-142`` или ``142``."""
     candidate = search.strip().rsplit("-", maxsplit=1)[-1]
     return int(candidate) if candidate.isdigit() else None
+
+
+def _apply_calendar_filters(
+    stmt,
+    *,
+    stage_id: int | None,
+    priority: TaskPriority | None,
+    assignee: str | None,
+    wbs_node_id: int | None,
+):
+    """Добавляет к запросу единый набор календарных фильтров."""
+    if stage_id is not None:
+        stmt = stmt.where(Task.stage_id == stage_id)
+    if priority is not None:
+        stmt = stmt.where(Task.priority == priority)
+    if assignee is not None:
+        stmt = stmt.where(Task.assignee == assignee)
+    if wbs_node_id is not None:
+        stmt = stmt.where(Task.wbs_node_id == wbs_node_id)
+    return stmt

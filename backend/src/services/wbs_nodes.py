@@ -39,6 +39,7 @@ from src.schemas.wbs_nodes import (
 )
 from src.services.knowledge_events import KnowledgeEvents
 from src.services.tasks import build_task_key
+from src.utils.deadlines import is_task_overdue
 
 logger = logging.getLogger(__name__)
 
@@ -120,9 +121,11 @@ class WbsNodesService:
             overdue = sum(
                 1
                 for task in tasks
-                if task.stage_id not in done_stage_ids
-                and task.due_date is not None
-                and task.due_date < today
+                if is_task_overdue(
+                    due_date=task.due_date,
+                    is_done=task.stage_id in done_stage_ids,
+                    today=today,
+                )
             )
             return WbsStructureSchema(
                 nodes=[WbsNodeSchema.model_validate(node) for node in nodes],
@@ -576,6 +579,7 @@ def _to_compact_task(task: Task, project_key: str, is_done: bool) -> TaskCompact
         wbs_node_id=task.wbs_node_id,
         priority=task.priority,
         assignee=task.assignee,
+        start_date=task.start_date,
         due_date=task.due_date,
         is_done=is_done,
     )

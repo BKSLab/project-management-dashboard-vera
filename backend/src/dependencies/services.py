@@ -8,12 +8,14 @@ from src.dependencies.repositories import (
     DocumentLinksRepositoryDep,
     DocumentsRepositoryDep,
     KnowledgeIndexJobsRepositoryDep,
+    MilestonesRepositoryDep,
     ProjectMembersRepositoryDep,
     ProjectsRepositoryDep,
     ProjectStagesRepositoryDep,
     TaskActivityRepositoryDep,
     TaskAttachmentsRepositoryDep,
     TaskCommentsRepositoryDep,
+    TaskDependenciesRepositoryDep,
     TasksRepositoryDep,
     UnitOfWorkDep,
     UsersRepositoryDep,
@@ -22,16 +24,20 @@ from src.dependencies.repositories import (
 from src.dependencies.storage import AvatarStorageDep, TaskAttachmentStorageDep
 from src.services.api_tokens import ApiTokensService
 from src.services.auth import AuthService
+from src.services.calendar import CalendarService
+from src.services.calendar_scenarios import CalendarScenarioService
 from src.services.dashboard import DashboardService
 from src.services.document_links import DocumentLinksService
 from src.services.documents import DocumentsService
 from src.services.knowledge_events import KnowledgeEvents
+from src.services.milestones import MilestonesService
 from src.services.project_agent import ProjectAgentService
 from src.services.project_stages import ProjectStagesService
 from src.services.projects import ProjectsService
 from src.services.task_activity import TaskActivityService
 from src.services.task_attachments import TaskAttachmentsService
 from src.services.task_comments import TaskCommentsService
+from src.services.task_dependencies import TaskDependenciesService
 from src.services.tasks import TasksService
 from src.services.users import UsersService
 from src.services.wbs_nodes import WbsNodesService
@@ -165,6 +171,78 @@ def get_dashboard_service(
     )
 
 
+def get_calendar_service(
+    projects_repository: ProjectsRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    stages_repository: ProjectStagesRepositoryDep,
+    wbs_nodes_repository: WbsNodesRepositoryDep,
+    activity_repository: TaskActivityRepositoryDep,
+    milestones_repository: MilestonesRepositoryDep,
+    dependencies_repository: TaskDependenciesRepositoryDep,
+) -> CalendarService:
+    """Создаёт сервис календаря проекта."""
+    return CalendarService(
+        projects_repository=projects_repository,
+        tasks_repository=tasks_repository,
+        stages_repository=stages_repository,
+        wbs_nodes_repository=wbs_nodes_repository,
+        activity_repository=activity_repository,
+        milestones_repository=milestones_repository,
+        dependencies_repository=dependencies_repository,
+    )
+
+
+def get_calendar_scenario_service(
+    projects_repository: ProjectsRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    dependencies_repository: TaskDependenciesRepositoryDep,
+    milestones_repository: MilestonesRepositoryDep,
+    activity_repository: TaskActivityRepositoryDep,
+    unit_of_work: UnitOfWorkDep,
+) -> CalendarScenarioService:
+    """Создаёт сервис preview и применения календарных сценариев."""
+    return CalendarScenarioService(
+        projects_repository=projects_repository,
+        tasks_repository=tasks_repository,
+        dependencies_repository=dependencies_repository,
+        milestones_repository=milestones_repository,
+        activity_repository=activity_repository,
+        unit_of_work=unit_of_work,
+    )
+
+
+def get_milestones_service(
+    milestones_repository: MilestonesRepositoryDep,
+    projects_repository: ProjectsRepositoryDep,
+    wbs_nodes_repository: WbsNodesRepositoryDep,
+    unit_of_work: UnitOfWorkDep,
+    knowledge_events: KnowledgeEventsDep,
+) -> MilestonesService:
+    """Создаёт сервис проектных вех."""
+    return MilestonesService(
+        milestones_repository=milestones_repository,
+        projects_repository=projects_repository,
+        wbs_nodes_repository=wbs_nodes_repository,
+        unit_of_work=unit_of_work,
+        knowledge_events=knowledge_events,
+    )
+
+
+def get_task_dependencies_service(
+    dependencies_repository: TaskDependenciesRepositoryDep,
+    projects_repository: ProjectsRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    unit_of_work: UnitOfWorkDep,
+) -> TaskDependenciesService:
+    """Создаёт сервис графа зависимостей проекта."""
+    return TaskDependenciesService(
+        dependencies_repository=dependencies_repository,
+        projects_repository=projects_repository,
+        tasks_repository=tasks_repository,
+        unit_of_work=unit_of_work,
+    )
+
+
 def get_documents_service(
     documents_repository: DocumentsRepositoryDep,
     projects_repository: ProjectsRepositoryDep,
@@ -188,6 +266,12 @@ def get_project_agent_service(
     activity_repository: TaskActivityRepositoryDep,
     jobs_repository: KnowledgeIndexJobsRepositoryDep,
     unit_of_work: UnitOfWorkDep,
+    milestones_repository: MilestonesRepositoryDep,
+    calendar_service: Annotated[CalendarService, Depends(get_calendar_service)],
+    scenario_service: Annotated[
+        CalendarScenarioService,
+        Depends(get_calendar_scenario_service),
+    ],
 ) -> ProjectAgentService:
     """Создаёт Project Agent в рамках сессии доступного проекта."""
     return ProjectAgentService(
@@ -198,6 +282,9 @@ def get_project_agent_service(
         activity_repository=activity_repository,
         jobs_repository=jobs_repository,
         unit_of_work=unit_of_work,
+        milestones_repository=milestones_repository,
+        calendar_service=calendar_service,
+        scenario_service=scenario_service,
     )
 
 
@@ -274,6 +361,16 @@ ProjectStagesServiceDep = Annotated[
 TasksServiceDep = Annotated[TasksService, Depends(get_tasks_service)]
 WbsNodesServiceDep = Annotated[WbsNodesService, Depends(get_wbs_nodes_service)]
 DashboardServiceDep = Annotated[DashboardService, Depends(get_dashboard_service)]
+CalendarServiceDep = Annotated[CalendarService, Depends(get_calendar_service)]
+CalendarScenarioServiceDep = Annotated[
+    CalendarScenarioService,
+    Depends(get_calendar_scenario_service),
+]
+MilestonesServiceDep = Annotated[MilestonesService, Depends(get_milestones_service)]
+TaskDependenciesServiceDep = Annotated[
+    TaskDependenciesService,
+    Depends(get_task_dependencies_service),
+]
 DocumentsServiceDep = Annotated[DocumentsService, Depends(get_documents_service)]
 DocumentLinksServiceDep = Annotated[
     DocumentLinksService,

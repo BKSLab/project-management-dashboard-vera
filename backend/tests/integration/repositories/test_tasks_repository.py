@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.project_stages import ProjectStage
+from src.db.models.tasks import TaskPriority
 from src.exceptions.tasks import TaskNumberAlreadyExistsRepositoryError
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.tasks import TasksRepository
@@ -123,6 +124,177 @@ async def test_project_statistics_are_aggregated_without_loading_tasks(
     assert statistics.by_stage == {stage.id: 2}
     assert statistics.by_priority == {"HIGH": 1, "LOW": 1}
     assert statistics.by_assignee == {"Анна": 1, "не назначен": 1}
+
+
+@pytest.mark.asyncio
+async def test_calendar_range_is_inclusive_and_applies_all_filters(
+    db_session: AsyncSession,
+    stage: ProjectStage,
+) -> None:
+    repository = TasksRepository(db_session)
+    node = await WbsNodesRepository(db_session).save(
+        data={
+            "project_id": stage.project_id,
+            "parent_id": None,
+            "title": "Backend",
+            "position": 1000.0,
+        }
+    )
+    first = await repository.save(
+        data=task_data(
+            stage,
+            1,
+            priority="HIGH",
+            assignee="Анна",
+            due_date=TODAY,
+            wbs_node_id=node.id,
+        )
+    )
+    second = await repository.save(
+        data=task_data(
+            stage,
+            2,
+            priority="HIGH",
+            assignee="Анна",
+            due_date=TODAY + timedelta(days=2),
+            wbs_node_id=node.id,
+        )
+    )
+    await repository.save(
+        data=task_data(stage, 3, priority="LOW", due_date=TODAY + timedelta(days=1))
+    )
+    await repository.save(
+        data=task_data(
+            stage,
+            4,
+            priority="HIGH",
+            assignee="Анна",
+            due_date=TODAY - timedelta(days=1),
+        )
+    )
+
+    tasks = await repository.get_calendar_range(
+        project_id=stage.project_id,
+        date_from=TODAY,
+        date_to=TODAY + timedelta(days=2),
+        stage_id=stage.id,
+        priority=TaskPriority.HIGH,
+        assignee="Анна",
+        wbs_node_id=node.id,
+    )
+
+    assert [task.id for task in tasks] == [first.id, second.id]
+
+
+@pytest.mark.asyncio
+async def test_calendar_range_includes_intervals_that_cross_window(
+    db_session: AsyncSession,
+    stage: ProjectStage,
+) -> None:
+    repository = TasksRepository(db_session)
+    crossing = await repository.save(
+        data=task_data(
+            stage,
+            10,
+            start_date=TODAY - timedelta(days=10),
+            due_date=TODAY + timedelta(days=10),
+        )
+    )
+    single_day = await repository.save(data=task_data(stage, 11, due_date=TODAY))
+    await repository.save(
+        data=task_data(
+            stage,
+            12,
+            start_date=TODAY - timedelta(days=10),
+            due_date=TODAY - timedelta(days=2),
+        )
+    )
+
+    tasks = await repository.get_calendar_range(
+        project_id=stage.project_id,
+        date_from=TODAY - timedelta(days=1),
+        date_to=TODAY + timedelta(days=1),
+    )
+
+    assert {task.id for task in tasks} == {crossing.id, single_day.id}
+
+
+@pytest.mark.asyncio
+async def test_calendar_counts_ignore_done_deadlines_and_count_unscheduled(
+    db_session: AsyncSession,
+    stage: ProjectStage,
+) -> None:
+    done_stage = await ProjectStagesRepository(db_session).save(
+        data={
+            "project_id": stage.project_id,
+            "name": "Готово",
+            "order_index": 2,
+            "color": "#3fb950",
+            "is_done_stage": True,
+        }
+    )
+    repository = TasksRepository(db_session)
+    await repository.save(data=task_data(stage, 1, due_date=TODAY - timedelta(days=1)))
+    await repository.save(data=task_data(stage, 2, due_date=TODAY + timedelta(days=3)))
+    await repository.save(data=task_data(stage, 3, due_date=None))
+    await repository.save(
+        data=task_data(stage, 4, stage_id=done_stage.id, due_date=TODAY - timedelta(days=3))
+    )
+    await repository.save(
+        data=task_data(
+            stage,
+            5,
+            due_date=TODAY + timedelta(days=10),
+            baseline_due_date=TODAY + timedelta(days=8),
+        )
+    )
+
+    counts = await repository.get_calendar_counts(
+        project_id=stage.project_id,
+        today=TODAY,
+        soon_until=TODAY + timedelta(days=7),
+    )
+
+    assert counts.overdue == 1
+    assert counts.due_soon == 1
+    assert counts.unscheduled == 1
+    assert counts.drifted == 1
+
+
+@pytest.mark.asyncio
+async def test_unscheduled_tasks_use_stable_cursor_pagination(
+    db_session: AsyncSession,
+    stage: ProjectStage,
+) -> None:
+    repository = TasksRepository(db_session)
+    created = [
+        await repository.save(data=task_data(stage, number, due_date=None))
+        for number in range(1, 5)
+    ]
+
+    first_page = await repository.get_unscheduled_page(
+        project_id=stage.project_id,
+        cursor=None,
+        limit=2,
+    )
+    second_page = await repository.get_unscheduled_page(
+        project_id=stage.project_id,
+        cursor=first_page[1].id,
+        limit=2,
+    )
+
+    assert [task.id for task in first_page] == [task.id for task in created[:3]]
+    assert [task.id for task in second_page] == [task.id for task in created[2:]]
+
+
+@pytest.mark.asyncio
+async def test_calendar_due_date_index_exists(engine) -> None:
+    async with engine.connect() as connection:
+        result = await connection.exec_driver_sql(
+            "SELECT indexname FROM pg_indexes WHERE tablename = 'tasks'"
+        )
+
+    assert "ix_tasks_project_due_date" in set(result.scalars().all())
 
 
 @pytest.mark.asyncio

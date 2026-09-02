@@ -16,6 +16,7 @@ from src.exceptions.knowledge import KnowledgeProviderError
 from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
+from src.repositories.milestones import MilestonesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
@@ -235,5 +236,6 @@ def _build_index_service(*, session: AsyncSession, settings: Settings) -> Knowle
         embedding_batch_size=settings.knowledge.knowledge_embedding_batch_size,
         chunk_target_chars=settings.knowledge.knowledge_chunk_target_chars,
         chunk_overlap_chars=settings.knowledge.knowledge_chunk_overlap_chars,
+        milestones_repository=MilestonesRepository(session),
         runtime=get_knowledge_runtime(),
     )

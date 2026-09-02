@@ -98,7 +98,22 @@ export const endpoints = {
     projectStages: (projectId: number) => `${V1}/projects/${projectId}/stages`,
     stage: (stageId: number) => `${V1}/stages/${stageId}`,
     projectTasks: (projectId: number) => `${V1}/projects/${projectId}/tasks`,
+    projectCalendar: (projectId: number) => `${V1}/projects/${projectId}/calendar`,
+    projectCalendarUnscheduled: (projectId: number) =>
+        `${V1}/projects/${projectId}/calendar/unscheduled`,
+    projectCalendarScenarioPreview: (projectId: number) =>
+        `${V1}/projects/${projectId}/calendar/scenarios/preview`,
+    projectCalendarScenarioApply: (projectId: number) =>
+        `${V1}/projects/${projectId}/calendar/scenarios/apply`,
+    projectMilestones: (projectId: number) => `${V1}/projects/${projectId}/milestones`,
+    projectMilestone: (projectId: number, milestoneId: number) =>
+        `${V1}/projects/${projectId}/milestones/${milestoneId}`,
+    projectTaskDependencies: (projectId: number) =>
+        `${V1}/projects/${projectId}/task-dependencies`,
+    projectTaskDependency: (projectId: number, dependencyId: number) =>
+        `${V1}/projects/${projectId}/task-dependencies/${dependencyId}`,
     task: (taskId: number) => `${V1}/tasks/${taskId}`,
+    taskBaseline: (taskId: number) => `${V1}/tasks/${taskId}/baseline`,
     taskMove: (taskId: number) => `${V1}/tasks/${taskId}/move`,
     taskComments: (taskId: number) => `${V1}/tasks/${taskId}/comments`,
     taskActivity: (taskId: number) => `${V1}/tasks/${taskId}/activity`,
@@ -135,6 +150,13 @@ export const queryKeys = {
     stages: (projectId: number) => ["projects", projectId, "stages"] as const,
     tasks: (projectId: number, search?: string) =>
         ["projects", projectId, "tasks", search ?? ""] as const,
+    calendar: (projectId: number, query: string) =>
+        ["projects", projectId, "calendar", query] as const,
+    calendarUnscheduled: (projectId: number, query: string) =>
+        ["projects", projectId, "calendar", "unscheduled", query] as const,
+    milestones: (projectId: number) => ["projects", projectId, "milestones"] as const,
+    taskDependencies: (projectId: number) =>
+        ["projects", projectId, "task-dependencies"] as const,
     task: (taskId: number) => ["tasks", taskId] as const,
     taskComments: (taskId: number) => ["tasks", taskId, "comments"] as const,
     taskActivity: (taskId: number) => ["tasks", taskId, "activity"] as const,

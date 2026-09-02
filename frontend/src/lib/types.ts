@@ -139,7 +139,11 @@ export interface Task {
     priority: TaskPriority;
     role: TaskRole | null;
     assignee: string | null;
+    start_date: string | null;
     due_date: string | null;
+    baseline_start_date: string | null;
+    baseline_due_date: string | null;
+    completed_at: string | null;
     position: number;
     created_at: string;
     updated_at: string;
@@ -158,8 +162,188 @@ export interface TaskCompact {
     wbs_node_id: number | null;
     priority: TaskPriority;
     assignee: string | null;
+    start_date: string | null;
     due_date: string | null;
     is_done: boolean;
+}
+
+export interface CalendarRange {
+    date_from: string;
+    date_to: string;
+    today: string;
+}
+
+export interface CalendarProject {
+    start_date: string | null;
+    due_date: string | null;
+}
+
+export interface CalendarStage {
+    id: number;
+    name: string;
+    color: string;
+    order_index: number;
+    is_done_stage: boolean;
+}
+
+export interface CalendarWbsNode {
+    id: number;
+    parent_id: number | null;
+    title: string;
+    position: number;
+}
+
+export interface CalendarTask {
+    id: number;
+    key: string;
+    title: string;
+    start_date: string | null;
+    due_date: string | null;
+    baseline_start_date: string | null;
+    baseline_due_date: string | null;
+    drift_days: number | null;
+    stage_id: number;
+    wbs_node_id: number | null;
+    priority: TaskPriority;
+    assignee: string | null;
+    is_done: boolean;
+    is_overdue: boolean;
+    is_due_soon: boolean;
+    risk_level: "low" | "medium" | "high" | null;
+    risk_reasons: CalendarRiskReason[];
+    updated_at: string;
+}
+
+export interface CalendarRiskReason {
+    code: string;
+    message: string;
+    days: number | null;
+    task_key?: string | null;
+    milestone_title?: string | null;
+}
+
+export interface CalendarDateChange {
+    id: number;
+    task_id: number;
+    task_key: string;
+    task_title: string;
+    from_date: string | null;
+    to_date: string | null;
+    changed_at: string;
+}
+
+export interface CalendarSummary {
+    overdue: number;
+    due_soon: number;
+    unscheduled: number;
+    drifted: number;
+    dependency_risks: number;
+}
+
+export interface TaskDependency {
+    id: number;
+    project_id: number;
+    predecessor_task_id: number;
+    successor_task_id: number;
+    dependency_type: "FINISH_TO_START";
+    lag_days: number;
+    created_at: string;
+}
+
+export interface TaskDependencyInput {
+    predecessor_task_id: number;
+    successor_task_id: number;
+    dependency_type: "FINISH_TO_START";
+    lag_days: number;
+}
+
+export interface ScenarioTaskDates {
+    start_date: string | null;
+    due_date: string | null;
+}
+
+export interface ScenarioChangeInput extends ScenarioTaskDates {
+    task_id: number;
+}
+
+export interface ScenarioNormalizedChange {
+    task_id: number;
+    task_key: string;
+    task_title: string;
+    current: ScenarioTaskDates;
+    proposed: ScenarioTaskDates;
+    expected_updated_at: string;
+    source: "DIRECT" | "CASCADE";
+    reasons: CalendarRiskReason[];
+}
+
+export interface ScenarioConflict {
+    code: string;
+    message: string;
+    task_id: number;
+    task_key: string;
+}
+
+export interface ScenarioPreview {
+    changes: ScenarioNormalizedChange[];
+    conflicts: ScenarioConflict[];
+    consequences_count: number;
+    can_apply: boolean;
+}
+
+export interface ScenarioApplyResult {
+    applied_count: number;
+    task_ids: number[];
+}
+
+export type ProjectMilestoneStatus = "PLANNED" | "ACHIEVED";
+
+export interface ProjectMilestone {
+    id: number;
+    project_id: number;
+    title: string;
+    due_date: string;
+    status: ProjectMilestoneStatus;
+    wbs_node_id: number | null;
+    description_md: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface ProjectMilestoneInput {
+    title: string;
+    due_date: string;
+    status: ProjectMilestoneStatus;
+    wbs_node_id: number | null;
+    description_md: string | null;
+}
+
+export interface CalendarMilestone {
+    id: number | null;
+    title: string;
+    due_date: string;
+    status: ProjectMilestoneStatus;
+    wbs_node_id: number | null;
+    description_md: string | null;
+    is_system: boolean;
+}
+
+export interface ProjectCalendar {
+    range: CalendarRange;
+    project: CalendarProject;
+    tasks: CalendarTask[];
+    stages: CalendarStage[];
+    wbs_nodes: CalendarWbsNode[];
+    assignees: string[];
+    summary: CalendarSummary;
+    recent_changes: CalendarDateChange[];
+    milestones: CalendarMilestone[];
+    dependencies: TaskDependency[];
+}
+
+export interface UnscheduledTasksPage {
+    items: CalendarTask[];
+    next_cursor: number | null;
 }
 
 export interface TaskCreate {
@@ -170,6 +354,7 @@ export interface TaskCreate {
     priority?: TaskPriority;
     role?: TaskRole | null;
     assignee?: string | null;
+    start_date?: string | null;
     due_date?: string | null;
 }
 
@@ -179,12 +364,15 @@ export interface TaskUpdate {
     priority?: TaskPriority;
     role?: TaskRole | null;
     assignee?: string | null;
+    start_date?: string | null;
     due_date?: string | null;
 }
 
 export type TaskActivityEventType =
     | "STAGE_CHANGED"
     | "DUE_DATE_CHANGED"
+    | "START_DATE_CHANGED"
+    | "BASELINE_CHANGED"
     | "DESCRIPTION_CHANGED"
     | "PRIORITY_CHANGED"
     | "ASSIGNEE_CHANGED"
@@ -284,7 +472,8 @@ export type KnowledgeEntityType =
     | "task"
     | "document"
     | "comment"
-    | "attachment";
+    | "attachment"
+    | "milestone";
 
 export interface KnowledgeSource {
     source_id: string;

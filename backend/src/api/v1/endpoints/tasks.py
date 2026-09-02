@@ -209,6 +209,29 @@ async def update_task(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
+@router.post(
+    path="/tasks/{task_id}/baseline",
+    dependencies=[Depends(get_accessible_task)],
+    status_code=status.HTTP_200_OK,
+    summary="Зафиксировать baseline задачи",
+    description="Копирует текущие плановые даты в отдельный утверждённый baseline.",
+    operation_id="fixTaskBaseline",
+    responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
+    response_model=TaskSchema,
+)
+async def fix_task_baseline(
+    task_id: Annotated[int, Path(gt=0, description="Идентификатор задачи.")],
+    service: TasksServiceDep,
+) -> TaskSchema:
+    """Фиксирует текущий план задачи как baseline."""
+    logger.info("🚀 Запрос POST /tasks/%s/baseline.", task_id)
+    try:
+        return await service.fix_baseline(task_id=task_id)
+    except TaskErrors as error:
+        logger.exception("❌ Ошибка POST /tasks/%s/baseline. Детали: %s", task_id, error)
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
 @router.patch(
     path="/tasks/{task_id}/move",
     dependencies=[Depends(get_accessible_task)],

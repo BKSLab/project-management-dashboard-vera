@@ -13,7 +13,9 @@ from .base import Base, TimestampMixin
 if TYPE_CHECKING:
     from .documents import Document
     from .project_members import ProjectMember
+    from .project_milestones import ProjectMilestone
     from .project_stages import ProjectStage
+    from .task_dependencies import TaskDependency
     from .tasks import Task
     from .users import User
     from .wbs_nodes import WbsNode
@@ -132,6 +134,18 @@ class Project(Base, TimestampMixin):
     )
     tasks: Mapped[list[Task]] = relationship(
         "Task",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    milestones: Mapped[list[ProjectMilestone]] = relationship(
+        "ProjectMilestone",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    task_dependencies: Mapped[list[TaskDependency]] = relationship(
+        "TaskDependency",
         back_populates="project",
         cascade="all, delete-orphan",
         passive_deletes=True,

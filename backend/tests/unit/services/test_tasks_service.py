@@ -13,6 +13,7 @@ from src.exceptions.project_stages import (
 )
 from src.exceptions.projects import ProjectNotFoundError
 from src.exceptions.tasks import (
+    TaskDateRangeError,
     TaskNotFoundError,
     TaskNumberAllocationError,
     TaskNumberAlreadyExistsRepositoryError,
@@ -39,7 +40,11 @@ def make_task(
     stage_id: int = 1,
     priority: TaskPriority = TaskPriority.MEDIUM,
     assignee: str | None = None,
+    start_date: date | None = None,
     due_date: date | None = None,
+    baseline_start_date: date | None = None,
+    baseline_due_date: date | None = None,
+    completed_at: datetime | None = None,
     description_md: str | None = None,
 ) -> SimpleNamespace:
     """Возвращает дублёр задачи со всеми полями схемы ответа."""
@@ -55,7 +60,11 @@ def make_task(
         priority=priority,
         role=None,
         assignee=assignee,
+        start_date=start_date,
         due_date=due_date,
+        baseline_start_date=baseline_start_date,
+        baseline_due_date=baseline_due_date,
+        completed_at=completed_at,
         position=1000.0,
         created_at=now,
         updated_at=now,
@@ -285,6 +294,63 @@ async def test_update_task_reindexes_semantic_fields() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_task_records_start_date_without_reindexing() -> None:
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    task = make_task(start_date=date(2026, 9, 1), due_date=date(2026, 9, 8))
+    tasks_repository.get_by_id.return_value = task
+    tasks_repository.update.return_value = make_task(
+        start_date=date(2026, 9, 2),
+        due_date=date(2026, 9, 8),
+    )
+    activity_repository = AsyncMock(spec=TaskActivityRepository)
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+
+    await build_service(
+        tasks_repository,
+        activity_repository=activity_repository,
+        knowledge_events=knowledge_events,
+    ).update_task(task_id=10, data={"start_date": date(2026, 9, 2)})
+
+    event = activity_repository.save.await_args.kwargs
+    assert event["event_type"] == TaskActivityEventType.START_DATE_CHANGED
+    assert event["from_value"] == "2026-09-01"
+    assert event["to_value"] == "2026-09-02"
+    knowledge_events.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_task_rejects_start_after_due_date() -> None:
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = make_task(due_date=date(2026, 9, 8))
+
+    with pytest.raises(TaskDateRangeError) as exc_info:
+        await build_service(tasks_repository).update_task(
+            task_id=10,
+            data={"start_date": date(2026, 9, 9)},
+        )
+
+    assert exc_info.value.status_code == 422
+    tasks_repository.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_task_rejects_reverse_schedule_before_writes() -> None:
+    tasks_repository = AsyncMock(spec=TasksRepository)
+
+    with pytest.raises(TaskDateRangeError):
+        await build_service(tasks_repository).create_task(
+            project_id=1,
+            data={
+                "title": "Обратный интервал",
+                "start_date": date(2026, 9, 9),
+                "due_date": date(2026, 9, 8),
+            },
+        )
+
+    tasks_repository.save.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_update_task_skips_history_when_values_unchanged() -> None:
     tasks_repository = AsyncMock(spec=TasksRepository)
     task = make_task(priority=TaskPriority.LOW, assignee="Иван")
@@ -309,8 +375,8 @@ async def test_move_task_records_stage_change_and_appends_to_end() -> None:
     tasks_repository.update.return_value = make_task(stage_id=2)
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
     stages_repository.get_by_id.side_effect = [
-        SimpleNamespace(id=2, project_id=1, name="В работе"),
-        SimpleNamespace(id=1, project_id=1, name="Бэклог"),
+        SimpleNamespace(id=2, project_id=1, name="В работе", is_done_stage=False),
+        SimpleNamespace(id=1, project_id=1, name="Бэклог", is_done_stage=False),
     ]
     activity_repository = AsyncMock(spec=TaskActivityRepository)
     knowledge_events = AsyncMock(spec=KnowledgeEvents)
@@ -336,7 +402,12 @@ async def test_move_task_rejects_stage_of_another_project() -> None:
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_id.return_value = make_task(stage_id=1)
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
-    stages_repository.get_by_id.return_value = SimpleNamespace(id=9, project_id=5, name="Чужая")
+    stages_repository.get_by_id.return_value = SimpleNamespace(
+        id=9,
+        project_id=5,
+        name="Чужая",
+        is_done_stage=False,
+    )
 
     with pytest.raises(ProjectStageForeignProjectError) as exc_info:
         await build_service(tasks_repository, stages_repository).move_task(
@@ -353,11 +424,76 @@ async def test_move_task_within_same_stage_without_position_is_noop() -> None:
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_id.return_value = make_task(stage_id=2)
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
-    stages_repository.get_by_id.return_value = SimpleNamespace(id=2, project_id=1, name="Работа")
+    stages_repository.get_by_id.return_value = SimpleNamespace(
+        id=2,
+        project_id=1,
+        name="Работа",
+        is_done_stage=False,
+    )
 
     await build_service(tasks_repository, stages_repository).move_task(task_id=10, stage_id=2)
 
     tasks_repository.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_move_task_sets_and_clears_completed_at_at_stage_transition() -> None:
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    open_task = make_task(stage_id=1)
+    done_task = make_task(stage_id=2, completed_at=datetime.now(UTC))
+    tasks_repository.get_by_id.side_effect = [open_task, done_task]
+    tasks_repository.update.side_effect = [done_task, make_task(stage_id=1)]
+    stages_repository = AsyncMock(spec=ProjectStagesRepository)
+    stages_repository.get_by_id.side_effect = [
+        SimpleNamespace(id=2, project_id=1, name="Готово", is_done_stage=True),
+        SimpleNamespace(id=1, project_id=1, name="Работа", is_done_stage=False),
+        SimpleNamespace(id=1, project_id=1, name="Работа", is_done_stage=False),
+        SimpleNamespace(id=2, project_id=1, name="Готово", is_done_stage=True),
+    ]
+    service = build_service(tasks_repository, stages_repository)
+
+    await service.move_task(10, 2, 1000)
+    await service.move_task(10, 1, 1000)
+
+    first_payload = tasks_repository.update.await_args_list[0].kwargs["data"]
+    second_payload = tasks_repository.update.await_args_list[1].kwargs["data"]
+    assert first_payload["completed_at"].tzinfo is UTC
+    assert second_payload["completed_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_fix_baseline_copies_current_plan_and_records_history() -> None:
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    task = make_task(start_date=date(2026, 9, 2), due_date=date(2026, 9, 8))
+    fixed = make_task(
+        start_date=task.start_date,
+        due_date=task.due_date,
+        baseline_start_date=task.start_date,
+        baseline_due_date=task.due_date,
+    )
+    tasks_repository.get_by_id.return_value = task
+    tasks_repository.update.return_value = fixed
+    activity_repository = AsyncMock(spec=TaskActivityRepository)
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    service = build_service(
+        tasks_repository,
+        activity_repository=activity_repository,
+        knowledge_events=knowledge_events,
+    )
+
+    result = await service.fix_baseline(task_id=10)
+
+    assert result.baseline_start_date == date(2026, 9, 2)
+    assert result.baseline_due_date == date(2026, 9, 8)
+    assert tasks_repository.update.await_args.kwargs["data"] == {
+        "baseline_start_date": date(2026, 9, 2),
+        "baseline_due_date": date(2026, 9, 8),
+    }
+    assert activity_repository.save.await_args.kwargs["event_type"] is (
+        TaskActivityEventType.BASELINE_CHANGED
+    )
+    knowledge_events.upsert.assert_not_awaited()
+    service.unit_of_work.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

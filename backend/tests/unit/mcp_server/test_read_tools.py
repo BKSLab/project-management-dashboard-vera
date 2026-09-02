@@ -1,13 +1,15 @@
 """Проверки инструментов чтения MCP."""
 
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from types import SimpleNamespace
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
 from src.db.models.api_tokens import ApiTokenScope
 from src.db.models.project_members import ProjectMember, ProjectRole
+from src.db.models.project_milestones import ProjectMilestoneStatus
 from src.db.models.project_stages import ProjectStage
 from src.db.models.projects import Project, ProjectStatus
 from src.db.models.task_comments import TaskComment
@@ -16,6 +18,14 @@ from src.db.models.users import User
 from src.dependencies.auth import AuthenticatedPrincipal
 from src.mcp_server import server as srv
 from src.mcp_server.context import ToolContext
+from src.schemas.calendar import (
+    CalendarMilestoneSchema,
+    CalendarRangeSchema,
+    CalendarRiskReasonSchema,
+    CalendarSummarySchema,
+    CalendarTaskSchema,
+    UnscheduledTasksPageSchema,
+)
 
 VISIBLE = Project(
     id=1,
@@ -24,6 +34,7 @@ VISIBLE = Project(
     name="Тестовый проект",
     color="#58a6ff",
     status=ProjectStatus.ACTIVE,
+    due_date=date(2026, 9, 30),
 )
 FOREIGN = Project(
     id=2,
@@ -149,6 +160,91 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
                 )
             ]
 
+    class Calendar:
+        async def get_range(self, *, project_id: int, date_from: date, date_to: date, today: date):
+            return SimpleNamespace(
+                range=CalendarRangeSchema(
+                    date_from=date_from,
+                    date_to=date_to,
+                    today=today,
+                ),
+                tasks=[
+                    CalendarTaskSchema(
+                        id=10,
+                        key="PROJ-1",
+                        title="Настроить вход",
+                        start_date=date(2026, 9, 1),
+                        due_date=date(2026, 9, 5),
+                        baseline_start_date=date(2026, 9, 1),
+                        baseline_due_date=date(2026, 9, 4),
+                        drift_days=1,
+                        stage_id=1,
+                        wbs_node_id=None,
+                        priority=TaskPriority.HIGH,
+                        assignee="Борис",
+                        is_done=False,
+                        is_overdue=True,
+                        is_due_soon=False,
+                        risk_level="high",
+                        risk_reasons=[
+                            CalendarRiskReasonSchema(
+                                code="OVERDUE",
+                                message="Срок просрочен.",
+                                days=1,
+                            )
+                        ],
+                        updated_at=datetime.now(UTC),
+                    )
+                ],
+                milestones=[
+                    CalendarMilestoneSchema(
+                        id=3,
+                        title="MVP",
+                        due_date=date(2026, 9, 20),
+                        status=ProjectMilestoneStatus.PLANNED,
+                        wbs_node_id=None,
+                        description_md=None,
+                    )
+                ],
+                summary=CalendarSummarySchema(
+                    overdue=1,
+                    due_soon=0,
+                    unscheduled=1,
+                    drifted=1,
+                    dependency_risks=0,
+                ),
+            )
+
+        async def get_unscheduled(self, **kwargs):
+            item = (
+                (
+                    await self.get_range(
+                        project_id=kwargs["project_id"],
+                        date_from=date(2026, 9, 1),
+                        date_to=date(2026, 9, 30),
+                        today=kwargs["today"],
+                    )
+                )
+                .tasks[0]
+                .model_copy(update={"start_date": None, "due_date": None})
+            )
+            return UnscheduledTasksPageSchema(items=[item], next_cursor=None)
+
+    class Milestones:
+        def __init__(self, session):
+            pass
+
+        async def get_by_project(self, project_id: int):
+            return [
+                SimpleNamespace(
+                    id=3,
+                    title="MVP",
+                    due_date=date(2026, 9, 20),
+                    status=ProjectMilestoneStatus.PLANNED,
+                    description_md="Первая версия",
+                )
+            ]
+
     monkeypatch.setattr(srv, "tool_context", fake_tool_context)
     for module in (srv, __import__("src.mcp_server.context", fromlist=["x"])):
         monkeypatch.setattr(module, "ProjectsRepository", Projects, raising=False)
@@ -156,6 +252,8 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(module, "TasksRepository", Tasks, raising=False)
     monkeypatch.setattr(srv, "ProjectStagesRepository", Stages)
     monkeypatch.setattr(srv, "TaskCommentsRepository", Comments)
+    monkeypatch.setattr(srv, "build_calendar_service", lambda session: Calendar())
+    monkeypatch.setattr(srv, "MilestonesRepository", Milestones)
 
 
 async def test_list_projects_hides_foreign_projects(tracker) -> None:
@@ -271,3 +369,42 @@ async def test_search_tasks_rejects_foreign_project(tracker) -> None:
     """Поиск не выполняется в недоступном проекте."""
     with pytest.raises(ToolError):
         await srv.search_tasks(FakeContext(), project_key="OTHER", query="вход")
+
+
+async def test_get_calendar_range_returns_display_keys_and_backend_risks(tracker) -> None:
+    """Календарный tool не раскрывает id и отдаёт готовые причины риска."""
+    result = await srv.get_calendar_range(
+        FakeContext(),
+        project_key="PROJ",
+        date_from="2026-09-01",
+        date_to="2026-09-30",
+    )
+
+    assert result["tasks"][0]["task_key"] == "PROJ-1"
+    assert result["tasks"][0]["risk_reasons"][0]["code"] == "OVERDUE"
+    assert "id" not in result["tasks"][0]
+    assert result["milestones"][0]["title"] == "MVP"
+
+
+async def test_list_tasks_without_due_date_is_bounded_and_uses_keys(tracker) -> None:
+    """Backlog без срока возвращается ограниченным списком с task_key."""
+    result = await srv.list_tasks_without_due_date(
+        FakeContext(),
+        project_key="PROJ",
+        limit=1,
+    )
+
+    assert result[0]["task_key"] == "PROJ-1"
+    assert result[0]["risk_reasons"] == [
+        {"code": "OVERDUE", "message": "Срок просрочен.", "days": 1}
+    ]
+
+
+async def test_list_milestones_includes_system_project_deadline(tracker) -> None:
+    """Системная веха дедлайна добавляется без отдельной записи в БД."""
+    result = await srv.list_milestones(FakeContext(), project_key="PROJ")
+
+    assert [(item["title"], item["is_system"]) for item in result] == [
+        ("MVP", False),
+        ("Дедлайн проекта", True),
+    ]

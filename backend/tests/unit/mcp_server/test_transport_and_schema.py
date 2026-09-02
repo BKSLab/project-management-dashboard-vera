@@ -15,6 +15,9 @@ READ_TOOLS = {
     "list_comments",
     "search_tasks",
     "search_project_knowledge",
+    "get_calendar_range",
+    "list_tasks_without_due_date",
+    "list_milestones",
 }
 WRITE_TOOLS = {
     "create_task",
@@ -22,6 +25,8 @@ WRITE_TOOLS = {
     "move_task",
     "delete_task",
     "add_comment",
+    "set_task_dates",
+    "create_milestone",
 }
 
 
@@ -68,7 +73,17 @@ async def test_tools_take_display_keys_not_numeric_ids() -> None:
         assert "task_id" not in properties, f"{tool.name} принимает числовой task_id."
 
 
-@pytest.mark.parametrize("name", ["list_tasks", "list_comments", "search_tasks"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "list_tasks",
+        "list_comments",
+        "search_tasks",
+        "get_calendar_range",
+        "list_tasks_without_due_date",
+        "list_milestones",
+    ],
+)
 async def test_list_tools_have_bounded_limit(name: str) -> None:
     """Списочные инструменты ограничены: агент не вытянет проект целиком."""
     tools = {tool.name: tool for tool in await mcp_server.list_tools()}
@@ -83,7 +98,16 @@ async def test_project_tools_require_project_key() -> None:
     """Инструменты уровня проекта обязательно требуют ключ проекта."""
     tools = {tool.name: tool for tool in await mcp_server.list_tools()}
 
-    for name in ("get_project", "list_tasks", "search_tasks", "search_project_knowledge"):
+    for name in (
+        "get_project",
+        "list_tasks",
+        "search_tasks",
+        "search_project_knowledge",
+        "get_calendar_range",
+        "list_tasks_without_due_date",
+        "list_milestones",
+        "create_milestone",
+    ):
         assert "project_key" in tools[name].input_schema.get("required", []), name
 
 

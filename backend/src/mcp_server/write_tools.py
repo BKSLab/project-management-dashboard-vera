@@ -13,12 +13,17 @@ from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
+from src.db.models.project_milestones import ProjectMilestoneStatus
 from src.db.models.project_stages import ProjectStage
 from src.db.models.tasks import TaskPriority
 from src.exceptions.base import ApplicationError
 from src.mcp_server.context import ToolContext, resolve_project, resolve_task, tool_context
 from src.mcp_server.server import mcp_server
-from src.mcp_server.services import build_comments_service, build_tasks_service
+from src.mcp_server.services import (
+    build_comments_service,
+    build_milestones_service,
+    build_tasks_service,
+)
 from src.repositories.project_stages import ProjectStagesRepository
 from src.services.tasks import build_task_key
 
@@ -223,6 +228,99 @@ async def add_comment(
             "task_key": build_task_key(project.key, task.number),
             "author": comment.author_name,
             "created_at": comment.created_at.isoformat(),
+        }
+
+
+@mcp_server.tool(
+    name="set_task_dates",
+    title="Изменить плановые даты задачи",
+    description=(
+        "Изменяет start_date и/или due_date задачи через доменный сервис и историю. "
+        "Требует токена с правом записи."
+    ),
+)
+async def set_task_dates(
+    context: Context,
+    task_key: Annotated[str, Field(description="Ключ задачи, например PROJ-142.")],
+    start_date: Annotated[
+        str | None,
+        Field(description="Начало ГГГГ-ММ-ДД; пустая строка снимает начало."),
+    ] = None,
+    due_date: Annotated[
+        str | None,
+        Field(description="Завершение ГГГГ-ММ-ДД; пустая строка снимает срок."),
+    ] = None,
+) -> dict:
+    """Меняет только явно переданные календарные поля задачи."""
+    async with tool_context(context, require_write=True) as tools:
+        task, _ = await resolve_task(tools, task_key)
+        payload: dict = {}
+        if start_date is not None:
+            payload["start_date"] = _parse_date(start_date) if start_date.strip() else None
+        if due_date is not None:
+            payload["due_date"] = _parse_date(due_date) if due_date.strip() else None
+        if not payload:
+            raise ToolError("Не передано ни одной даты для изменения.")
+        try:
+            updated = await build_tasks_service(tools.session).update_task(
+                task_id=task.id,
+                data=payload,
+            )
+        except ApplicationError as error:
+            raise ToolError(_domain_message(error, "Не удалось изменить даты задачи.")) from error
+        return {
+            "task_key": updated.key,
+            "start_date": updated.start_date.isoformat() if updated.start_date else None,
+            "due_date": updated.due_date.isoformat() if updated.due_date else None,
+            "updated_fields": sorted(payload),
+        }
+
+
+@mcp_server.tool(
+    name="create_milestone",
+    title="Создать проектную веху",
+    description=(
+        "Создаёт простую календарную веху проекта без отдельного workflow. "
+        "Требует токена с правом записи."
+    ),
+)
+async def create_milestone(
+    context: Context,
+    project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
+    title: Annotated[str, Field(description="Название вехи.", min_length=1, max_length=255)],
+    due_date: Annotated[str, Field(description="Дата вехи в формате ГГГГ-ММ-ДД.")],
+    description: Annotated[str | None, Field(description="Описание вехи в Markdown.")] = None,
+    status: Annotated[
+        str,
+        Field(description="Статус PLANNED или ACHIEVED."),
+    ] = "PLANNED",
+) -> dict:
+    """Создаёт пользовательскую веху в доступном проекте."""
+    async with tool_context(context, require_write=True) as tools:
+        project = await resolve_project(tools, project_key)
+        try:
+            milestone_status = ProjectMilestoneStatus(status.strip().upper())
+        except ValueError as error:
+            raise ToolError("Статус вехи должен быть PLANNED или ACHIEVED.") from error
+        try:
+            created = await build_milestones_service(tools.session).create_milestone(
+                project.id,
+                {
+                    "title": title.strip(),
+                    "due_date": _parse_date(due_date),
+                    "status": milestone_status,
+                    "description_md": description,
+                    "wbs_node_id": None,
+                },
+            )
+        except ApplicationError as error:
+            raise ToolError(_domain_message(error, "Не удалось создать веху.")) from error
+        return {
+            "project_key": project.key,
+            "title": created.title,
+            "due_date": created.due_date.isoformat(),
+            "status": created.status.value,
+            "created": True,
         }
 
 

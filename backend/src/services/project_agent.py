@@ -4,7 +4,7 @@ import json
 import logging
 import secrets
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from enum import StrEnum
 from time import perf_counter
 from typing import Any, Literal
@@ -19,7 +19,7 @@ from src.db.models.knowledge_index_jobs import (
     KnowledgeIndexStatus,
 )
 from src.db.models.projects import Project
-from src.exceptions.base import RepositoryError
+from src.exceptions.base import ApplicationError
 from src.exceptions.knowledge import (
     KnowledgeDisabledError,
     KnowledgeIndexJobsRepositoryError,
@@ -33,6 +33,7 @@ from src.knowledge.retrieval import reciprocal_rank_fusion
 from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
+from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.tasks import ProjectTaskStatistics, TasksRepository
@@ -44,6 +45,8 @@ from src.schemas.knowledge import (
     KnowledgeSourceSchema,
     KnowledgeStatusSchema,
 )
+from src.services.calendar import MAX_CALENDAR_RANGE_DAYS, CalendarService
+from src.services.calendar_scenarios import CalendarScenarioService
 from src.services.prompts.project_agent import (
     PROJECT_AGENT_SYSTEM_PROMPT,
     PROJECT_AGENT_TOOL_SELECTION_PROMPT,
@@ -69,6 +72,12 @@ class StructuredToolName(StrEnum):
     OVERDUE_TASKS = "get_overdue_tasks"
     PROJECT_STRUCTURE = "get_project_structure"
     RECENT_PROJECT_ACTIVITY = "get_recent_project_activity"
+    CALENDAR = "get_calendar"
+    UPCOMING_DEADLINES = "get_upcoming_deadlines"
+    PROJECT_RISKS = "get_project_risks"
+    MILESTONES = "get_milestones"
+    SCHEDULE_DRIFT = "get_schedule_drift"
+    PREVIEW_SCHEDULE_CHANGE = "preview_schedule_change"
 
 
 class AgentToolCall(BaseModel):
@@ -76,14 +85,22 @@ class AgentToolCall(BaseModel):
 
     name: StructuredToolName
     stage_name: str | None = Field(default=None, max_length=255)
+    date_from: date | None = None
+    date_to: date | None = None
+    task_key: str | None = Field(default=None, max_length=32)
+    proposed_start_date: date | None = None
+    proposed_due_date: date | None = None
+    shift_days: int | None = Field(default=None, ge=-3650, le=3650)
 
 
 class AgentToolPlan(BaseModel):
     """План SQL-инструментов и retrieval для текущего вопроса."""
 
-    calls: list[AgentToolCall] = Field(default_factory=list, max_length=5)
+    calls: list[AgentToolCall] = Field(default_factory=list, max_length=7)
     search_query: str | None = Field(default=None, max_length=2000)
-    entity_type: Literal["project", "task", "document", "comment", "attachment"] | None = None
+    entity_type: (
+        Literal["project", "task", "document", "comment", "attachment", "milestone"] | None
+    ) = None
 
 
 class AgentOutput(BaseModel):
@@ -107,6 +124,9 @@ class _AgentDatabaseContext:
     structure_counts: dict[int, int] | None = None
     activity: list[Any] = field(default_factory=list)
     activity_tasks: dict[int, Any] = field(default_factory=dict)
+    calendar_results: dict[StructuredToolName, Any] = field(default_factory=dict)
+    milestones: list[Any] = field(default_factory=list)
+    scenario_preview: Any | None = None
 
 
 class _SourceRegistry:
@@ -158,6 +178,9 @@ class ProjectAgentService:
         activity_repository: TaskActivityRepository,
         jobs_repository: KnowledgeIndexJobsRepository,
         unit_of_work: UnitOfWork,
+        milestones_repository: MilestonesRepository | None = None,
+        calendar_service: CalendarService | None = None,
+        scenario_service: CalendarScenarioService | None = None,
         runtime: KnowledgeRuntime | None = None,
     ) -> None:
         self.stages_repository = stages_repository
@@ -167,6 +190,9 @@ class ProjectAgentService:
         self.activity_repository = activity_repository
         self.jobs_repository = jobs_repository
         self.unit_of_work = unit_of_work
+        self.milestones_repository = milestones_repository
+        self.calendar_service = calendar_service
+        self.scenario_service = scenario_service
         self.runtime = runtime or get_knowledge_runtime()
         self.settings = get_settings()
 
@@ -233,14 +259,14 @@ class ProjectAgentService:
                 phases_ms["ranked_fts"] = self._elapsed_ms(phase_started_at)
             nodes = await self.wbs_nodes_repository.get_by_project(project.id)
             database_context = await self._load_structured_tools(
-                project_id=project.id,
+                project=project,
                 stages=stages,
                 ranked_tasks=ranked_tasks,
                 ranked_documents=ranked_documents,
                 nodes=nodes,
                 tool_plan=tool_plan,
             )
-        except RepositoryError as error:
+        except ApplicationError as error:
             raise ProjectAgentError(str(error)) from error
 
         semantic_hits: list[KnowledgeSearchHit] = []
@@ -425,7 +451,7 @@ class ProjectAgentService:
     async def _load_structured_tools(
         self,
         *,
-        project_id: int,
+        project: Project,
         stages: list[Any],
         ranked_tasks: list[Any],
         ranked_documents: list[Any],
@@ -440,12 +466,20 @@ class ProjectAgentService:
             nodes=nodes,
         )
         stages_by_name = {stage.name.casefold(): stage for stage in stages}
-        seen: set[tuple[StructuredToolName, str | None]] = set()
+        project_id = project.id
+        current_date = date.today()
+        seen: set[tuple[Any, ...]] = set()
         for tool_call in tool_plan.calls:
             normalized_stage = tool_call.stage_name.strip() if tool_call.stage_name else None
             key = (
                 tool_call.name,
                 normalized_stage.casefold() if normalized_stage is not None else None,
+                tool_call.date_from,
+                tool_call.date_to,
+                tool_call.task_key,
+                tool_call.proposed_start_date,
+                tool_call.proposed_due_date,
+                tool_call.shift_days,
             )
             if key in seen:
                 continue
@@ -453,7 +487,7 @@ class ProjectAgentService:
             if tool_call.name is StructuredToolName.PROJECT_STATISTICS:
                 context.statistics = await self.tasks_repository.get_project_statistics(
                     project_id=project_id,
-                    today=date.today(),
+                    today=current_date,
                 )
             elif tool_call.name is StructuredToolName.TASKS_BY_STATUS:
                 stage = (
@@ -472,7 +506,7 @@ class ProjectAgentService:
             elif tool_call.name is StructuredToolName.OVERDUE_TASKS:
                 context.overdue_tasks = await self.tasks_repository.get_overdue_limited(
                     project_id=project_id,
-                    today=date.today(),
+                    today=current_date,
                     limit=MAX_TOOL_TASKS,
                 )
             elif tool_call.name is StructuredToolName.PROJECT_STRUCTURE:
@@ -486,6 +520,65 @@ class ProjectAgentService:
                     {item.task_id for item in context.activity}
                 )
                 context.activity_tasks = {task.id: task for task in activity_tasks}
+            elif (
+                tool_call.name
+                in {
+                    StructuredToolName.CALENDAR,
+                    StructuredToolName.UPCOMING_DEADLINES,
+                    StructuredToolName.PROJECT_RISKS,
+                    StructuredToolName.SCHEDULE_DRIFT,
+                }
+                and self.calendar_service is not None
+            ):
+                date_from, date_to = _agent_calendar_range(
+                    tool_call=tool_call,
+                    project=project,
+                    current_date=current_date,
+                )
+                context.calendar_results[tool_call.name] = await self.calendar_service.get_range(
+                    project_id=project_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                    today=current_date,
+                )
+            elif (
+                tool_call.name is StructuredToolName.MILESTONES
+                and self.milestones_repository is not None
+            ):
+                context.milestones = (await self.milestones_repository.get_by_project(project_id))[
+                    :MAX_TOOL_TASKS
+                ]
+            elif (
+                tool_call.name is StructuredToolName.PREVIEW_SCHEDULE_CHANGE
+                and self.scenario_service is not None
+            ):
+                task_number = _task_number(tool_call.task_key, project.key)
+                if task_number is None:
+                    context.scenario_preview = {
+                        "error": "Для preview нужен ключ задачи текущего проекта."
+                    }
+                    continue
+                task = await self.tasks_repository.get_by_project_number(
+                    project_id,
+                    task_number,
+                )
+                if task is None:
+                    context.scenario_preview = {"error": "Задача для preview не найдена."}
+                    continue
+                start_date, due_date = _proposed_tool_dates(task, tool_call)
+                if start_date == task.start_date and due_date == task.due_date:
+                    context.scenario_preview = {"error": "Для preview не передано изменение дат."}
+                    continue
+                context.scenario_preview = await self.scenario_service.preview(
+                    project_id,
+                    [
+                        {
+                            "task_id": task.id,
+                            "start_date": start_date,
+                            "due_date": due_date,
+                        }
+                    ],
+                )
         return context
 
     def _build_postgres_context(
@@ -606,7 +699,149 @@ class ProjectAgentService:
                     }
                 )
             tools[StructuredToolName.RECENT_PROJECT_ACTIVITY.value] = activity_rows
+        for tool_name, calendar in context.calendar_results.items():
+            tools[tool_name.value] = self._calendar_tool_context(
+                tool_name=tool_name,
+                calendar=calendar,
+                registry=registry,
+            )
+        if context.milestones:
+            tools[StructuredToolName.MILESTONES.value] = [
+                self._milestone_context(milestone, registry)
+                for milestone in context.milestones[:MAX_TOOL_TASKS]
+            ]
+        if context.scenario_preview is not None:
+            tools[StructuredToolName.PREVIEW_SCHEDULE_CHANGE.value] = (
+                self._scenario_context(context.scenario_preview, registry)
+                if not isinstance(context.scenario_preview, dict)
+                else context.scenario_preview
+            )
         return result
+
+    def _calendar_tool_context(
+        self,
+        *,
+        tool_name: StructuredToolName,
+        calendar: Any,
+        registry: _SourceRegistry,
+    ) -> dict[str, Any]:
+        """Сериализует результат детерминированного CalendarService."""
+        tasks = calendar.tasks
+        if tool_name is StructuredToolName.PROJECT_RISKS:
+            tasks = [task for task in tasks if task.risk_reasons]
+        elif tool_name is StructuredToolName.SCHEDULE_DRIFT:
+            tasks = [task for task in tasks if task.drift_days not in {None, 0}]
+        return {
+            "range": calendar.range.model_dump(mode="json"),
+            "summary": calendar.summary.model_dump(mode="json"),
+            "tasks": [
+                {
+                    "source_handle": registry.register(
+                        KnowledgeSourceSchema(
+                            source_id=f"task:{task.id}",
+                            entity_type="task",
+                            entity_id=task.id,
+                            task_id=task.id,
+                            title=f"{task.key} · {task.title}"[:512],
+                        )
+                    ),
+                    "task_key": task.key,
+                    "title": task.title[:512],
+                    "start_date": str(task.start_date) if task.start_date else None,
+                    "due_date": str(task.due_date) if task.due_date else None,
+                    "baseline_start_date": (
+                        str(task.baseline_start_date) if task.baseline_start_date else None
+                    ),
+                    "baseline_due_date": (
+                        str(task.baseline_due_date) if task.baseline_due_date else None
+                    ),
+                    "drift_days": task.drift_days,
+                    "assignee": task.assignee,
+                    "is_done": task.is_done,
+                    "risk_level": task.risk_level,
+                    "risk_reasons": [
+                        reason.model_dump(mode="json", exclude_none=True)
+                        for reason in task.risk_reasons
+                    ],
+                }
+                for task in tasks[:MAX_TOOL_TASKS]
+            ],
+            "milestones": [
+                self._calendar_milestone_context(milestone, registry)
+                for milestone in calendar.milestones[:MAX_TOOL_TASKS]
+            ],
+        }
+
+    @staticmethod
+    def _calendar_milestone_context(
+        milestone: Any,
+        registry: _SourceRegistry,
+    ) -> dict[str, Any]:
+        result = {
+            "title": milestone.title[:512],
+            "due_date": str(milestone.due_date),
+            "status": milestone.status.value,
+            "is_system": milestone.is_system,
+        }
+        if milestone.id is not None:
+            result["source_handle"] = registry.register(
+                KnowledgeSourceSchema(
+                    source_id=f"milestone:{milestone.id}",
+                    entity_type="milestone",
+                    entity_id=milestone.id,
+                    title=milestone.title[:512],
+                    excerpt=(milestone.description_md or "")[:SOURCE_EXCERPT_LIMIT] or None,
+                )
+            )
+        return result
+
+    @staticmethod
+    def _milestone_context(milestone: Any, registry: _SourceRegistry) -> dict[str, Any]:
+        source = KnowledgeSourceSchema(
+            source_id=f"milestone:{milestone.id}",
+            entity_type="milestone",
+            entity_id=milestone.id,
+            title=milestone.title[:512],
+            excerpt=(milestone.description_md or "")[:SOURCE_EXCERPT_LIMIT] or None,
+        )
+        return {
+            "source_handle": registry.register(source),
+            "title": milestone.title[:512],
+            "description": (milestone.description_md or "")[:TEXT_FRAGMENT_LIMIT],
+            "due_date": str(milestone.due_date),
+            "status": milestone.status.value,
+        }
+
+    @staticmethod
+    def _scenario_context(preview: Any, registry: _SourceRegistry) -> dict[str, Any]:
+        return {
+            "can_apply": preview.can_apply,
+            "consequences_count": preview.consequences_count,
+            "conflicts": [item.model_dump(mode="json") for item in preview.conflicts],
+            "changes": [
+                {
+                    "source_handle": registry.register(
+                        KnowledgeSourceSchema(
+                            source_id=f"task:{change.task_id}",
+                            entity_type="task",
+                            entity_id=change.task_id,
+                            task_id=change.task_id,
+                            title=f"{change.task_key} · {change.task_title}"[:512],
+                        )
+                    ),
+                    "task_key": change.task_key,
+                    "title": change.task_title[:512],
+                    "source": change.source.value,
+                    "current": change.current.model_dump(mode="json"),
+                    "proposed": change.proposed.model_dump(mode="json"),
+                    "reasons": [
+                        reason.model_dump(mode="json", exclude_none=True)
+                        for reason in change.reasons
+                    ],
+                }
+                for change in preview.changes[:MAX_TOOL_TASKS]
+            ],
+        }
 
     def _task_context(
         self,
@@ -694,7 +929,14 @@ class ProjectAgentService:
                 entity_id = int(str(payload.get("entity_id")))
             except ValueError:
                 continue
-            if entity_type not in {"project", "task", "document", "comment", "attachment"}:
+            if entity_type not in {
+                "project",
+                "task",
+                "document",
+                "comment",
+                "attachment",
+                "milestone",
+            }:
                 continue
             if source_id != f"{entity_type}:{entity_id}":
                 continue
@@ -794,3 +1036,53 @@ class ProjectAgentService:
             if len(result) >= MAX_RETRIEVAL_CONTEXT:
                 break
         return result
+
+
+def _agent_calendar_range(
+    *,
+    tool_call: AgentToolCall,
+    project: Project,
+    current_date: date,
+) -> tuple[date, date]:
+    """Возвращает ограниченный диапазон для выбранного calendar tool."""
+    if tool_call.name is StructuredToolName.UPCOMING_DEADLINES:
+        return current_date, current_date + timedelta(days=30)
+    if tool_call.name is StructuredToolName.PROJECT_RISKS:
+        return current_date - timedelta(days=90), current_date + timedelta(days=90)
+    if tool_call.name is StructuredToolName.SCHEDULE_DRIFT:
+        date_from = project.start_date or current_date - timedelta(days=185)
+        date_to = project.due_date or current_date + timedelta(days=185)
+    else:
+        date_from = tool_call.date_from or current_date - timedelta(days=30)
+        date_to = tool_call.date_to or current_date + timedelta(days=60)
+    if date_to < date_from:
+        date_from = current_date - timedelta(days=30)
+        date_to = current_date + timedelta(days=60)
+    if (date_to - date_from).days > MAX_CALENDAR_RANGE_DAYS:
+        date_to = date_from + timedelta(days=MAX_CALENDAR_RANGE_DAYS)
+    return date_from, date_to
+
+
+def _task_number(task_key: str | None, project_key: str) -> int | None:
+    """Разбирает ключ задачи только текущего проекта."""
+    if task_key is None:
+        return None
+    prefix, separator, number = task_key.strip().upper().rpartition("-")
+    if separator != "-" or prefix != project_key.upper() or not number.isdigit():
+        return None
+    return int(number)
+
+
+def _proposed_tool_dates(task: Any, tool_call: AgentToolCall) -> tuple[date | None, date | None]:
+    """Применяет сдвиг и явные даты к текущему интервалу задачи."""
+    start_date = task.start_date
+    due_date = task.due_date
+    if tool_call.shift_days is not None:
+        delta = timedelta(days=tool_call.shift_days)
+        start_date = start_date + delta if start_date is not None else None
+        due_date = due_date + delta if due_date is not None else None
+    if tool_call.proposed_start_date is not None:
+        start_date = tool_call.proposed_start_date
+    if tool_call.proposed_due_date is not None:
+        due_date = tool_call.proposed_due_date
+    return start_date, due_date

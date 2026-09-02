@@ -32,6 +32,8 @@ import { FileUploadControl } from "@/components/files/FileUploadControl";
 const EVENT_LABELS: Record<TaskActivity["event_type"], string> = {
     STAGE_CHANGED: "Стадия",
     DUE_DATE_CHANGED: "Срок",
+    START_DATE_CHANGED: "Начало",
+    BASELINE_CHANGED: "Baseline",
     DESCRIPTION_CHANGED: "Описание изменено",
     PRIORITY_CHANGED: "Приоритет",
     ASSIGNEE_CHANGED: "Исполнитель",
@@ -309,12 +311,29 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                                 )}
                             </Field>
 
-                            <Field label="Срок">
+                            <Field label="Начало">
+                                {(id) => (
+                                    <Input
+                                        id={id}
+                                        type="date"
+                                        value={toDateInputValue(task.start_date)}
+                                        max={task.due_date ?? undefined}
+                                        onChange={(event) =>
+                                            updateMutation.mutate({
+                                                start_date: event.target.value || null,
+                                            })
+                                        }
+                                    />
+                                )}
+                            </Field>
+
+                            <Field label="Завершение">
                                 {(id) => (
                                     <Input
                                         id={id}
                                         type="date"
                                         value={toDateInputValue(task.due_date)}
+                                        min={task.start_date ?? undefined}
                                         onChange={(event) =>
                                             updateMutation.mutate({
                                                 due_date: event.target.value || null,

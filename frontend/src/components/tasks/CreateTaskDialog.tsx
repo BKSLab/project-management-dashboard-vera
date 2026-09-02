@@ -31,6 +31,7 @@ export function CreateTaskDialog({
     const [description, setDescription] = useState("");
     const [priority, setPriority] = useState<TaskPriority>("MEDIUM");
     const [stageId, setStageId] = useState<string>("");
+    const [startDate, setStartDate] = useState("");
     const [dueDate, setDueDate] = useState("");
 
     function reset() {
@@ -38,6 +39,7 @@ export function CreateTaskDialog({
         setDescription("");
         setPriority("MEDIUM");
         setStageId("");
+        setStartDate("");
         setDueDate("");
     }
 
@@ -49,6 +51,7 @@ export function CreateTaskDialog({
                 priority,
                 stage_id: stageId === "" ? null : Number(stageId),
                 wbs_node_id: wbsNodeId,
+                start_date: startDate || null,
                 due_date: dueDate || null,
             }),
         onSuccess: (task) => {
@@ -113,7 +116,7 @@ export function CreateTaskDialog({
                     )}
                 </Field>
 
-                <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <Field label="Стадия">
                         {(id) => (
                             <Select
@@ -149,12 +152,25 @@ export function CreateTaskDialog({
                         )}
                     </Field>
 
-                    <Field label="Срок">
+                    <Field label="Начало">
+                        {(id) => (
+                            <Input
+                                id={id}
+                                type="date"
+                                value={startDate}
+                                max={dueDate || undefined}
+                                onChange={(event) => setStartDate(event.target.value)}
+                            />
+                        )}
+                    </Field>
+
+                    <Field label="Завершение">
                         {(id) => (
                             <Input
                                 id={id}
                                 type="date"
                                 value={dueDate}
+                                min={startDate || undefined}
                                 onChange={(event) => setDueDate(event.target.value)}
                             />
                         )}

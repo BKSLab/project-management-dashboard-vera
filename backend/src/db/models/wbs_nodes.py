@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
+    from .project_milestones import ProjectMilestone
     from .projects import Project
     from .tasks import Task
 
@@ -69,6 +70,10 @@ class WbsNode(Base, TimestampMixin):
         remote_side=[id],
     )
     tasks: Mapped[list[Task]] = relationship("Task", back_populates="wbs_node")
+    milestones: Mapped[list[ProjectMilestone]] = relationship(
+        "ProjectMilestone",
+        back_populates="wbs_node",
+    )
 
     def __repr__(self) -> str:
         return f"<WbsNode(id={self.id}, project_id={self.project_id}, title={self.title!r})>"

@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC, datetime
 
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.task_activity import TaskActivityEventType
@@ -14,6 +15,7 @@ from src.exceptions.task_activity import TaskActivityRepositoryError
 from src.exceptions.task_attachments import TaskAttachmentStorageError
 from src.exceptions.task_comments import TaskCommentsRepositoryError
 from src.exceptions.tasks import (
+    TaskDateRangeError,
     TaskNotFoundError,
     TaskNumberAllocationError,
     TaskNumberAlreadyExistsRepositoryError,
@@ -192,6 +194,10 @@ class TasksService:
         try:
             project = await self._get_project(project_id=project_id)
             payload = dict(data)
+            self._validate_schedule(
+                start_date=payload.get("start_date"),
+                due_date=payload.get("due_date"),
+            )
             payload["project_id"] = project_id
             payload["stage_id"] = await self._resolve_stage_id(
                 project_id=project_id,
@@ -225,6 +231,7 @@ class TasksService:
             WbsNodeNotFoundError,
             WbsNodeForeignProjectError,
             TaskNumberAllocationError,
+            TaskDateRangeError,
         ):
             raise
         except RepositoryErrors as error:
@@ -248,6 +255,10 @@ class TasksService:
         try:
             task = await self._get_task(task_id=task_id)
             project = await self._get_project(project_id=task.project_id)
+            self._validate_schedule(
+                start_date=data.get("start_date", task.start_date),
+                due_date=data.get("due_date", task.due_date),
+            )
             await self._record_field_changes(task=task, data=data)
             updated = await self.tasks_repository.update(task=task, data=data)
             if self.knowledge_events is not None and TASK_SEMANTIC_FIELDS.intersection(data):
@@ -258,7 +269,7 @@ class TasksService:
                 )
             await self.unit_of_work.commit()
             return to_task_schema(task=updated, project_key=project.key)
-        except (TaskNotFoundError, ProjectNotFoundError):
+        except (TaskNotFoundError, ProjectNotFoundError, TaskDateRangeError):
             raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка обновления задачи id=%s.", task_id, exc_info=True)
@@ -314,9 +325,14 @@ class TasksService:
                     from_value=current_stage.name if current_stage else None,
                     to_value=target_stage.name,
                 )
+            update_data = {"stage_id": stage_id, "position": target_position}
+            if target_stage.is_done_stage and task.completed_at is None:
+                update_data["completed_at"] = datetime.now(UTC)
+            elif not target_stage.is_done_stage and task.completed_at is not None:
+                update_data["completed_at"] = None
             updated = await self.tasks_repository.update(
                 task=task,
-                data={"stage_id": stage_id, "position": target_position},
+                data=update_data,
             )
             await self.unit_of_work.commit()
             return to_task_schema(task=updated, project_key=project.key)
@@ -329,6 +345,35 @@ class TasksService:
             raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка перемещения задачи id=%s.", task_id, exc_info=True)
+            raise TasksServiceError(str(error)) from error
+
+    async def fix_baseline(self, task_id: int) -> TaskSchema:
+        """Фиксирует текущий план задачи отдельной явной операцией."""
+        try:
+            task = await self._get_task(task_id=task_id)
+            project = await self._get_project(project_id=task.project_id)
+            previous = _baseline_value(task.baseline_start_date, task.baseline_due_date)
+            current = _baseline_value(task.start_date, task.due_date)
+            if previous != current:
+                await self.activity_repository.save(
+                    task_id=task.id,
+                    event_type=TaskActivityEventType.BASELINE_CHANGED,
+                    from_value=previous,
+                    to_value=current,
+                )
+            updated = await self.tasks_repository.update(
+                task=task,
+                data={
+                    "baseline_start_date": task.start_date,
+                    "baseline_due_date": task.due_date,
+                },
+            )
+            await self.unit_of_work.commit()
+            return to_task_schema(task=updated, project_key=project.key)
+        except (TaskNotFoundError, ProjectNotFoundError):
+            raise
+        except RepositoryErrors as error:
+            logger.error("❌ Ошибка фиксации baseline задачи id=%s.", task_id, exc_info=True)
             raise TasksServiceError(str(error)) from error
 
     async def delete_task(self, task_id: int) -> None:
@@ -450,6 +495,13 @@ class TasksService:
                 from_value=str(task.due_date) if task.due_date else None,
                 to_value=str(data["due_date"]) if data["due_date"] else None,
             )
+        if "start_date" in data and data["start_date"] != task.start_date:
+            await self.activity_repository.save(
+                task_id=task.id,
+                event_type=TaskActivityEventType.START_DATE_CHANGED,
+                from_value=str(task.start_date) if task.start_date else None,
+                to_value=str(data["start_date"]) if data["start_date"] else None,
+            )
         if "description_md" in data and data["description_md"] != task.description_md:
             await self.activity_repository.save(
                 task_id=task.id,
@@ -485,10 +537,21 @@ class TasksService:
                 exc_info=True,
             )
 
+    @staticmethod
+    def _validate_schedule(*, start_date, due_date) -> None:
+        """Не допускает обратный плановый интервал задачи."""
+        if start_date is not None and due_date is not None and start_date > due_date:
+            raise TaskDateRangeError()
+
 
 def build_task_key(project_key: str, number: int) -> str:
     """Возвращает отображаемый идентификатор задачи вида ``PROJ-142``."""
     return f"{project_key}-{number}"
+
+
+def _baseline_value(start_date, due_date) -> str:
+    """Возвращает компактное значение baseline для TaskActivity."""
+    return f"{start_date or '—'}..{due_date or '—'}"
 
 
 def to_task_schema(task: Task, project_key: str) -> TaskSchema:
@@ -513,7 +576,11 @@ def to_task_schema(task: Task, project_key: str) -> TaskSchema:
         priority=task.priority,
         role=task.role,
         assignee=task.assignee,
+        start_date=task.start_date,
         due_date=task.due_date,
+        baseline_start_date=task.baseline_start_date,
+        baseline_due_date=task.baseline_due_date,
+        completed_at=task.completed_at,
         position=task.position,
         created_at=task.created_at,
         updated_at=task.updated_at,

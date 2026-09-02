@@ -39,7 +39,7 @@ class KnowledgeSourceSchema(BaseModel):
     """Проверяемый источник ответа и данные для навигации в UI."""
 
     source_id: str
-    entity_type: Literal["project", "task", "document", "comment", "attachment"]
+    entity_type: Literal["project", "task", "document", "comment", "attachment", "milestone"]
     entity_id: int
     title: str
     excerpt: str | None = None

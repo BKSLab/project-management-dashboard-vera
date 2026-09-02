@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import enum
-from datetime import date
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Computed,
     Date,
+    DateTime,
     Enum,
     Float,
     ForeignKey,
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
     from .task_activity import TaskActivity
     from .task_attachments import TaskAttachment
     from .task_comments import TaskComment
+    from .task_dependencies import TaskDependency
     from .wbs_nodes import WbsNode
 
 
@@ -65,6 +67,7 @@ class Task(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("project_id", "number", name="uq_tasks_project_number"),
         Index("ix_tasks_search_vector", "search_vector", postgresql_using="gin"),
+        Index("ix_tasks_project_due_date", "project_id", "due_date"),
     )
 
     id: Mapped[int] = mapped_column(
@@ -130,11 +133,35 @@ class Task(Base, TimestampMixin):
         doc="Свободная подпись исполнителя. Авторизации в проекте нет.",
         comment="Необязательное имя исполнителя задачи.",
     )
+    start_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        doc="Плановое начало выполнения.",
+        comment="Плановая дата начала задачи.",
+    )
     due_date: Mapped[date | None] = mapped_column(
         Date,
         nullable=True,
         doc="Срок исполнения.",
         comment="Плановая дата завершения задачи.",
+    )
+    baseline_start_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        doc="Зафиксированное исходное начало.",
+        comment="Дата начала утверждённого baseline.",
+    )
+    baseline_due_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        doc="Зафиксированный исходный дедлайн.",
+        comment="Дата завершения утверждённого baseline.",
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        doc="Момент фактического завершения.",
+        comment="Момент последнего перехода задачи в завершающую стадию.",
     )
     position: Mapped[float] = mapped_column(
         Float,
@@ -173,6 +200,20 @@ class Task(Base, TimestampMixin):
     attachments: Mapped[list[TaskAttachment]] = relationship(
         "TaskAttachment",
         back_populates="task",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    successor_links: Mapped[list[TaskDependency]] = relationship(
+        "TaskDependency",
+        foreign_keys="TaskDependency.predecessor_task_id",
+        back_populates="predecessor",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    predecessor_links: Mapped[list[TaskDependency]] = relationship(
+        "TaskDependency",
+        foreign_keys="TaskDependency.successor_task_id",
+        back_populates="successor",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )

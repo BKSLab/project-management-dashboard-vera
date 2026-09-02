@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import {
     Bot,
     Database,
+    Diamond,
     FileText,
     ListTodo,
     MessageSquare,
@@ -57,6 +58,7 @@ function sourceIcon(source: KnowledgeSource) {
     if (source.entity_type === "comment") return <MessageSquare size={13} />;
     if (source.entity_type === "attachment") return <Paperclip size={13} />;
     if (source.entity_type === "task") return <ListTodo size={13} />;
+    if (source.entity_type === "milestone") return <Diamond size={13} />;
     return <Database size={13} />;
 }
 
@@ -142,6 +144,10 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
         }
         if (source.document_slug) {
             navigate(`/projects/${project.key}/docs/${source.document_slug}`);
+            return;
+        }
+        if (source.entity_type === "milestone") {
+            navigate(`/projects/${project.key}/calendar`);
             return;
         }
         navigate(`/projects/${project.key}`);

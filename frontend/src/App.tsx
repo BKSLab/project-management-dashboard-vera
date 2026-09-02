@@ -13,6 +13,7 @@ import { ProjectDocumentsPage } from "@/routes/ProjectDocumentsPage";
 import { DocumentDetailPage } from "@/routes/DocumentDetailPage";
 import { ProjectSettingsPage } from "@/routes/ProjectSettingsPage";
 import { ProjectKnowledgePage } from "@/routes/ProjectKnowledgePage";
+import { ProjectCalendarPage } from "@/routes/ProjectCalendarPage";
 import { McpPage } from "@/routes/McpPage";
 import { ProfilePage } from "@/routes/ProfilePage";
 import { LoginPage } from "@/routes/LoginPage";
@@ -52,6 +53,7 @@ function ProtectedApp() {
                         <Route index element={<ProjectOverviewPage />} />
                         <Route path="board" element={<BoardPage />} />
                         <Route path="tasks" element={<TasksListPage />} />
+                        <Route path="calendar" element={<ProjectCalendarPage />} />
                         <Route
                             path="structure"
                             element={

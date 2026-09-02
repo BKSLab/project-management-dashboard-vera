@@ -7,11 +7,12 @@
 
 import logging
 from collections import Counter
+from datetime import date
 from typing import Annotated
 
 from mcp.server.mcpserver import Context, MCPServer
-from mcp.server.transport_security import TransportSecuritySettings
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import Field
 from starlette.applications import Starlette
 
@@ -29,6 +30,8 @@ from src.mcp_server.presenters import (
     task_detail,
     task_summary,
 )
+from src.mcp_server.services import build_calendar_service
+from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
@@ -269,7 +272,11 @@ async def search_project_knowledge(
     query: Annotated[str, Field(description="Смысловой запрос.", min_length=2)],
     entity_type: Annotated[
         str | None,
-        Field(description="Ограничить тип: project, task, document, comment или attachment."),
+        Field(
+            description=(
+                "Ограничить тип: project, task, document, comment, attachment или milestone."
+            )
+        ),
     ] = None,
     limit: Annotated[
         int,
@@ -313,6 +320,196 @@ async def search_project_knowledge(
                 }
             )
         return results
+
+
+@mcp_server.tool(
+    name="get_calendar_range",
+    title="Временной диапазон проекта",
+    description=(
+        "Возвращает ограниченный диапазон временной карты: даты задач, вехи, "
+        "baseline, drift и рассчитанные backend-причины риска."
+    ),
+)
+async def get_calendar_range(
+    context: Context,
+    project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
+    date_from: Annotated[str, Field(description="Первый день диапазона, ГГГГ-ММ-ДД.")],
+    date_to: Annotated[str, Field(description="Последний день диапазона, ГГГГ-ММ-ДД.")],
+    today: Annotated[
+        str | None,
+        Field(description="Текущая локальная дата пользователя, ГГГГ-ММ-ДД."),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(description="Максимум задач в ответе.", ge=1, le=MAX_LIMIT),
+    ] = DEFAULT_LIMIT,
+) -> dict:
+    """Возвращает календарные факты по отображаемому ключу проекта."""
+    first = _calendar_date(date_from, "date_from")
+    last = _calendar_date(date_to, "date_to")
+    current = _calendar_date(today, "today") if today else date.today()
+    async with tool_context(context) as tools:
+        project = await resolve_project(tools, project_key)
+        try:
+            calendar = await build_calendar_service(tools.session).get_range(
+                project_id=project.id,
+                date_from=first,
+                date_to=last,
+                today=current,
+            )
+        except ApplicationError as error:
+            raise ToolError(
+                _application_message(error, "Не удалось получить календарь.")
+            ) from error
+        visible_tasks = calendar.tasks[:limit]
+        return {
+            "project_key": project.key,
+            "range": {
+                "date_from": calendar.range.date_from.isoformat(),
+                "date_to": calendar.range.date_to.isoformat(),
+            },
+            "tasks": [
+                {
+                    "task_key": item.key,
+                    "title": item.title,
+                    "start_date": item.start_date.isoformat() if item.start_date else None,
+                    "due_date": item.due_date.isoformat() if item.due_date else None,
+                    "baseline_start_date": (
+                        item.baseline_start_date.isoformat() if item.baseline_start_date else None
+                    ),
+                    "baseline_due_date": (
+                        item.baseline_due_date.isoformat() if item.baseline_due_date else None
+                    ),
+                    "drift_days": item.drift_days,
+                    "assignee": item.assignee,
+                    "is_done": item.is_done,
+                    "risk_level": item.risk_level,
+                    "risk_reasons": [
+                        reason.model_dump(mode="json", exclude_none=True)
+                        for reason in item.risk_reasons
+                    ],
+                }
+                for item in visible_tasks
+            ],
+            "milestones": [
+                {
+                    "title": item.title,
+                    "due_date": item.due_date.isoformat(),
+                    "status": item.status.value,
+                    "is_system": item.is_system,
+                }
+                for item in calendar.milestones
+            ],
+            "summary": calendar.summary.model_dump(mode="json"),
+            "truncated": len(calendar.tasks) > limit,
+        }
+
+
+@mcp_server.tool(
+    name="list_tasks_without_due_date",
+    title="Задачи проекта без срока",
+    description=(
+        "Возвращает ограниченный пул задач без due_date, чтобы их можно было "
+        "явно запланировать, не загружая весь backlog проекта."
+    ),
+)
+async def list_tasks_without_due_date(
+    context: Context,
+    project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
+    limit: Annotated[
+        int,
+        Field(description="Максимум задач в ответе.", ge=1, le=MAX_LIMIT),
+    ] = DEFAULT_LIMIT,
+) -> list[dict]:
+    """Возвращает задачи без срока с отображаемыми ключами."""
+    async with tool_context(context) as tools:
+        project = await resolve_project(tools, project_key)
+        try:
+            page = await build_calendar_service(tools.session).get_unscheduled(
+                project_id=project.id,
+                today=date.today(),
+                cursor=None,
+                limit=limit,
+            )
+        except ApplicationError as error:
+            raise ToolError(
+                _application_message(error, "Не удалось получить задачи без срока.")
+            ) from error
+        return [
+            {
+                "task_key": item.key,
+                "title": item.title,
+                "assignee": item.assignee,
+                "priority": item.priority.value,
+                "risk_reasons": [
+                    reason.model_dump(mode="json", exclude_none=True)
+                    for reason in item.risk_reasons
+                ],
+            }
+            for item in page.items
+        ]
+
+
+@mcp_server.tool(
+    name="list_milestones",
+    title="Вехи проекта",
+    description=(
+        "Возвращает пользовательские вехи проекта и системную веху дедлайна "
+        "проекта без внутренних числовых идентификаторов."
+    ),
+)
+async def list_milestones(
+    context: Context,
+    project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
+    limit: Annotated[
+        int,
+        Field(description="Максимум пользовательских вех.", ge=1, le=MAX_LIMIT),
+    ] = DEFAULT_LIMIT,
+) -> list[dict]:
+    """Возвращает простые вехи доступного проекта."""
+    async with tool_context(context) as tools:
+        project = await resolve_project(tools, project_key)
+        try:
+            milestones = await MilestonesRepository(tools.session).get_by_project(project.id)
+        except ApplicationError as error:
+            raise ToolError("Не удалось получить вехи проекта.") from error
+        result = [
+            {
+                "title": item.title,
+                "due_date": item.due_date.isoformat(),
+                "status": item.status.value,
+                "description": shorten(item.description_md),
+                "is_system": False,
+            }
+            for item in milestones[:limit]
+        ]
+        if project.due_date is not None:
+            result.append(
+                {
+                    "title": "Дедлайн проекта",
+                    "due_date": project.due_date.isoformat(),
+                    "status": (
+                        "ACHIEVED" if str(project.status.value) == "COMPLETED" else "PLANNED"
+                    ),
+                    "description": None,
+                    "is_system": True,
+                }
+            )
+        return result
+
+
+def _calendar_date(value: str, field_name: str) -> date:
+    """Разбирает date-only аргумент календарного MCP-инструмента."""
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError as error:
+        raise ToolError(f"{field_name} должен быть в формате ГГГГ-ММ-ДД.") from error
+
+
+def _application_message(error: ApplicationError, fallback: str) -> str:
+    """Возвращает безопасное доменное сообщение календарного инструмента."""
+    detail = getattr(error, "detail", None)
+    return str(detail) if detail else fallback
 
 
 def build_mcp_app() -> Starlette:

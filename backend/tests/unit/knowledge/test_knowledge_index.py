@@ -6,12 +6,14 @@ import pytest
 
 from src.db.models.documents import Document
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType, KnowledgeIndexOperation
+from src.db.models.project_milestones import ProjectMilestone, ProjectMilestoneStatus
 from src.db.models.projects import Project
 from src.db.models.task_attachments import TaskAttachment
 from src.db.models.task_comments import TaskComment
 from src.db.models.tasks import Task
 from src.knowledge.documents import build_attachment_chunks, build_comment_document
 from src.repositories.documents import DocumentsRepository
+from src.repositories.milestones import MilestonesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
@@ -89,6 +91,31 @@ async def test_upsert_existing_task_replaces_point_without_deleting_task_context
     runtime.qdrant_client.delete_task_context.assert_not_awaited()
     runtime.qdrant_client.delete_entity.assert_not_awaited()
     runtime.qdrant_client.upsert_documents.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_milestone_semantic_document_excludes_operational_dates(tmp_path) -> None:
+    service, _, _, runtime, _, _ = build_service(tmp_path)
+    milestones = AsyncMock(spec=MilestonesRepository)
+    milestones.get_by_id.return_value = ProjectMilestone(
+        id=7,
+        project_id=1,
+        title="MVP",
+        description_md="Критерии запуска.",
+        due_date=datetime.now(UTC).date(),
+        status=ProjectMilestoneStatus.PLANNED,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    service.milestones_repository = milestones
+
+    await service.process(make_job(KnowledgeIndexOperation.UPSERT, KnowledgeEntityType.MILESTONE))
+
+    texts = runtime.embedding_client.get_embeddings.await_args.args[0]
+    assert len(texts) == 1
+    assert "MVP" in texts[0]
+    assert "Критерии запуска" in texts[0]
+    assert str(datetime.now(UTC).date()) not in texts[0]
 
 
 @pytest.mark.asyncio

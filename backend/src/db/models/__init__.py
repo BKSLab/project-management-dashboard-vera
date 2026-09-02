@@ -9,11 +9,13 @@ from .knowledge_index_jobs import (
     KnowledgeIndexStatus,
 )
 from .project_members import ProjectMember, ProjectRole
+from .project_milestones import ProjectMilestone, ProjectMilestoneStatus
 from .project_stages import ProjectStage
 from .projects import Project, ProjectStatus
 from .task_activity import TaskActivity, TaskActivityEventType
 from .task_attachments import TaskAttachment
 from .task_comments import TaskComment
+from .task_dependencies import TaskDependency, TaskDependencyType
 from .tasks import Task, TaskPriority, TaskRole
 from .users import User
 from .wbs_nodes import WbsNode
@@ -30,6 +32,8 @@ __all__ = [
     "KnowledgeIndexStatus",
     "Project",
     "ProjectMember",
+    "ProjectMilestone",
+    "ProjectMilestoneStatus",
     "ProjectRole",
     "ProjectStage",
     "ProjectStatus",
@@ -38,6 +42,8 @@ __all__ = [
     "TaskActivityEventType",
     "TaskAttachment",
     "TaskComment",
+    "TaskDependency",
+    "TaskDependencyType",
     "TaskPriority",
     "TaskRole",
     "User",

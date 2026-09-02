@@ -12,15 +12,19 @@ from fastapi.responses import JSONResponse
 
 from src.api.v1.endpoints.api_tokens import router as api_tokens_router
 from src.api.v1.endpoints.auth import router as auth_router
+from src.api.v1.endpoints.calendar import router as calendar_router
+from src.api.v1.endpoints.calendar_scenarios import router as calendar_scenarios_router
 from src.api.v1.endpoints.dashboard import router as dashboard_router
 from src.api.v1.endpoints.document_links import router as document_links_router
 from src.api.v1.endpoints.documents import router as documents_router
 from src.api.v1.endpoints.knowledge import router as knowledge_router
+from src.api.v1.endpoints.milestones import router as milestones_router
 from src.api.v1.endpoints.project_stages import router as project_stages_router
 from src.api.v1.endpoints.projects import router as projects_router
 from src.api.v1.endpoints.task_activity import router as task_activity_router
 from src.api.v1.endpoints.task_attachments import router as task_attachments_router
 from src.api.v1.endpoints.task_comments import router as task_comments_router
+from src.api.v1.endpoints.task_dependencies import router as task_dependencies_router
 from src.api.v1.endpoints.tasks import router as tasks_router
 from src.api.v1.endpoints.users import router as users_router
 from src.api.v1.endpoints.wbs_nodes import router as wbs_nodes_router
@@ -134,6 +138,9 @@ for api_router in (
     users_router,
     api_tokens_router,
     dashboard_router,
+    calendar_router,
+    calendar_scenarios_router,
+    milestones_router,
     projects_router,
     project_stages_router,
     tasks_router,
@@ -141,6 +148,7 @@ for api_router in (
     documents_router,
     document_links_router,
     task_comments_router,
+    task_dependencies_router,
     task_activity_router,
     task_attachments_router,
     knowledge_router,

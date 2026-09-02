@@ -7,12 +7,14 @@ from src.repositories.api_tokens import ApiTokensRepository
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
+from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
+from src.repositories.task_dependencies import TaskDependenciesRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.users import UsersRepository
@@ -64,6 +66,11 @@ def get_knowledge_index_jobs_repository(session: DbSessionDep) -> KnowledgeIndex
     return KnowledgeIndexJobsRepository(session)
 
 
+def get_milestones_repository(session: DbSessionDep) -> MilestonesRepository:
+    """Создаёт репозиторий проектных вех в рамках сессии запроса."""
+    return MilestonesRepository(session)
+
+
 def get_document_links_repository(session: DbSessionDep) -> DocumentLinksRepository:
     """Создаёт репозиторий связей документов в рамках сессии запроса."""
     return DocumentLinksRepository(session)
@@ -72,6 +79,11 @@ def get_document_links_repository(session: DbSessionDep) -> DocumentLinksReposit
 def get_task_comments_repository(session: DbSessionDep) -> TaskCommentsRepository:
     """Создаёт репозиторий комментариев в рамках сессии запроса."""
     return TaskCommentsRepository(session)
+
+
+def get_task_dependencies_repository(session: DbSessionDep) -> TaskDependenciesRepository:
+    """Создаёт репозиторий зависимостей задач в рамках сессии запроса."""
+    return TaskDependenciesRepository(session)
 
 
 def get_task_activity_repository(session: DbSessionDep) -> TaskActivityRepository:
@@ -107,6 +119,7 @@ KnowledgeIndexJobsRepositoryDep = Annotated[
     KnowledgeIndexJobsRepository,
     Depends(get_knowledge_index_jobs_repository),
 ]
+MilestonesRepositoryDep = Annotated[MilestonesRepository, Depends(get_milestones_repository)]
 DocumentLinksRepositoryDep = Annotated[
     DocumentLinksRepository,
     Depends(get_document_links_repository),
@@ -114,6 +127,10 @@ DocumentLinksRepositoryDep = Annotated[
 TaskCommentsRepositoryDep = Annotated[
     TaskCommentsRepository,
     Depends(get_task_comments_repository),
+]
+TaskDependenciesRepositoryDep = Annotated[
+    TaskDependenciesRepository,
+    Depends(get_task_dependencies_repository),
 ]
 TaskActivityRepositoryDep = Annotated[
     TaskActivityRepository,

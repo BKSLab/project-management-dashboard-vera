@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from uuid import NAMESPACE_URL, uuid5
 
 from src.db.models.documents import Document
+from src.db.models.project_milestones import ProjectMilestone
 from src.db.models.projects import Project
 from src.db.models.task_attachments import TaskAttachment
 from src.db.models.task_comments import TaskComment
@@ -95,6 +96,28 @@ def build_task_document(
             "task_key": task_key,
             "wbs_path": wbs_path,
         },
+    )
+
+
+def build_milestone_document(milestone: ProjectMilestone) -> KnowledgeDocument:
+    """Строит semantic object вехи только из её содержательных полей."""
+    text = "\n".join(
+        part
+        for part in (
+            "Тип: проектная веха",
+            f"Название: {milestone.title}",
+            f"Описание:\n{milestone.description_md}" if milestone.description_md else None,
+        )
+        if part
+    )
+    return _document(
+        project_id=milestone.project_id,
+        entity_type="milestone",
+        entity_id=milestone.id,
+        chunk_index=0,
+        text=text,
+        title=milestone.title,
+        updated_at=milestone.updated_at.isoformat(),
     )
 
 
