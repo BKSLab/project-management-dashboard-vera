@@ -23,6 +23,15 @@ class AppSettings(SettingsBase):
     app_version: str = "1.0.0"
     api_v1_prefix: str = "/api/v1"
     mcp_path: str = "/mcp"
+    # Хосты, с которых принимается MCP: защита от DNS-rebinding в SDK
+    # иначе разрешает только localhost и ломает доступ по адресу сервера.
+    mcp_allowed_hosts: list[str] = [
+        "localhost",
+        "localhost:*",
+        "127.0.0.1",
+        "127.0.0.1:*",
+    ]
+    mcp_allowed_origins: list[str] = []
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
     logging_config_path: Path = BASE_DIR / "logging.ini"
     uploads_path: Path = BASE_DIR / "uploads"

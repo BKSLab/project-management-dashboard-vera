@@ -1,7 +1,7 @@
 """api tokens for external clients
 
 Revision ID: a3f81c72d5b4
-Revises: e7b5d29c41a0
+Revises: 4d8e61c7b2a9
 Create Date: 2026-09-02 14:00:00.000000
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "a3f81c72d5b4"
-down_revision: Union[str, Sequence[str], None] = "e7b5d29c41a0"
+down_revision: Union[str, Sequence[str], None] = "4d8e61c7b2a9"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

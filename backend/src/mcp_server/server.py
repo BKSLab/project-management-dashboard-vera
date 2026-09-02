@@ -10,6 +10,7 @@ from collections import Counter
 from typing import Annotated
 
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 from starlette.applications import Starlette
@@ -320,7 +321,18 @@ def build_mcp_app() -> Starlette:
     Returns:
         Starlette-приложение транспорта Streamable HTTP.
     """
-    return mcp_server.streamable_http_app(streamable_http_path="/")
+    settings = get_settings().app
+    # Настройки передаются явно: иначе SDK сам включает защиту с allowlist
+    # только под localhost, и доступ по адресу сервера отвечает 421.
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(settings.mcp_allowed_hosts),
+        allowed_origins=list(settings.mcp_allowed_origins),
+    )
+    return mcp_server.streamable_http_app(
+        streamable_http_path="/",
+        transport_security=security,
+    )
 
 
 # Инструменты записи регистрируются импортом: декоратор привязывает их к
