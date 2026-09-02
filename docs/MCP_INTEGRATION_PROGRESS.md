@@ -19,13 +19,13 @@
 
 ## Этап 2. MCP-сервер: чтение
 
-- [ ] 2.1 Транспорт и монтирование роутера `/mcp`
-- [ ] 2.2 `list_projects`, `get_project`
-- [ ] 2.3 `list_tasks`, `get_task`
-- [ ] 2.4 `list_comments`
-- [ ] 2.5 `search_tasks`, `search_project_knowledge`
-- [ ] 2.6 Маппинг доменных исключений в ошибки инструментов
-- [ ] 2.7 Тесты этапа 2
+- [x] 2.1 Транспорт и монтирование роутера `/mcp`
+- [x] 2.2 `list_projects`, `get_project`
+- [x] 2.3 `list_tasks`, `get_task`
+- [x] 2.4 `list_comments`
+- [x] 2.5 `search_tasks`, `search_project_knowledge`
+- [x] 2.6 Маппинг доменных исключений в ошибки инструментов
+- [x] 2.7 Тесты этапа 2
 
 ## Этап 3. MCP-сервер: запись
 
@@ -54,3 +54,4 @@
 |---|---|---|
 | 2026-09-02 | Создана ветка и worktree, план перенесён в ветку | — |
 | 2026-09-02 | **Этап 1 закрыт полностью.** Модель и миграция `a3f81c72d5b4`, репозиторий, сервис, единая точка аутентификации с Bearer, скоупы, API управления токенами. Добавлено 56 тестов | `ruff check` — passed; `ruff format` — чисто по изменённым файлам; `flake8` — чисто; `CI=1 pytest -q` — 231 passed, 0 skipped; `alembic upgrade head` и `alembic check` на чистой БД — No new upgrade operations; `alembic downgrade` — успешно |
+| 2026-09-02 | **Этап 2 закрыт полностью.** MCP на `mcp==2.1.1` (MCPServer, Streamable HTTP) смонтирован на `/mcp`, сессионный менеджер живёт в lifespan приложения. Семь инструментов чтения поверх существующих репозиториев, контракт на ключах `VERA` / `VERA-142`. Добавлено 43 теста | `ruff check` — passed; `flake8` по новым модулям — чисто; `CI=1 pytest -q` — 274 passed, 0 skipped |

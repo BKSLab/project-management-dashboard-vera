@@ -22,6 +22,7 @@ class AppSettings(SettingsBase):
     app_name: str = "Project Management Dashboard Vera"
     app_version: str = "1.0.0"
     api_v1_prefix: str = "/api/v1"
+    mcp_path: str = "/mcp"
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
     logging_config_path: Path = BASE_DIR / "logging.ini"
     uploads_path: Path = BASE_DIR / "uploads"
