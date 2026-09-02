@@ -720,6 +720,6 @@ class TasksRepository:
 
 
 def _extract_task_number(search: str) -> int | None:
-    """Возвращает номер задачи из запроса вида ``VERA-142`` или ``142``."""
+    """Возвращает номер задачи из запроса вида ``PROJ-142`` или ``142``."""
     candidate = search.strip().rsplit("-", maxsplit=1)[-1]
     return int(candidate) if candidate.isdigit() else None

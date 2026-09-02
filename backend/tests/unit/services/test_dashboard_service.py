@@ -95,7 +95,7 @@ def build_service(
 @pytest.mark.asyncio
 async def test_overview_aggregates_projects_and_totals() -> None:
     projects = [
-        project(1, "VERA", ProjectStatus.ACTIVE),
+        project(1, "PROJ", ProjectStatus.ACTIVE),
         project(2, "SITE", ProjectStatus.PLANNING),
     ]
     stages = [
@@ -139,7 +139,7 @@ async def test_overview_aggregates_projects_and_totals() -> None:
 @pytest.mark.asyncio
 async def test_overview_handles_project_without_tasks() -> None:
     service = build_service(
-        projects=[project(1, "VERA", ProjectStatus.PLANNING)],
+        projects=[project(1, "PROJ", ProjectStatus.PLANNING)],
         stages=[],
         portfolio_counters=[],
         stage_counts=[],
@@ -158,7 +158,7 @@ async def test_overview_marks_overdue_attention_tasks() -> None:
         SimpleNamespace(id=1, project_id=1, order_index=0, name="Бэклог", is_done_stage=False),
     ]
     service = build_service(
-        projects=[project(1, "VERA", ProjectStatus.ACTIVE)],
+        projects=[project(1, "PROJ", ProjectStatus.ACTIVE)],
         stages=stages,
         portfolio_counters=[counters(1, total=2, done=0, overdue=1)],
         stage_counts=[SimpleNamespace(project_id=1, stage_id=1, tasks_count=2)],
@@ -171,9 +171,9 @@ async def test_overview_marks_overdue_attention_tasks() -> None:
     result = await service.get_overview(user_id=USER_ID)
 
     overdue, upcoming = result.attention_tasks
-    assert overdue.key == "VERA-11"
+    assert overdue.key == "PROJ-11"
     assert overdue.is_overdue is True
-    assert overdue.project_name == "Проект VERA"
+    assert overdue.project_name == "Проект PROJ"
     assert upcoming.is_overdue is False
 
 

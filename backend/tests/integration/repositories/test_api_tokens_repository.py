@@ -49,7 +49,7 @@ async def test_wrong_secret_is_not_found(db_session: AsyncSession, user: User) -
     repository = ApiTokensRepository(db_session)
     await _create(repository, user)
 
-    assert await repository.get_active_by_hash(hash_token_secret("vera_чужой")) is None
+    assert await repository.get_active_by_hash(hash_token_secret("tt_чужой")) is None
 
 
 @pytest.mark.asyncio

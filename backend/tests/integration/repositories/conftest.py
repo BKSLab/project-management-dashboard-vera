@@ -29,8 +29,8 @@ async def project(db_session: AsyncSession, user: User) -> Project:
     return await ProjectsRepository(db_session).save(
         data={
             "owner_id": user.id,
-            "key": "VERA",
-            "name": "Агент Вера",
+            "key": "PROJ",
+            "name": "Тестовый проект",
             "status": "PLANNING",
             "color": "#58a6ff",
             "order_index": 0,

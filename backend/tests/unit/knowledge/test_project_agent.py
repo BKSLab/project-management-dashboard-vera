@@ -34,8 +34,8 @@ def build_service(*, semantic_available: bool = True):
     project = Project(
         id=1,
         owner_id=1,
-        key="VERA",
-        name="Агент Вера",
+        key="PROJ",
+        name="Тестовый проект",
         description_md="Система управления рисками",
         status=ProjectStatus.ACTIVE,
         color="#58a6ff",
@@ -94,7 +94,7 @@ def build_service(*, semantic_available: bool = True):
         )
         handle = task_candidate["source_handle"]
         return AgentOutput(
-            answer="Задача **VERA-12** находится в работе.",
+            answer="Задача **PROJ-12** находится в работе.",
             source_ids=[handle],
         )
 
@@ -136,7 +136,7 @@ async def test_agent_combines_current_sql_state_with_validated_sources() -> None
     prompt = runtime.llm_client.get_structured_response.await_args.kwargs["content"]
     payload = json.loads(prompt)
     retrieved = payload["retrieval_context"][0]["current_data"]
-    assert retrieved["task_key"] == "VERA-12"
+    assert retrieved["task_key"] == "PROJ-12"
     assert retrieved["stage"] == "В работе"
     assert retrieved["priority"] == "HIGH"
 
@@ -249,7 +249,7 @@ async def test_agent_does_not_fabricate_sources_when_model_returns_empty_source_
                 "entity_type": "task",
                 "entity_id": "7",
                 "task_id": "7",
-                "title": "VERA-12 · Подготовить паспорт рисков",
+                "title": "PROJ-12 · Подготовить паспорт рисков",
                 "text": "Релевантный фрагмент",
             },
         )
@@ -421,7 +421,7 @@ async def test_hybrid_context_merges_lexical_and_vector_candidates() -> None:
                 "entity_type": "task",
                 "entity_id": "7",
                 "task_id": "7",
-                "title": "VERA-12 · Подготовить паспорт рисков",
+                "title": "PROJ-12 · Подготовить паспорт рисков",
                 "text": "Семантический фрагмент задачи.",
             },
         ),
@@ -434,7 +434,7 @@ async def test_hybrid_context_merges_lexical_and_vector_candidates() -> None:
     assert [item["entity_type"] for item in retrieval] == ["document", "task"]
     assert retrieval[0]["current_data"]["slug"] == "risk-register"
     assert retrieval[0]["semantic_fragment"]["text"] == "Семантический фрагмент реестра."
-    assert retrieval[1]["current_data"]["task_key"] == "VERA-12"
+    assert retrieval[1]["current_data"]["task_key"] == "PROJ-12"
     assert retrieval[1]["semantic_fragment"]["text"] == "Семантический фрагмент задачи."
 
 
@@ -476,15 +476,15 @@ async def test_query_condensation_receives_history_and_drives_both_searches() ->
         if schema is AgentToolPlan:
             planner_payload = json.loads(content)
             assert planner_payload["history"] == [
-                {"role": "user", "content": "Расскажи про задачу VERA-12"},
+                {"role": "user", "content": "Расскажи про задачу PROJ-12"},
                 {"role": "assistant", "content": "Она находится в работе."},
             ]
-            return AgentToolPlan(search_query="Кто выполняет задачу VERA-12?")
+            return AgentToolPlan(search_query="Кто выполняет задачу PROJ-12?")
         return AgentOutput(answer="Исполнитель не указан.", source_ids=[])
 
     runtime.llm_client.get_structured_response.side_effect = condense_query
     history = [
-        KnowledgeChatMessageSchema(role="user", content="Расскажи про задачу VERA-12"),
+        KnowledgeChatMessageSchema(role="user", content="Расскажи про задачу PROJ-12"),
         KnowledgeChatMessageSchema(role="assistant", content="Она находится в работе."),
     ]
 
@@ -492,12 +492,12 @@ async def test_query_condensation_receives_history_and_drives_both_searches() ->
 
     service.tasks_repository.search_ranked.assert_awaited_once_with(
         project_id=project.id,
-        search="Кто выполняет задачу VERA-12?",
+        search="Кто выполняет задачу PROJ-12?",
         limit=30,
     )
     service.documents_repository.search_ranked.assert_awaited_once_with(
         project_id=project.id,
-        search="Кто выполняет задачу VERA-12?",
+        search="Кто выполняет задачу PROJ-12?",
         limit=30,
     )
-    runtime.embedding_client.get_embedding.assert_awaited_once_with("Кто выполняет задачу VERA-12?")
+    runtime.embedding_client.get_embedding.assert_awaited_once_with("Кто выполняет задачу PROJ-12?")

@@ -16,7 +16,7 @@ function token(overrides: Partial<ApiToken> = {}): ApiToken {
     return {
         id: 1,
         name: "Ноутбук",
-        prefix: "vera_Ab",
+        prefix: "tt_Ab",
         scope: "READ",
         created_at: "2026-09-01T10:00:00Z",
         expires_at: null,
@@ -36,24 +36,24 @@ describe("mcpServerUrl", () => {
     });
 
     it("учитывает нестандартный путь", () => {
-        expect(mcpServerUrl("https://vera.example", "/tools")).toBe("https://vera.example/tools");
+        expect(mcpServerUrl("https://tracker.example", "/tools")).toBe("https://tracker.example/tools");
     });
 });
 
 describe("buildMcpConfig", () => {
     it("подставляет секрет сразу после выпуска", () => {
         const config = JSON.parse(
-            buildMcpConfig({ origin: "http://localhost:5173", secret: "vera_secret" }),
+            buildMcpConfig({ origin: "http://localhost:5173", secret: "tt_secret" }),
         );
 
-        expect(config.mcpServers["vera-tracker"].headers.Authorization).toBe("Bearer vera_secret");
-        expect(config.mcpServers["vera-tracker"].url).toBe("http://localhost:5173/mcp");
+        expect(config.mcpServers["task-tracker"].headers.Authorization).toBe("Bearer tt_secret");
+        expect(config.mcpServers["task-tracker"].url).toBe("http://localhost:5173/mcp");
     });
 
     it("ставит плейсхолдер, когда секрета нет", () => {
         const config = JSON.parse(buildMcpConfig({ origin: "http://localhost:5173" }));
 
-        expect(config.mcpServers["vera-tracker"].headers.Authorization).toBe(
+        expect(config.mcpServers["task-tracker"].headers.Authorization).toBe(
             `Bearer ${SECRET_PLACEHOLDER}`,
         );
     });
@@ -63,7 +63,7 @@ describe("buildMcpConfig", () => {
             buildMcpConfig({ origin: "http://localhost:5173", secret: "   " }),
         );
 
-        expect(config.mcpServers["vera-tracker"].headers.Authorization).toContain(
+        expect(config.mcpServers["task-tracker"].headers.Authorization).toContain(
             SECRET_PLACEHOLDER,
         );
     });

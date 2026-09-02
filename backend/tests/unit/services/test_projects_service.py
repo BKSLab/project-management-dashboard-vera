@@ -51,13 +51,13 @@ def task(
     )
 
 
-def make_project(project_id: int = 7, key: str = "VERA") -> SimpleNamespace:
+def make_project(project_id: int = 7, key: str = "PROJ") -> SimpleNamespace:
     """Возвращает дублёр проекта со всеми полями схемы ответа."""
     now = datetime.now(UTC)
     return SimpleNamespace(
         id=project_id,
         key=key,
-        name="Агент Вера",
+        name="Тестовый проект",
         description_md=None,
         status="ACTIVE",
         color="#58a6ff",
@@ -103,7 +103,7 @@ async def test_create_project_adds_default_stages() -> None:
         projects_repository, stages_repository, members_repository=members_repository
     )
 
-    await service.create_project(data={"key": "VERA", "name": "Агент Вера"}, owner_id=OWNER_ID)
+    await service.create_project(data={"key": "PROJ", "name": "Тестовый проект"}, owner_id=OWNER_ID)
 
     saved = projects_repository.save.await_args.kwargs["data"]
     assert saved["order_index"] == 3
@@ -122,13 +122,13 @@ async def test_create_project_adds_default_stages() -> None:
 async def test_create_project_with_busy_key_raises_conflict() -> None:
     projects_repository = AsyncMock(spec=ProjectsRepository)
     projects_repository.get_max_order_index.return_value = 0
-    projects_repository.save.side_effect = ProjectKeyAlreadyExistsRepositoryError(key="VERA")
+    projects_repository.save.side_effect = ProjectKeyAlreadyExistsRepositoryError(key="PROJ")
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
     service = build_service(projects_repository, stages_repository)
 
     with pytest.raises(ProjectKeyConflictError) as exc_info:
         await service.create_project(
-            data={"key": "VERA", "name": "Агент Вера"},
+            data={"key": "PROJ", "name": "Тестовый проект"},
             owner_id=OWNER_ID,
         )
 

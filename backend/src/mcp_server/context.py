@@ -92,7 +92,7 @@ async def resolve_project(tools: ToolContext, project_key: str) -> Project:
 
     Args:
         tools: Контекст вызова инструмента.
-        project_key: Отображаемый ключ проекта, например ``VERA``.
+        project_key: Отображаемый ключ проекта, например ``PROJ``.
 
     Returns:
         Проект, доступный пользователю.
@@ -118,7 +118,7 @@ async def resolve_task(tools: ToolContext, task_key: str) -> tuple[Task, Project
 
     Args:
         tools: Контекст вызова инструмента.
-        task_key: Ключ задачи вида ``VERA-142``.
+        task_key: Ключ задачи вида ``PROJ-142``.
 
     Returns:
         Задача и её проект.
@@ -128,7 +128,7 @@ async def resolve_task(tools: ToolContext, task_key: str) -> tuple[Task, Project
     """
     project_key, _, number_text = (task_key or "").strip().rpartition("-")
     if not project_key or not number_text.isdigit():
-        raise ToolError("Ключ задачи должен иметь вид VERA-142.")
+        raise ToolError("Ключ задачи должен иметь вид PROJ-142.")
 
     project = await resolve_project(tools, project_key)
     try:

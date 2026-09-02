@@ -20,8 +20,8 @@ from src.mcp_server.context import ToolContext
 VISIBLE = Project(
     id=1,
     owner_id=1,
-    key="VERA",
-    name="Агент Вера",
+    key="PROJ",
+    name="Тестовый проект",
     color="#58a6ff",
     status=ProjectStatus.ACTIVE,
 )
@@ -64,7 +64,7 @@ TASKS = [
 class FakeContext:
     """Контекст вызова MCP с заголовком токена."""
 
-    headers = {"Authorization": "Bearer vera_test"}
+    headers = {"Authorization": "Bearer tt_test"}
 
 
 def _tools(scope: ApiTokenScope = ApiTokenScope.READ) -> ToolContext:
@@ -101,7 +101,7 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
             return [VISIBLE, FOREIGN]
 
         async def get_by_key(self, key: str) -> Project | None:
-            return {"VERA": VISIBLE, "OTHER": FOREIGN}.get(key)
+            return {"PROJ": VISIBLE, "OTHER": FOREIGN}.get(key)
 
     class Members:
         def __init__(self, session):
@@ -162,14 +162,14 @@ async def test_list_projects_hides_foreign_projects(tracker) -> None:
     """Проект, в котором пользователь не состоит, в списке не появляется."""
     result = await srv.list_projects(FakeContext())
 
-    assert [item["project_key"] for item in result] == ["VERA"]
+    assert [item["project_key"] for item in result] == ["PROJ"]
 
 
 async def test_get_project_returns_stages_with_counts(tracker) -> None:
     """Карточка проекта содержит стадии и число задач в каждой."""
-    result = await srv.get_project(FakeContext(), project_key="VERA")
+    result = await srv.get_project(FakeContext(), project_key="PROJ")
 
-    assert result["project_key"] == "VERA"
+    assert result["project_key"] == "PROJ"
     assert result["total_tasks"] == 2
     assert {stage["name"]: stage["task_count"] for stage in result["stages"]} == {
         "В работе": 1,
@@ -184,54 +184,54 @@ async def test_get_project_rejects_foreign_project(tracker) -> None:
 
 
 async def test_list_tasks_returns_display_keys(tracker) -> None:
-    """Наружу отдаются ключи вида VERA-1, а не числовые идентификаторы."""
-    result = await srv.list_tasks(FakeContext(), project_key="VERA")
+    """Наружу отдаются ключи вида PROJ-1, а не числовые идентификаторы."""
+    result = await srv.list_tasks(FakeContext(), project_key="PROJ")
 
-    assert [item["task_key"] for item in result] == ["VERA-1", "VERA-2"]
+    assert [item["task_key"] for item in result] == ["PROJ-1", "PROJ-2"]
     assert all("id" not in item for item in result)
 
 
 async def test_list_tasks_filters_by_stage(tracker) -> None:
     """Фильтр по названию стадии работает без учёта регистра."""
-    result = await srv.list_tasks(FakeContext(), project_key="VERA", stage="в работе")
+    result = await srv.list_tasks(FakeContext(), project_key="PROJ", stage="в работе")
 
-    assert [item["task_key"] for item in result] == ["VERA-1"]
+    assert [item["task_key"] for item in result] == ["PROJ-1"]
 
 
 async def test_list_tasks_unknown_stage_lists_available(tracker) -> None:
     """Неизвестная стадия подсказывает доступные, а не молча отдаёт пустоту."""
     with pytest.raises(ToolError) as error:
-        await srv.list_tasks(FakeContext(), project_key="VERA", stage="Неизвестная")
+        await srv.list_tasks(FakeContext(), project_key="PROJ", stage="Неизвестная")
 
     assert "В работе" in str(error.value)
 
 
 async def test_list_tasks_filters_by_assignee(tracker) -> None:
     """Фильтр по исполнителю сравнивает без учёта регистра."""
-    result = await srv.list_tasks(FakeContext(), project_key="VERA", assignee="анна")
+    result = await srv.list_tasks(FakeContext(), project_key="PROJ", assignee="анна")
 
-    assert [item["task_key"] for item in result] == ["VERA-2"]
+    assert [item["task_key"] for item in result] == ["PROJ-2"]
 
 
 async def test_list_tasks_only_open_drops_done_stage(tracker) -> None:
     """Флаг только незавершённых отбрасывает задачи завершающей стадии."""
-    result = await srv.list_tasks(FakeContext(), project_key="VERA", only_open=True)
+    result = await srv.list_tasks(FakeContext(), project_key="PROJ", only_open=True)
 
-    assert [item["task_key"] for item in result] == ["VERA-1"]
+    assert [item["task_key"] for item in result] == ["PROJ-1"]
 
 
 async def test_list_tasks_respects_limit(tracker) -> None:
     """Лимит ограничивает выдачу: агент не вытянет проект целиком случайно."""
-    result = await srv.list_tasks(FakeContext(), project_key="VERA", limit=1)
+    result = await srv.list_tasks(FakeContext(), project_key="PROJ", limit=1)
 
     assert len(result) == 1
 
 
 async def test_get_task_returns_details_and_comment_count(tracker) -> None:
     """Карточка задачи содержит описание и число комментариев."""
-    result = await srv.get_task(FakeContext(), task_key="VERA-1")
+    result = await srv.get_task(FakeContext(), task_key="PROJ-1")
 
-    assert result["task_key"] == "VERA-1"
+    assert result["task_key"] == "PROJ-1"
     assert result["description"] == "Описание"
     assert result["comment_count"] == 1
     assert result["is_done"] is False
@@ -239,30 +239,30 @@ async def test_get_task_returns_details_and_comment_count(tracker) -> None:
 
 async def test_get_task_marks_done_stage(tracker) -> None:
     """Завершённость берётся из признака стадии, а не из поля задачи."""
-    result = await srv.get_task(FakeContext(), task_key="VERA-2")
+    result = await srv.get_task(FakeContext(), task_key="PROJ-2")
 
     assert result["is_done"] is True
 
 
 async def test_list_comments_returns_body_and_author(tracker) -> None:
     """Комментарии отдаются с автором и ключом задачи."""
-    result = await srv.list_comments(FakeContext(), task_key="VERA-1")
+    result = await srv.list_comments(FakeContext(), task_key="PROJ-1")
 
-    assert result[0]["task_key"] == "VERA-1"
+    assert result[0]["task_key"] == "PROJ-1"
     assert result[0]["author"] == "Борис"
     assert result[0]["body"] == "Ждём уточнения"
 
 
 async def test_search_tasks_finds_by_text(tracker) -> None:
     """Лексический поиск возвращает совпавшие задачи."""
-    result = await srv.search_tasks(FakeContext(), project_key="VERA", query="вход")
+    result = await srv.search_tasks(FakeContext(), project_key="PROJ", query="вход")
 
-    assert [item["task_key"] for item in result] == ["VERA-1"]
+    assert [item["task_key"] for item in result] == ["PROJ-1"]
 
 
 async def test_search_tasks_returns_empty_without_matches(tracker) -> None:
     """Отсутствие совпадений — пустой список, а не ошибка."""
-    result = await srv.search_tasks(FakeContext(), project_key="VERA", query="ничего")
+    result = await srv.search_tasks(FakeContext(), project_key="PROJ", query="ничего")
 
     assert result == []
 

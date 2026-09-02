@@ -68,7 +68,7 @@ async def test_search_finds_task_by_number_and_text(
         )
     )
 
-    by_key = await repository.search_ids(project_id=stage.project_id, search="VERA-142")
+    by_key = await repository.search_ids(project_id=stage.project_id, search="PROJ-142")
     by_number = await repository.search_ids(project_id=stage.project_id, search="142")
     by_prefix = await repository.search_ids(project_id=stage.project_id, search="пользова")
 

@@ -34,7 +34,7 @@ def _user() -> User:
 
 
 def _project(**overrides) -> Project:
-    values = {"id": 1, "owner_id": 1, "key": "VERA", "name": "Агент Вера", "color": "#58a6ff"}
+    values = {"id": 1, "owner_id": 1, "key": "PROJ", "name": "Тестовый проект", "color": "#58a6ff"}
     values.update(overrides)
     return Project(**values)
 
@@ -53,9 +53,9 @@ def _tools() -> ToolContext:
 @pytest.mark.parametrize(
     ("headers", "expected"),
     [
-        ({"Authorization": "Bearer vera_x"}, "Bearer vera_x"),
-        ({"authorization": "Bearer vera_x"}, "Bearer vera_x"),
-        ({"AUTHORIZATION": "Bearer vera_x"}, "Bearer vera_x"),
+        ({"Authorization": "Bearer tt_x"}, "Bearer tt_x"),
+        ({"authorization": "Bearer tt_x"}, "Bearer tt_x"),
+        ({"AUTHORIZATION": "Bearer tt_x"}, "Bearer tt_x"),
         ({"X-Other": "нет"}, None),
         ({}, None),
         (None, None),
@@ -90,7 +90,7 @@ async def test_resolve_project_rejects_foreign_project(monkeypatch: pytest.Monke
     monkeypatch.setattr(ctx, "ProjectMembersRepository", Members)
 
     with pytest.raises(ToolError) as error:
-        await resolve_project(_tools(), "VERA")
+        await resolve_project(_tools(), "PROJ")
 
     assert str(error.value) == ctx.PROJECT_NOT_AVAILABLE
 
@@ -137,10 +137,10 @@ async def test_resolve_project_allows_member(monkeypatch: pytest.MonkeyPatch) ->
 
     project = await resolve_project(_tools(), "vera")
 
-    assert project.key == "VERA"
+    assert project.key == "PROJ"
 
 
-@pytest.mark.parametrize("value", ["", "   ", "VERA", "VERA-", "VERA-abc", "-142", "142"])
+@pytest.mark.parametrize("value", ["", "   ", "PROJ", "PROJ-", "PROJ-abc", "-142", "142"])
 async def test_resolve_task_rejects_malformed_key(value: str) -> None:
     """Некорректный ключ задачи отклоняется до обращения к базе."""
     with pytest.raises(ToolError):
@@ -176,7 +176,7 @@ async def test_resolve_task_rejects_unknown_number(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(ctx, "TasksRepository", Tasks)
 
     with pytest.raises(ToolError) as error:
-        await resolve_task(_tools(), "VERA-999")
+        await resolve_task(_tools(), "PROJ-999")
 
     assert str(error.value) == ctx.TASK_NOT_AVAILABLE
 
@@ -212,7 +212,7 @@ async def test_resolve_task_checks_project_access_first(monkeypatch: pytest.Monk
     monkeypatch.setattr(ctx, "TasksRepository", Tasks)
 
     with pytest.raises(ToolError) as error:
-        await resolve_task(_tools(), "VERA-1")
+        await resolve_task(_tools(), "PROJ-1")
 
     assert str(error.value) == ctx.PROJECT_NOT_AVAILABLE
     assert touched == []

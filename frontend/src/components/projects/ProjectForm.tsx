@@ -28,7 +28,7 @@ export function ProjectForm({ values, onChange, lockKey = false }: ProjectFormPr
             <div className="grid gap-4 sm:grid-cols-[140px_1fr]">
                 <Field
                     label="Код"
-                    hint={lockKey ? undefined : "Префикс номеров задач: VERA-142"}
+                    hint={lockKey ? undefined : "Префикс номеров задач: PROJ-142"}
                     error={keyError}
                 >
                     {(id) => (
@@ -37,7 +37,7 @@ export function ProjectForm({ values, onChange, lockKey = false }: ProjectFormPr
                             value={values.key}
                             disabled={lockKey}
                             maxLength={10}
-                            placeholder="VERA"
+                            placeholder="PROJ"
                             className="font-mono uppercase"
                             onBlur={() => setKeyTouched(true)}
                             onChange={(event) =>

@@ -14,7 +14,7 @@ class ProjectSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int = Field(..., description="Уникальный идентификатор проекта.", examples=[1])
-    key: str = Field(..., description="Короткий код проекта.", examples=["VERA"])
+    key: str = Field(..., description="Короткий код проекта.", examples=["PROJ"])
     name: str = Field(..., description="Название проекта.", examples=["Агент Вера"])
     description_md: str | None = Field(
         None,
@@ -53,7 +53,7 @@ class ProjectCreateSchema(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "key": "VERA",
+                "key": "PROJ",
                 "name": "Агент Вера",
                 "description_md": "Персональный ассистент для подбора работы.",
                 "color": "#58a6ff",
@@ -66,7 +66,7 @@ class ProjectCreateSchema(BaseModel):
         ...,
         pattern=KEY_PATTERN,
         description="Короткий код проекта: латиница и цифры, от 2 до 10 символов.",
-        examples=["VERA"],
+        examples=["PROJ"],
     )
     name: str = Field(
         ...,
@@ -124,7 +124,7 @@ class ProjectUpdateSchema(BaseModel):
         None,
         pattern=KEY_PATTERN,
         description="Новый короткий код проекта.",
-        examples=["VERA"],
+        examples=["PROJ"],
     )
     name: str | None = Field(
         None,

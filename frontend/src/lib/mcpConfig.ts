@@ -50,7 +50,7 @@ export function buildMcpConfig(options: {
     return JSON.stringify(
         {
             mcpServers: {
-                "vera-tracker": {
+                "task-tracker": {
                     type: "http",
                     url,
                     headers: { Authorization: `Bearer ${secret}` },

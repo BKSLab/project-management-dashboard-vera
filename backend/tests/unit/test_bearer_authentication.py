@@ -81,12 +81,12 @@ def _token(secret: str, **overrides) -> ApiToken:
 @pytest.mark.parametrize(
     ("header", "expected"),
     [
-        ("Bearer vera_secret", "vera_secret"),
-        ("bearer vera_secret", "vera_secret"),
-        ("BEARER vera_secret", "vera_secret"),
-        ("Bearer   vera_secret  ", "vera_secret"),
-        ("Basic vera_secret", None),
-        ("vera_secret", None),
+        ("Bearer tt_secret", "tt_secret"),
+        ("bearer tt_secret", "tt_secret"),
+        ("BEARER tt_secret", "tt_secret"),
+        ("Bearer   tt_secret  ", "tt_secret"),
+        ("Basic tt_secret", None),
+        ("tt_secret", None),
         ("Bearer", None),
         ("Bearer   ", None),
         ("", None),
@@ -100,7 +100,7 @@ def test_extract_bearer(header: str | None, expected: str | None) -> None:
 
 async def test_valid_token_authenticates_and_keeps_scope() -> None:
     """Действующий токен пускает пользователя и сохраняет свои права."""
-    secret = "vera_valid"
+    secret = "tt_valid"
     user = _user()
     tokens = FakeTokensRepository(_token(secret, scope=ApiTokenScope.READ))
 
@@ -122,9 +122,9 @@ async def test_unknown_token_is_rejected() -> None:
     with pytest.raises(HTTPException) as error:
         await get_principal(
             session_cookie=None,
-            authorization="Bearer vera_unknown",
+            authorization="Bearer tt_unknown",
             users_repository=FakeUsersRepository(_user()),
-            tokens_repository=FakeTokensRepository(_token("vera_other")),
+            tokens_repository=FakeTokensRepository(_token("tt_other")),
         )
 
     assert error.value.status_code == 401
@@ -132,7 +132,7 @@ async def test_unknown_token_is_rejected() -> None:
 
 async def test_token_of_disabled_user_is_rejected() -> None:
     """Отключённый пользователь не проходит даже с действующим токеном."""
-    secret = "vera_valid"
+    secret = "tt_valid"
 
     with pytest.raises(HTTPException) as error:
         await get_principal(
@@ -147,7 +147,7 @@ async def test_token_of_disabled_user_is_rejected() -> None:
 
 async def test_token_of_deleted_user_is_rejected() -> None:
     """Токен пережившего удаление пользователя не пускает."""
-    secret = "vera_valid"
+    secret = "tt_valid"
 
     with pytest.raises(HTTPException) as error:
         await get_principal(
@@ -165,7 +165,7 @@ async def test_repository_failure_does_not_leak_as_unauthorized() -> None:
     with pytest.raises(HTTPException) as error:
         await get_principal(
             session_cookie=None,
-            authorization="Bearer vera_any",
+            authorization="Bearer tt_any",
             users_repository=FakeUsersRepository(_user()),
             tokens_repository=FakeTokensRepository(broken=True),
         )
@@ -191,7 +191,7 @@ async def test_cookie_session_still_works_and_has_write_scope() -> None:
 
 async def test_bearer_takes_precedence_over_cookie() -> None:
     """При обоих способах побеждает токен: иначе скоуп можно было бы обойти."""
-    secret = "vera_valid"
+    secret = "tt_valid"
     user = _user()
 
     principal = await get_principal(
@@ -220,7 +220,7 @@ async def test_no_credentials_at_all_is_rejected() -> None:
 
 async def test_read_scope_cannot_write() -> None:
     """Токен на чтение не допускается к изменяющей операции."""
-    secret = "vera_valid"
+    secret = "tt_valid"
     principal = await get_principal(
         session_cookie=None,
         authorization=f"Bearer {secret}",
@@ -236,7 +236,7 @@ async def test_read_scope_cannot_write() -> None:
 
 async def test_write_scope_passes() -> None:
     """Токен на запись допускается к изменяющей операции."""
-    secret = "vera_valid"
+    secret = "tt_valid"
     principal = await get_principal(
         session_cookie=None,
         authorization=f"Bearer {secret}",
@@ -249,7 +249,7 @@ async def test_write_scope_passes() -> None:
 
 async def test_token_cannot_manage_tokens() -> None:
     """Управление токенами закрыто для самих токенов."""
-    secret = "vera_valid"
+    secret = "tt_valid"
     principal = await get_principal(
         session_cookie=None,
         authorization=f"Bearer {secret}",

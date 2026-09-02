@@ -42,14 +42,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 
-INSTRUCTIONS = """Трекер задач Vera. Проекты обозначаются ключом вида VERA,
-задачи — ключом вида VERA-142. Числовых идентификаторов в контракте нет.
+INSTRUCTIONS = """Трекер задач. Проекты обозначаются ключом вида PROJ,
+задачи — ключом вида PROJ-142. Числовых идентификаторов в контракте нет.
 Токен видит только те проекты, в которых состоит его владелец.
 Списки всегда ограничены: увеличивайте limit осознанно."""
 
 mcp_server = MCPServer(
-    name="vera-tracker",
-    title="Трекер задач Vera",
+    name="task-tracker",
+    title="Трекер задач",
     instructions=INSTRUCTIONS,
     version="1.0.0",
 )
@@ -78,12 +78,12 @@ async def list_projects(context: Context) -> list[dict]:
     title="Карточка проекта",
     description=(
         "Возвращает описание проекта, его стадии и число задач в каждой стадии. "
-        "Проект задаётся ключом, например VERA."
+        "Проект задаётся ключом, например PROJ."
     ),
 )
 async def get_project(
     context: Context,
-    project_key: Annotated[str, Field(description="Ключ проекта, например VERA.")],
+    project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
 ) -> dict:
     """Возвращает подробную карточку проекта."""
     async with tool_context(context) as tools:
@@ -112,7 +112,7 @@ async def get_project(
 )
 async def list_tasks(
     context: Context,
-    project_key: Annotated[str, Field(description="Ключ проекта, например VERA.")],
+    project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
     stage: Annotated[str | None, Field(description="Название стадии, например «В работе».")] = None,
     assignee: Annotated[str | None, Field(description="Имя исполнителя целиком.")] = None,
     only_open: Annotated[bool, Field(description="Оставить только незавершённые задачи.")] = False,
@@ -157,12 +157,12 @@ async def list_tasks(
     title="Карточка задачи",
     description=(
         "Возвращает задачу целиком: описание, стадию, приоритет, исполнителя, "
-        "срок и раздел ИСР. Задача задаётся ключом, например VERA-142."
+        "срок и раздел ИСР. Задача задаётся ключом, например PROJ-142."
     ),
 )
 async def get_task(
     context: Context,
-    task_key: Annotated[str, Field(description="Ключ задачи, например VERA-142.")],
+    task_key: Annotated[str, Field(description="Ключ задачи, например PROJ-142.")],
 ) -> dict:
     """Возвращает подробную карточку задачи."""
     async with tool_context(context) as tools:
@@ -194,7 +194,7 @@ async def get_task(
 )
 async def list_comments(
     context: Context,
-    task_key: Annotated[str, Field(description="Ключ задачи, например VERA-142.")],
+    task_key: Annotated[str, Field(description="Ключ задачи, например PROJ-142.")],
     limit: Annotated[
         int,
         Field(description="Максимум комментариев в ответе.", ge=1, le=MAX_LIMIT),
@@ -221,7 +221,7 @@ async def list_comments(
 )
 async def search_tasks(
     context: Context,
-    project_key: Annotated[str, Field(description="Ключ проекта, например VERA.")],
+    project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
     query: Annotated[str, Field(description="Поисковый запрос.", min_length=1)],
     limit: Annotated[
         int,
@@ -265,7 +265,7 @@ async def search_tasks(
 )
 async def search_project_knowledge(
     context: Context,
-    project_key: Annotated[str, Field(description="Ключ проекта, например VERA.")],
+    project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
     query: Annotated[str, Field(description="Смысловой запрос.", min_length=2)],
     entity_type: Annotated[
         str | None,

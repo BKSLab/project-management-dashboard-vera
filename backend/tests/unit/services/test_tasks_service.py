@@ -30,7 +30,7 @@ from src.repositories.wbs_nodes import WbsNodesRepository
 from src.services.knowledge_events import KnowledgeEvents
 from src.services.tasks import TasksService
 
-PROJECT = SimpleNamespace(id=1, key="VERA")
+PROJECT = SimpleNamespace(id=1, key="PROJ")
 
 
 def make_task(
@@ -114,7 +114,7 @@ async def test_create_task_allocates_number_and_uses_first_stage() -> None:
     assert saved["number"] == 43
     assert saved["stage_id"] == 1
     assert saved["position"] == 3000.0
-    assert result.key == "VERA-43"
+    assert result.key == "PROJ-43"
     knowledge_events.upsert.assert_awaited_once_with(
         project_id=1,
         entity_type=KnowledgeEntityType.TASK,
@@ -140,7 +140,7 @@ async def test_create_task_retries_when_number_is_taken() -> None:
     )
 
     assert tasks_repository.save.await_count == 2
-    assert result.key == "VERA-44"
+    assert result.key == "PROJ-44"
 
 
 @pytest.mark.asyncio

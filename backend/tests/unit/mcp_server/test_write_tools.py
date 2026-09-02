@@ -21,8 +21,8 @@ from src.mcp_server.context import READ_ONLY_TOKEN, ToolContext
 PROJECT = Project(
     id=1,
     owner_id=1,
-    key="VERA",
-    name="Агент Вера",
+    key="PROJ",
+    name="Тестовый проект",
     color="#58a6ff",
     status=ProjectStatus.ACTIVE,
 )
@@ -36,7 +36,7 @@ TASK = Task(id=10, project_id=1, stage_id=1, number=142, title="Настроит
 class FakeContext:
     """Контекст вызова MCP с заголовком токена."""
 
-    headers = {"Authorization": "Bearer vera_test"}
+    headers = {"Authorization": "Bearer tt_test"}
 
 
 class FakeTasksService:
@@ -53,19 +53,19 @@ class FakeTasksService:
         if self.error:
             raise self.error
         self.created = {"project_id": project_id, **data}
-        return type("T", (), {"key": "VERA-143", "title": data["title"]})()
+        return type("T", (), {"key": "PROJ-143", "title": data["title"]})()
 
     async def update_task(self, *, task_id: int, data: dict):
         if self.error:
             raise self.error
         self.updated = {"task_id": task_id, **data}
-        return type("T", (), {"key": "VERA-142"})()
+        return type("T", (), {"key": "PROJ-142"})()
 
     async def move_task(self, *, task_id: int, stage_id: int):
         if self.error:
             raise self.error
         self.moved = {"task_id": task_id, "stage_id": stage_id}
-        return type("T", (), {"key": "VERA-142"})()
+        return type("T", (), {"key": "PROJ-142"})()
 
     async def delete_task(self, *, task_id: int) -> None:
         if self.error:
@@ -124,7 +124,7 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
             pass
 
         async def get_by_key(self, key: str) -> Project | None:
-            return PROJECT if key == "VERA" else None
+            return PROJECT if key == "PROJ" else None
 
     class Members:
         def __init__(self, session):
@@ -161,7 +161,7 @@ async def test_create_task_passes_only_given_fields(tracker) -> None:
     """Непереданные поля не попадают в payload и не перетирают умолчания."""
     tasks_service, _ = tracker
 
-    result = await wt.create_task(FakeContext(), project_key="VERA", title="  Новая  ")
+    result = await wt.create_task(FakeContext(), project_key="PROJ", title="  Новая  ")
 
     assert result["created"] is True
     assert tasks_service.created == {"project_id": 1, "title": "Новая"}
@@ -171,7 +171,7 @@ async def test_create_task_resolves_stage_by_name(tracker) -> None:
     """Стадия задаётся названием, а не числовым идентификатором."""
     tasks_service, _ = tracker
 
-    await wt.create_task(FakeContext(), project_key="VERA", title="Новая", stage="готово")
+    await wt.create_task(FakeContext(), project_key="PROJ", title="Новая", stage="готово")
 
     assert tasks_service.created["stage_id"] == 2
 
@@ -182,7 +182,7 @@ async def test_create_task_parses_priority_and_date(tracker) -> None:
 
     await wt.create_task(
         FakeContext(),
-        project_key="VERA",
+        project_key="PROJ",
         title="Новая",
         priority="high",
         due_date="2026-10-01",
@@ -195,7 +195,7 @@ async def test_create_task_parses_priority_and_date(tracker) -> None:
 async def test_create_task_rejects_unknown_priority(tracker) -> None:
     """Неизвестный приоритет подсказывает допустимые значения."""
     with pytest.raises(ToolError) as error:
-        await wt.create_task(FakeContext(), project_key="VERA", title="Новая", priority="СРОЧНО")
+        await wt.create_task(FakeContext(), project_key="PROJ", title="Новая", priority="СРОЧНО")
 
     assert "URGENT" in str(error.value)
 
@@ -207,7 +207,7 @@ async def test_create_task_rejects_bad_date(tracker) -> None:
     with pytest.raises(ToolError):
         await wt.create_task(
             FakeContext(),
-            project_key="VERA",
+            project_key="PROJ",
             title="Новая",
             due_date="01.10.2026",
         )
@@ -230,7 +230,7 @@ async def test_update_task_without_fields_is_rejected(tracker) -> None:
     tasks_service, _ = tracker
 
     with pytest.raises(ToolError):
-        await wt.update_task(FakeContext(), task_key="VERA-142")
+        await wt.update_task(FakeContext(), task_key="PROJ-142")
 
     assert tasks_service.updated is None
 
@@ -239,7 +239,7 @@ async def test_update_task_touches_only_given_fields(tracker) -> None:
     """Переданные поля меняются, остальные не входят в payload."""
     tasks_service, _ = tracker
 
-    result = await wt.update_task(FakeContext(), task_key="VERA-142", title="Другое")
+    result = await wt.update_task(FakeContext(), task_key="PROJ-142", title="Другое")
 
     assert tasks_service.updated == {"task_id": 10, "title": "Другое"}
     assert result["updated_fields"] == ["title"]
@@ -249,7 +249,7 @@ async def test_update_task_empty_assignee_clears_it(tracker) -> None:
     """Пустая строка снимает исполнителя, а не ставит пустое имя."""
     tasks_service, _ = tracker
 
-    await wt.update_task(FakeContext(), task_key="VERA-142", assignee="   ")
+    await wt.update_task(FakeContext(), task_key="PROJ-142", assignee="   ")
 
     assert tasks_service.updated["assignee"] is None
 
@@ -258,7 +258,7 @@ async def test_update_task_empty_due_date_clears_it(tracker) -> None:
     """Пустая строка снимает срок."""
     tasks_service, _ = tracker
 
-    await wt.update_task(FakeContext(), task_key="VERA-142", due_date="")
+    await wt.update_task(FakeContext(), task_key="PROJ-142", due_date="")
 
     assert tasks_service.updated["due_date"] is None
 
@@ -267,7 +267,7 @@ async def test_move_task_resolves_stage_and_reports_done(tracker) -> None:
     """Перевод в завершающую стадию сообщает об этом вызывающему."""
     tasks_service, _ = tracker
 
-    result = await wt.move_task(FakeContext(), task_key="VERA-142", stage="Готово")
+    result = await wt.move_task(FakeContext(), task_key="PROJ-142", stage="Готово")
 
     assert tasks_service.moved == {"task_id": 10, "stage_id": 2}
     assert result["is_done"] is True
@@ -276,7 +276,7 @@ async def test_move_task_resolves_stage_and_reports_done(tracker) -> None:
 async def test_move_task_unknown_stage_lists_available(tracker) -> None:
     """Неизвестная стадия подсказывает доступные."""
     with pytest.raises(ToolError) as error:
-        await wt.move_task(FakeContext(), task_key="VERA-142", stage="Неизвестная")
+        await wt.move_task(FakeContext(), task_key="PROJ-142", stage="Неизвестная")
 
     assert "В работе" in str(error.value)
 
@@ -286,7 +286,7 @@ async def test_delete_task_requires_confirmation(tracker) -> None:
     tasks_service, _ = tracker
 
     with pytest.raises(ToolError) as error:
-        await wt.delete_task(FakeContext(), task_key="VERA-142")
+        await wt.delete_task(FakeContext(), task_key="PROJ-142")
 
     assert "confirm" in str(error.value)
     assert tasks_service.deleted is None
@@ -296,17 +296,17 @@ async def test_delete_task_with_confirmation(tracker) -> None:
     """С подтверждением задача удаляется."""
     tasks_service, _ = tracker
 
-    result = await wt.delete_task(FakeContext(), task_key="VERA-142", confirm=True)
+    result = await wt.delete_task(FakeContext(), task_key="PROJ-142", confirm=True)
 
     assert tasks_service.deleted == 10
-    assert result == {"task_key": "VERA-142", "deleted": True}
+    assert result == {"task_key": "PROJ-142", "deleted": True}
 
 
 async def test_add_comment_defaults_author_to_token_owner(tracker) -> None:
     """Без подписи автором становится владелец токена."""
     _, comments_service = tracker
 
-    await wt.add_comment(FakeContext(), task_key="VERA-142", body="Готово")
+    await wt.add_comment(FakeContext(), task_key="PROJ-142", body="Готово")
 
     assert comments_service.added["author_name"] == "Тестов Тест"
 
@@ -315,7 +315,7 @@ async def test_add_comment_uses_explicit_author(tracker) -> None:
     """Явная подпись имеет приоритет над владельцем токена."""
     _, comments_service = tracker
 
-    await wt.add_comment(FakeContext(), task_key="VERA-142", body="Готово", author="Борис")
+    await wt.add_comment(FakeContext(), task_key="PROJ-142", body="Готово", author="Борис")
 
     assert comments_service.added["author_name"] == "Борис"
 
@@ -326,7 +326,7 @@ async def test_domain_error_is_translated(monkeypatch: pytest.MonkeyPatch, track
     tasks_service.error = TaskNotFoundError(task_id=10)
 
     with pytest.raises(ToolError):
-        await wt.update_task(FakeContext(), task_key="VERA-142", title="Другое")
+        await wt.update_task(FakeContext(), task_key="PROJ-142", title="Другое")
 
 
 async def test_read_scope_cannot_use_write_tools(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -341,14 +341,14 @@ async def test_read_scope_cannot_use_write_tools(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(wt, "tool_context", read_only_context)
 
     with pytest.raises(ToolError) as error:
-        await wt.create_task(FakeContext(), project_key="VERA", title="Новая")
+        await wt.create_task(FakeContext(), project_key="PROJ", title="Новая")
     assert str(error.value) == READ_ONLY_TOKEN
 
     with pytest.raises(ToolError):
-        await wt.update_task(FakeContext(), task_key="VERA-142", title="Другое")
+        await wt.update_task(FakeContext(), task_key="PROJ-142", title="Другое")
     with pytest.raises(ToolError):
-        await wt.move_task(FakeContext(), task_key="VERA-142", stage="Готово")
+        await wt.move_task(FakeContext(), task_key="PROJ-142", stage="Готово")
     with pytest.raises(ToolError):
-        await wt.delete_task(FakeContext(), task_key="VERA-142", confirm=True)
+        await wt.delete_task(FakeContext(), task_key="PROJ-142", confirm=True)
     with pytest.raises(ToolError):
-        await wt.add_comment(FakeContext(), task_key="VERA-142", body="Текст")
+        await wt.add_comment(FakeContext(), task_key="PROJ-142", body="Текст")

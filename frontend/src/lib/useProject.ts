@@ -4,7 +4,7 @@ import { api, endpoints, queryKeys } from "@/lib/api";
 import type { Project } from "@/lib/types";
 
 /**
- * Резолвит проект из адреса вида `/projects/VERA`. Список проектов невелик и
+ * Резолвит проект из адреса вида `/projects/PROJ`. Список проектов невелик и
  * уже закэширован сайдбаром, поэтому поиск по коду не стоит отдельного запроса.
  */
 export function useProjectFromRoute() {

@@ -25,7 +25,7 @@ class LinkedTaskSchema(BaseModel):
 
     link_id: int = Field(..., description="Идентификатор связи.", examples=[1])
     task_id: int = Field(..., description="Идентификатор задачи.", examples=[142])
-    key: str = Field(..., description="Отображаемый идентификатор задачи.", examples=["VERA-142"])
+    key: str = Field(..., description="Отображаемый идентификатор задачи.", examples=["PROJ-142"])
     title: str = Field(
         ...,
         description="Заголовок задачи.",

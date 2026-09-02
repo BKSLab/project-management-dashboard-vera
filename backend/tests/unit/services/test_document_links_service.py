@@ -30,7 +30,7 @@ def build_service(
 ) -> DocumentLinksService:
     """Собирает сервис связей документов с подменёнными репозиториями."""
     projects_repository = AsyncMock(spec=ProjectsRepository)
-    projects_repository.get_by_id.return_value = SimpleNamespace(id=1, key="VERA")
+    projects_repository.get_by_id.return_value = SimpleNamespace(id=1, key="PROJ")
     members_repository = AsyncMock(spec=ProjectMembersRepository)
     members_repository.get.return_value = SimpleNamespace(project_id=1, user_id=USER_ID)
     return DocumentLinksService(
@@ -115,7 +115,7 @@ async def test_get_links_for_document_builds_task_keys() -> None:
 
     result = await service.get_links_for_document(document_id=1)
 
-    assert result[0].key == "VERA-142"
+    assert result[0].key == "PROJ-142"
     assert result[0].link_id == 9
 
 

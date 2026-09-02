@@ -19,7 +19,7 @@ class SettingsBase(BaseSettings):
 class AppSettings(SettingsBase):
     """Настройки HTTP-приложения и его инфраструктуры."""
 
-    app_name: str = "Project Management Dashboard Vera"
+    app_name: str = "Project Task Tracker"
     app_version: str = "1.0.0"
     api_v1_prefix: str = "/api/v1"
     mcp_path: str = "/mcp"

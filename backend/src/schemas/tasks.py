@@ -22,7 +22,7 @@ class TaskSchema(BaseModel):
     key: str = Field(
         ...,
         description="Отображаемый идентификатор задачи.",
-        examples=["VERA-142"],
+        examples=["PROJ-142"],
     )
     title: str = Field(
         ...,
@@ -91,7 +91,7 @@ class TaskCompactSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int = Field(..., description="Уникальный идентификатор задачи.", examples=[142])
-    key: str = Field(..., description="Отображаемый идентификатор.", examples=["VERA-142"])
+    key: str = Field(..., description="Отображаемый идентификатор.", examples=["PROJ-142"])
     title: str = Field(
         ...,
         description="Заголовок задачи.",

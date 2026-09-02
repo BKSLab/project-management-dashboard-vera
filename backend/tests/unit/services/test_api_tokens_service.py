@@ -61,7 +61,7 @@ def _token(**overrides) -> ApiToken:
         "user_id": 1,
         "name": "Ноутбук",
         "token_hash": "hash",
-        "prefix": "vera_Ab",
+        "prefix": "tt_Ab",
         "scope": ApiTokenScope.READ,
         "expires_at": None,
         "revoked_at": None,
@@ -83,7 +83,7 @@ async def test_issue_token_returns_secret_once_and_stores_only_hash() -> None:
         data=ApiTokenCreateSchema(name="Ноутбук", scope="WRITE", ttl_days=30),
     )
 
-    assert result.secret.startswith("vera_")
+    assert result.secret.startswith("tt_")
     assert repository.created["token_hash"] == hash_token_secret(result.secret)
     assert repository.created["token_hash"] != result.secret
     assert repository.created["scope"] is ApiTokenScope.WRITE
@@ -165,12 +165,12 @@ async def test_revoke_passes_owner_to_repository() -> None:
 
 async def test_resolve_secret_looks_up_by_hash() -> None:
     """Поиск токена идёт по хешу, а не по самому секрету."""
-    secret = "vera_test-secret"
+    secret = "tt_test-secret"
     repository = FakeTokensRepository(tokens=[_token(token_hash=hash_token_secret(secret))])
     service = ApiTokensService(tokens_repository=repository)
 
     assert await service.resolve_secret(secret) is not None
-    assert await service.resolve_secret("vera_другой") is None
+    assert await service.resolve_secret("tt_другой") is None
 
 
 async def test_repository_error_becomes_service_error() -> None:

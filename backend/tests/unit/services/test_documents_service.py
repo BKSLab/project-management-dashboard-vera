@@ -42,7 +42,7 @@ def build_service(
     """Собирает сервис документов с подменёнными репозиториями."""
     projects = projects_repository or AsyncMock(spec=ProjectsRepository)
     if projects_repository is None:
-        projects.get_by_id.return_value = SimpleNamespace(id=1, key="VERA")
+        projects.get_by_id.return_value = SimpleNamespace(id=1, key="PROJ")
     return DocumentsService(
         documents_repository=documents_repository,
         projects_repository=projects,

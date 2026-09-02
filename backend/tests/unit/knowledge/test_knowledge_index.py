@@ -22,7 +22,7 @@ from src.services.knowledge_index import KnowledgeIndexService
 
 def build_service(tmp_path):
     now = datetime.now(UTC)
-    project = Project(id=1, owner_id=1, key="VERA", name="Вера", updated_at=now)
+    project = Project(id=1, owner_id=1, key="PROJ", name="Вера", updated_at=now)
     task = Task(
         id=7,
         project_id=project.id,
@@ -218,7 +218,7 @@ def test_comment_document_does_not_depend_on_mutable_task_title(tmp_path) -> Non
 
     document = build_comment_document(comment, task=task, project=project)
 
-    assert "Задача: VERA-12" in document.text
+    assert "Задача: PROJ-12" in document.text
     assert task.title not in document.text
 
 
@@ -244,5 +244,5 @@ def test_attachment_document_does_not_depend_on_mutable_task_title(tmp_path) -> 
     )
 
     assert documents
-    assert "Задача: VERA-12" in documents[0].text
+    assert "Задача: PROJ-12" in documents[0].text
     assert task.title not in documents[0].text

@@ -3,7 +3,7 @@
 import hashlib
 import secrets
 
-TOKEN_PREFIX = "vera_"
+TOKEN_PREFIX = "tt_"
 TOKEN_ENTROPY_BYTES = 32
 DISPLAY_PREFIX_LENGTH = 8
 
@@ -12,7 +12,7 @@ def generate_token_secret() -> str:
     """Выпускает новый секрет токена.
 
     Returns:
-        Секрет вида ``vera_<случайная часть>``, показываемый пользователю один раз.
+        Секрет вида ``tt_<случайная часть>``, показываемый пользователю один раз.
     """
     return f"{TOKEN_PREFIX}{secrets.token_urlsafe(TOKEN_ENTROPY_BYTES)}"
 

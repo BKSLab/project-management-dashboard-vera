@@ -28,7 +28,7 @@ function task(
 ): TaskCompact {
     return {
         id,
-        key: `VERA-${id}`,
+        key: `PROJ-${id}`,
         title: `Задача ${id}`,
         stage_id: 1,
         wbs_node_id: wbsNodeId,

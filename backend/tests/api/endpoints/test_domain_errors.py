@@ -55,16 +55,16 @@ from src.services.wbs_nodes import WbsNodesService
 @pytest.mark.asyncio
 async def test_create_project_maps_key_conflict_to_409(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=ProjectsService)
-    service.create_project.side_effect = ProjectKeyConflictError(key="VERA")
+    service.create_project.side_effect = ProjectKeyConflictError(key="PROJ")
     app.dependency_overrides[get_projects_service] = lambda: service
 
     response = await api_client.post(
         "/api/v1/projects",
-        json={"key": "VERA", "name": "Агент Вера"},
+        json={"key": "PROJ", "name": "Тестовый проект"},
     )
 
     assert response.status_code == 409
-    assert "VERA" in response.json()["detail"]
+    assert "PROJ" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

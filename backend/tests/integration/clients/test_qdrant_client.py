@@ -132,7 +132,7 @@ async def test_grouped_search_keeps_entity_types_separate_and_filters_them(
 async def test_task_upsert_preserves_comment_and_attachment_points(qdrant_url: str) -> None:
     client = build_client(qdrant_url)
     now = datetime.now(UTC)
-    project = Project(id=103, owner_id=1, key="VERA", name="Вера", updated_at=now)
+    project = Project(id=103, owner_id=1, key="PROJ", name="Вера", updated_at=now)
     old_task = Task(
         id=5,
         project_id=project.id,
@@ -220,7 +220,7 @@ async def test_task_upsert_preserves_comment_and_attachment_points(qdrant_url: s
 
         payloads = {point.payload["source_id"]: point.payload for point in points}
         assert set(payloads) == {"task:5", "comment:8", "attachment:9"}
-        assert payloads["task:5"]["title"] == "VERA-5 · Новый заголовок"
+        assert payloads["task:5"]["title"] == "PROJ-5 · Новый заголовок"
         assert payloads["comment:8"]["text"] == "Комментарий сохраняется"
         assert payloads["attachment:9"]["text"] == "Вложение сохраняется"
     finally:

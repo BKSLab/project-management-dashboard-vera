@@ -35,7 +35,7 @@ class DashboardProjectSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int = Field(..., description="Идентификатор проекта.", examples=[1])
-    key: str = Field(..., description="Короткий код проекта.", examples=["VERA"])
+    key: str = Field(..., description="Короткий код проекта.", examples=["PROJ"])
     name: str = Field(..., description="Название проекта.", examples=["Агент Вера"])
     description_md: str | None = Field(
         None,
@@ -72,14 +72,14 @@ class DashboardTaskSchema(BaseModel):
     """Задача, требующая внимания, в сводке дашборда."""
 
     id: int = Field(..., description="Идентификатор задачи.", examples=[142])
-    key: str = Field(..., description="Отображаемый идентификатор.", examples=["VERA-142"])
+    key: str = Field(..., description="Отображаемый идентификатор.", examples=["PROJ-142"])
     title: str = Field(
         ...,
         description="Заголовок задачи.",
         examples=["Реализовать фильтрацию проектов"],
     )
     project_id: int = Field(..., description="Идентификатор проекта.", examples=[1])
-    project_key: str = Field(..., description="Код проекта.", examples=["VERA"])
+    project_key: str = Field(..., description="Код проекта.", examples=["PROJ"])
     project_name: str = Field(..., description="Название проекта.", examples=["Агент Вера"])
     project_color: str = Field(..., description="HEX-цвет проекта.", examples=["#58a6ff"])
     stage_id: int = Field(..., description="Идентификатор стадии.", examples=[2])

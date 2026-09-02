@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 )
 async def create_task(
     context: Context,
-    project_key: Annotated[str, Field(description="Ключ проекта, например VERA.")],
+    project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
     title: Annotated[str, Field(description="Заголовок задачи.", min_length=1, max_length=255)],
     description: Annotated[str | None, Field(description="Описание задачи в Markdown.")] = None,
     stage: Annotated[
@@ -84,7 +84,7 @@ async def create_task(
 )
 async def update_task(
     context: Context,
-    task_key: Annotated[str, Field(description="Ключ задачи, например VERA-142.")],
+    task_key: Annotated[str, Field(description="Ключ задачи, например PROJ-142.")],
     title: Annotated[str | None, Field(description="Новый заголовок.", max_length=255)] = None,
     description: Annotated[str | None, Field(description="Новое описание в Markdown.")] = None,
     priority: Annotated[
@@ -137,7 +137,7 @@ async def update_task(
 )
 async def move_task(
     context: Context,
-    task_key: Annotated[str, Field(description="Ключ задачи, например VERA-142.")],
+    task_key: Annotated[str, Field(description="Ключ задачи, например PROJ-142.")],
     stage: Annotated[str, Field(description="Название целевой стадии.", min_length=1)],
 ) -> dict:
     """Переводит задачу в другую стадию доски."""
@@ -166,7 +166,7 @@ async def move_task(
 )
 async def delete_task(
     context: Context,
-    task_key: Annotated[str, Field(description="Ключ задачи, например VERA-142.")],
+    task_key: Annotated[str, Field(description="Ключ задачи, например PROJ-142.")],
     confirm: Annotated[
         bool,
         Field(description="Подтверждение удаления; без него задача не удаляется."),
@@ -199,7 +199,7 @@ async def delete_task(
 )
 async def add_comment(
     context: Context,
-    task_key: Annotated[str, Field(description="Ключ задачи, например VERA-142.")],
+    task_key: Annotated[str, Field(description="Ключ задачи, например PROJ-142.")],
     body: Annotated[str, Field(description="Текст комментария в Markdown.", min_length=1)],
     author: Annotated[
         str | None,

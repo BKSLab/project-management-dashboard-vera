@@ -24,7 +24,7 @@ from src.repositories.wbs_nodes import WbsNodesRepository
 from src.services.knowledge_events import KnowledgeEvents
 from src.services.wbs_nodes import POSITION_STEP, WbsNodesService, _next_position
 
-PROJECT = SimpleNamespace(id=1, key="VERA")
+PROJECT = SimpleNamespace(id=1, key="PROJ")
 TODAY = date.today()
 
 
@@ -115,7 +115,7 @@ async def test_get_structure_returns_flat_lists_and_stats() -> None:
     assert result.stats.unassigned_tasks == 1
     assert result.stats.done_tasks == 1
     assert result.stats.overdue_tasks == 1
-    assert [item.key for item in result.tasks] == ["VERA-11", "VERA-12", "VERA-13"]
+    assert [item.key for item in result.tasks] == ["PROJ-11", "PROJ-12", "PROJ-13"]
     assert result.tasks[1].is_done is True
 
 

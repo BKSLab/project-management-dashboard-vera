@@ -487,7 +487,7 @@ class TasksService:
 
 
 def build_task_key(project_key: str, number: int) -> str:
-    """Возвращает отображаемый идентификатор задачи вида ``VERA-142``."""
+    """Возвращает отображаемый идентификатор задачи вида ``PROJ-142``."""
     return f"{project_key}-{number}"
 
 
