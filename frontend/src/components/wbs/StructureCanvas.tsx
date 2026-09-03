@@ -29,6 +29,7 @@ import {
     layoutWbsGraph,
     parseGraphNodeId,
     sectionNodeId,
+    TASK_NODE_SIZE,
     taskNodeId,
     type WbsLayoutMode,
 } from "@/lib/wbsLayout";
@@ -78,16 +79,36 @@ function pointerPosition(event: MouseEvent | TouchEvent): { x: number; y: number
     return touch === undefined ? null : { x: touch.clientX, y: touch.clientY };
 }
 
+/** Экранный прямоугольник в координатах окна. */
+interface ScreenRect {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
 /** Список задач находится вне canvas, поэтому его границы ищем в документе. */
-function isOverPool(clientX: number, clientY: number): boolean {
-    const pool = document.querySelector(`[${POOL_DROP_ATTRIBUTE}]`);
+function poolRect(): DOMRect | null {
+    return document.querySelector(`[${POOL_DROP_ATTRIBUTE}]`)?.getBoundingClientRect() ?? null;
+}
+
+/**
+ * Карточка считается принесённой в список, когда она сама заехала на него, а
+ * не когда туда попал курсор: пользователь тащит карточку и смотрит на неё, а
+ * взял он её за любой край.
+ */
+function overlapsPool(rect: ScreenRect): boolean {
+    const pool = poolRect();
     if (pool === null) {
         return false;
     }
-    const rect = pool.getBoundingClientRect();
-    return (
-        clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom
-    );
+    const overlapX = Math.min(rect.x + rect.width, pool.right) - Math.max(rect.x, pool.left);
+    const overlapY = Math.min(rect.y + rect.height, pool.bottom) - Math.max(rect.y, pool.top);
+    if (overlapX <= 0 || overlapY <= 0) {
+        return false;
+    }
+    // Случайное касание краем не должно уводить задачу из структуры.
+    return overlapX >= Math.min(rect.width * 0.3, 70);
 }
 
 /** Куда пользователь кладёт задачу: в раздел, на холст или обратно в пул. */
@@ -157,7 +178,8 @@ function CanvasInner({
     draggingTask,
     handlers,
 }: StructureCanvasProps) {
-    const { fitView, setCenter, getZoom, screenToFlowPosition } = useReactFlow();
+    const { fitView, setCenter, getZoom, screenToFlowPosition, flowToScreenPosition } =
+        useReactFlow();
     // Пока от раздела тянут стрелку, карточки задач подсвечиваются как цели.
     const isConnecting = useConnection((connection) => connection.inProgress);
     const [flowNodes, setFlowNodes] = useState<Node[]>([]);
@@ -170,7 +192,7 @@ function CanvasInner({
      * Карточку у края холста обрезает область React Flow, поэтому над
      * списком задач за курсором едет её двойник поверх всей страницы.
      */
-    const [poolGhost, setPoolGhost] = useState<{ x: number; y: number; task: TaskCompact } | null>(
+    const [poolGhost, setPoolGhost] = useState<{ rect: ScreenRect; task: TaskCompact } | null>(
         null,
     );
     const [search, setSearch] = useState("");
@@ -531,8 +553,14 @@ function CanvasInner({
      * вне структуры.
      */
     const resolveTaskDrop = useCallback(
-        (taskId: number, clientX: number, clientY: number): TaskDropState => {
-            if (isOverPool(clientX, clientY)) {
+        (
+            taskId: number,
+            clientX: number,
+            clientY: number,
+            /** Экранные границы перетаскиваемой карточки, если её тащат по холсту. */
+            cardRect?: ScreenRect,
+        ): TaskDropState => {
+            if (cardRect !== undefined && overlapsPool(cardRect)) {
                 return { kind: "pool", taskId };
             }
             const neighbour = findTaskAt(clientX, clientY, taskId);
@@ -626,6 +654,21 @@ function CanvasInner({
         setFlowEdges((current) => applyEdgeChanges(changes, current));
     }, []);
 
+    /** Границы узла на экране: положение на холсте с учётом панорамы и масштаба. */
+    const nodeScreenRect = useCallback(
+        (node: Node): ScreenRect => {
+            const topLeft = flowToScreenPosition(node.position);
+            const zoom = getZoom();
+            return {
+                x: topLeft.x,
+                y: topLeft.y,
+                width: (node.measured?.width ?? node.width ?? TASK_NODE_SIZE.width) * zoom,
+                height: (node.measured?.height ?? node.height ?? TASK_NODE_SIZE.height) * zoom,
+            };
+        },
+        [flowToScreenPosition, getZoom],
+    );
+
     const handleNodeDragStart: OnNodeDrag = useCallback((event) => {
         dragOriginRef.current = pointerPosition(event);
         dragMovedRef.current = false;
@@ -643,21 +686,20 @@ function CanvasInner({
             }
             const parsed = parseGraphNodeId(node.id);
             if (parsed?.kind === "task") {
+                const cardRect = nodeScreenRect(node);
                 const drop =
-                    pointer === null ? null : resolveTaskDrop(parsed.taskId, pointer.x, pointer.y);
+                    pointer === null
+                        ? null
+                        : resolveTaskDrop(parsed.taskId, pointer.x, pointer.y, cardRect);
                 setTaskDrop(drop);
                 // Список задач подсвечивается как цель, а сама карточка
-                // показывается двойником: настоящий узел за границу не выйдет.
+                // показывается двойником поверх страницы: настоящий узел за
+                // границу холста не выйдет, его там обрезает.
                 const overPool = drop?.kind === "pool";
                 handlers.onPoolHover(overPool);
+                const dragged = tasks.find((item) => item.id === parsed.taskId);
                 setPoolGhost(
-                    overPool && pointer !== null
-                        ? {
-                              x: pointer.x,
-                              y: pointer.y,
-                              task: tasks.find((item) => item.id === parsed.taskId) as TaskCompact,
-                          }
-                        : null,
+                    overPool && dragged !== undefined ? { rect: cardRect, task: dragged } : null,
                 );
                 return;
             }
@@ -673,7 +715,7 @@ function CanvasInner({
                     : { movedId: parsed.nodeId, targetId: hit.section.node.id, zone: hit.zone },
             );
         },
-        [nodes, tasks, findSectionAt, resolveTaskDrop, handlers],
+        [nodes, tasks, findSectionAt, resolveTaskDrop, handlers, nodeScreenRect],
     );
 
     const handleNodeDragStop: OnNodeDrag = useCallback(
@@ -697,7 +739,12 @@ function CanvasInner({
                     pendingTask ??
                     (pointer === null
                         ? null
-                        : resolveTaskDrop(parsed.taskId, pointer.x, pointer.y));
+                        : resolveTaskDrop(
+                              parsed.taskId,
+                              pointer.x,
+                              pointer.y,
+                              nodeScreenRect(node),
+                          ));
                 if (drop === null) {
                     restorePosition(node.id);
                     return;
@@ -738,7 +785,7 @@ function CanvasInner({
             }
             handlers.onMoveSection(pendingSection.movedId, target.parentId, target.beforeId);
         },
-        [nodes, sectionDrop, taskDrop, handlers, resolveTaskDrop, restorePosition],
+        [nodes, sectionDrop, taskDrop, handlers, resolveTaskDrop, restorePosition, nodeScreenRect],
     );
 
     /** Стрелка от раздела к задаче и есть её привязка к структуре. */
@@ -1003,14 +1050,18 @@ function CanvasInner({
             {poolGhost !== null && poolGhost.task !== undefined && (
                 <div
                     aria-hidden="true"
-                    style={{ left: poolGhost.x, top: poolGhost.y }}
-                    className="pointer-events-none fixed z-50 w-56 -translate-x-1/2 -translate-y-1/2 rounded-[var(--radius-control)] border border-dashed border-accent/70 bg-elevated px-2.5 py-2 shadow-panel"
+                    style={{
+                        left: poolGhost.rect.x,
+                        top: poolGhost.rect.y,
+                        width: poolGhost.rect.width,
+                        minHeight: poolGhost.rect.height,
+                    }}
+                    className="pointer-events-none fixed z-50 flex flex-col justify-center rounded-[var(--radius-control)] border border-dashed border-accent/70 bg-elevated px-2.5 py-2 shadow-panel"
                 >
                     <span className="font-mono text-[10px] text-muted">{poolGhost.task.key}</span>
-                    <p className="line-clamp-1 text-[12px] leading-snug text-secondary">
+                    <p className="line-clamp-2 text-[12px] leading-snug text-secondary">
                         {poolGhost.task.title}
                     </p>
-                    <p className="mt-0.5 text-[10px] text-accent">Вернуть в список задач</p>
                 </div>
             )}
 
