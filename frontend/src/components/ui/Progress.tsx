@@ -65,6 +65,22 @@ interface StatTileProps {
     icon?: ReactNode;
 }
 
+export function StatStrip({ children, className }: { children: ReactNode; className?: string }) {
+    return (
+        <div
+            className={cn(
+                "grid grid-cols-2 overflow-hidden rounded-[var(--radius-card)]",
+                "border border-line-subtle bg-surface shadow-card lg:grid-cols-4",
+                "[&>*:nth-child(even)]:border-l [&>*:nth-child(even)]:border-line-subtle",
+                "lg:[&>*+*]:border-l lg:[&>*+*]:border-line-subtle",
+                className,
+            )}
+        >
+            {children}
+        </div>
+    );
+}
+
 const TONE_CLASSES = {
     default: "text-primary",
     warning: "text-warning",
@@ -74,12 +90,12 @@ const TONE_CLASSES = {
 
 export function StatTile({ label, value, hint, tone = "default", icon }: StatTileProps) {
     return (
-        <div className="flex min-w-0 flex-col gap-1 rounded-md border border-line bg-surface px-3 py-2.5">
+        <div className="flex min-w-0 flex-col gap-1 px-4 py-3.5">
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
                 {icon}
                 <span className="truncate">{label}</span>
             </div>
-            <div className={cn("font-mono text-xl leading-none font-semibold", TONE_CLASSES[tone])}>
+            <div className={cn("font-mono text-[22px] leading-none font-semibold tracking-[-0.03em]", TONE_CLASSES[tone])}>
                 {value}
             </div>
             {hint && <p className="truncate text-[11px] text-muted">{hint}</p>}

@@ -6,7 +6,7 @@ import { formatDayMonth } from "@/lib/dates";
 import { useProjectOutlet } from "@/lib/useProjectOutlet";
 import { useUiStore } from "@/stores/ui";
 import { Card, Section } from "@/components/ui/Card";
-import { SegmentedProgress, StatTile } from "@/components/ui/Progress";
+import { SegmentedProgress, StatStrip, StatTile } from "@/components/ui/Progress";
 import { StatusDot } from "@/components/ui/Badge";
 import { DueDate } from "@/components/ui/DueDate";
 import { ErrorMessage, Skeleton } from "@/components/ui/States";
@@ -52,15 +52,11 @@ export function ProjectOverviewPage() {
                 {statsQuery.error && <ErrorMessage message={(statsQuery.error as Error).message} />}
 
                 {statsQuery.isPending ? (
-                    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                        {[0, 1, 2, 3].map((index) => (
-                            <Skeleton key={index} className="h-[74px]" />
-                        ))}
-                    </div>
+                    <Skeleton className="h-[88px] w-full" />
                 ) : (
                     stats && (
                         <>
-                            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                            <StatStrip>
                                 <StatTile
                                     label="Всего задач"
                                     value={stats.total_tasks}
@@ -91,7 +87,7 @@ export function ProjectOverviewPage() {
                                     hint="Задач вне разделов ИСР"
                                     icon={<Network size={12} />}
                                 />
-                            </div>
+                            </StatStrip>
 
                             <Section title="Распределение по стадиям">
                                 <Card className="flex flex-col gap-3 p-4">
@@ -125,7 +121,7 @@ export function ProjectOverviewPage() {
 
                 <div className="grid gap-6 lg:grid-cols-2">
                     <Section title="Ближайшие сроки">
-                        <Card className="p-1.5">
+                        <div className="rounded-[var(--radius-card)] bg-surface/45 p-1.5">
                             {upcoming.length === 0 ? (
                                 <p className="px-2.5 py-6 text-center text-[13px] text-muted">
                                     Задач со сроками нет.
@@ -148,11 +144,11 @@ export function ProjectOverviewPage() {
                                     </button>
                                 ))
                             )}
-                        </Card>
+                        </div>
                     </Section>
 
                     <Section title="О проекте">
-                        <Card className="flex flex-col gap-3 p-4">
+                        <div className="flex flex-col gap-3 px-1 py-1.5">
                             {project.description_md ? (
                                 <Description markdown={project.description_md} />
                             ) : (
@@ -187,7 +183,7 @@ export function ProjectOverviewPage() {
                                     </div>
                                 )}
                             </dl>
-                        </Card>
+                        </div>
                     </Section>
                 </div>
             </div>

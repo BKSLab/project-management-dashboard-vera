@@ -21,7 +21,7 @@ export function FileTile({
     );
     const formattedSize = formatFileSize(file.size);
     const contentClassName = cn(
-        "group flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left",
+        "group flex min-w-0 flex-1 items-center gap-2.5 rounded-[var(--radius-control)] text-left",
         "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
         file.url && "hover:text-accent-hover",
     );
@@ -29,12 +29,12 @@ export function FileTile({
     const content = (
         <>
             {canPreview ? (
-                <span className="relative h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-surface">
+                <span className="relative h-11 w-11 shrink-0 overflow-hidden rounded-[var(--radius-control)] border border-line-subtle bg-surface">
                     <img
                         src={file.url!}
                         alt=""
                         loading="lazy"
-                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                        className="h-full w-full object-cover"
                         onError={() => setFailedPreviewKey(previewKey)}
                     />
                     <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
@@ -49,7 +49,7 @@ export function FileTile({
             )}
             <span className="min-w-0 flex-1">
                 <span
-                    className="block truncate text-xs font-semibold text-foreground"
+                    className="block truncate text-xs font-semibold text-primary"
                     title={file.name}
                 >
                     {file.name}
@@ -64,7 +64,7 @@ export function FileTile({
     );
 
     return (
-        <div className="relative flex w-[220px] max-w-full items-stretch rounded-xl border border-white/[0.07] bg-surface p-2 shadow-[var(--shadow-card)] transition-colors hover:border-white/15">
+        <div className="relative flex w-[220px] max-w-full items-stretch rounded-[var(--radius-card)] border border-line-subtle bg-surface-2 p-2 shadow-card transition-colors hover:border-line-strong">
             {canPreview && onPreview ? (
                 <button
                     type="button"

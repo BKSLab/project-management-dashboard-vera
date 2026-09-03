@@ -20,7 +20,7 @@ export function DependencyPanel({
 }: DependencyPanelProps) {
     const tasksById = new Map(tasks.map((task) => [task.id, task]));
     return (
-        <section className="rounded-lg border border-line bg-surface p-3 shadow-card">
+        <section className="rounded-[var(--radius-card)] bg-surface/55 p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                     <GitBranch size={13} className="text-accent" aria-hidden="true" />
@@ -42,7 +42,7 @@ export function DependencyPanel({
                     return (
                         <div
                             key={dependency.id}
-                            className="group flex items-center gap-1.5 rounded-md border border-line-subtle bg-surface-2 px-2 py-1.5"
+                            className="group flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 transition-colors hover:bg-white/[0.035]"
                             title="Finish-to-Start"
                         >
                             <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-secondary">

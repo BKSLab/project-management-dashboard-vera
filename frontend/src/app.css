@@ -1,27 +1,41 @@
 @import "tailwindcss";
 
 /*
-  Дизайн-токены задаются в одном месте — по разделам 2, 3, 4, 9 и 17
-  документа docs/DESIGN_GUIDE.md. Компоненты не используют локальные HEX.
+  Физическая модель интерфейса задаётся только здесь. Старые имена токенов
+  сохранены как aliases, чтобы экран не мог случайно выпасть из общей системы.
 */
 :root {
-  /* поверхности: приложение → сайдбар → рабочая область → карточка → hover */
-  --color-bg-app: #0d1117;
-  --color-bg-sidebar: #11161d;
-  --color-bg-surface: #161b22;
-  --color-bg-surface-2: #1c222b;
-  --color-bg-elevated: #212832;
-  --color-bg-hover: #272f3a;
-  --color-bg-active: #303947;
+  color-scheme: dark;
 
-  --color-border-subtle: rgba(255, 255, 255, 0.055);
-  --color-border: rgba(255, 255, 255, 0.09);
-  --color-border-strong: rgba(255, 255, 255, 0.15);
+  /* LEVEL 0–4: void → workspace → interactive → elevated → floating. */
+  --surface-void: #0b0f14;
+  --surface-chassis: #0e131a;
+  --surface-workspace: #10151c;
+  --surface-interactive: #161c24;
+  --surface-elevated: #1b222c;
+  --surface-floating: #141a22;
+  --surface-hover: #202935;
+  --surface-pressed: #18202a;
+  --surface-control: rgba(255, 255, 255, 0.025);
 
-  --color-text-primary: #e6edf3;
-  --color-text-secondary: #b1bac4;
-  --color-text-muted: #7d8793;
-  --color-text-disabled: #555f6b;
+  --color-bg-app: var(--surface-void);
+  --color-bg-sidebar: var(--surface-chassis);
+  --color-bg-surface: var(--surface-workspace);
+  --color-bg-surface-2: var(--surface-interactive);
+  --color-bg-elevated: var(--surface-elevated);
+  --color-bg-floating: var(--surface-floating);
+  --color-bg-hover: var(--surface-hover);
+  --color-bg-active: var(--surface-pressed);
+
+  --color-border-subtle: rgba(255, 255, 255, 0.045);
+  --color-border: rgba(255, 255, 255, 0.075);
+  --color-border-strong: rgba(255, 255, 255, 0.13);
+
+  --color-text-primary: #e8edf2;
+  --color-text-secondary: #b5bec8;
+  --color-text-muted: #818b98;
+  --color-text-disabled: #596471;
+  --color-text-on-accent: #07111d;
 
   --color-accent: #58a6ff;
   --color-accent-hover: #79b8ff;
@@ -33,6 +47,11 @@
   --color-danger: #f85149;
   --color-info: #58a6ff;
   --color-purple: #a371f7;
+  --color-ai-blue: #6aa9ff;
+  --color-ai-violet: #9b8cff;
+  --color-ai-cyan: #55d7e8;
+  --color-ai-soft: rgba(106, 169, 255, 0.08);
+  --color-ai-border: rgba(139, 151, 255, 0.22);
 
   /* приоритеты задач — раздел 9 */
   --color-priority-low: #7d8793;
@@ -40,21 +59,32 @@
   --color-priority-high: #d29922;
   --color-priority-urgent: #f85149;
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 18px;
+  --radius-control: 7px;
+  --radius-card: 10px;
+  --radius-panel: 14px;
+  --radius-floating: 16px;
+  --radius-sm: var(--radius-control);
+  --radius-md: var(--radius-card);
+  --radius-lg: var(--radius-panel);
+  --radius-xl: var(--radius-floating);
 
   --duration-fast: 120ms;
   --duration-normal: 180ms;
   --duration-slow: 240ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 
-  /* тени — раздел 3: карточка, поднятая карточка, плавающая панель */
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.28), 0 4px 12px rgba(0, 0, 0, 0.12);
-  --shadow-elevated: 0 4px 10px rgba(0, 0, 0, 0.28), 0 12px 28px rgba(0, 0, 0, 0.18);
-  --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  --shadow-dragging: 0 18px 44px rgba(0, 0, 0, 0.42);
+  --shadow-surface: 0 1px 2px rgba(0, 0, 0, 0.22);
+  --shadow-hover: 0 6px 18px rgba(0, 0, 0, 0.24);
+  --shadow-selected: 0 0 0 1px rgba(88, 166, 255, 0.22),
+    0 8px 24px rgba(0, 0, 0, 0.28);
+  --shadow-floating: 0 24px 70px rgba(0, 0, 0, 0.42),
+    0 0 0 1px rgba(255, 255, 255, 0.055);
+  --shadow-dragging: 0 18px 44px rgba(0, 0, 0, 0.38);
+  --shadow-focus: 0 0 0 3px rgba(88, 166, 255, 0.1);
+
+  --shadow-card: var(--shadow-surface);
+  --shadow-elevated: var(--shadow-hover);
+  --shadow-panel: var(--shadow-floating);
 }
 
 @theme inline {
@@ -63,8 +93,10 @@
   --color-surface: var(--color-bg-surface);
   --color-surface-2: var(--color-bg-surface-2);
   --color-elevated: var(--color-bg-elevated);
+  --color-floating: var(--color-bg-floating);
   --color-hover: var(--color-bg-hover);
   --color-active: var(--color-bg-active);
+  --color-control: var(--surface-control);
 
   --color-line-subtle: var(--color-border-subtle);
   --color-line: var(--color-border);
@@ -74,6 +106,7 @@
   --color-secondary: var(--color-text-secondary);
   --color-muted: var(--color-text-muted);
   --color-disabled: var(--color-text-disabled);
+  --color-on-accent: var(--color-text-on-accent);
 
   --color-accent: var(--color-accent);
   --color-accent-hover: var(--color-accent-hover);
@@ -84,6 +117,11 @@
   --color-warning: var(--color-warning);
   --color-danger: var(--color-danger);
   --color-purple: var(--color-purple);
+  --color-ai-blue: var(--color-ai-blue);
+  --color-ai-violet: var(--color-ai-violet);
+  --color-ai-cyan: var(--color-ai-cyan);
+  --color-ai-soft: var(--color-ai-soft);
+  --color-ai-border: var(--color-ai-border);
 
   --color-priority-low: var(--color-priority-low);
   --color-priority-medium: var(--color-priority-medium);
@@ -97,34 +135,166 @@
 
   --shadow-card: var(--shadow-card);
   --shadow-elevated: var(--shadow-elevated);
+  --shadow-selected: var(--shadow-selected);
   --shadow-panel: var(--shadow-panel);
   --shadow-dragging: var(--shadow-dragging);
+  --shadow-focus: var(--shadow-focus);
 
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 }
 
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
 body {
-  background: var(--color-bg-app);
+  margin: 0;
+  background:
+    radial-gradient(circle at 48% -20%, rgba(87, 111, 139, 0.055), transparent 42%),
+    var(--surface-void);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
   font-size: 14px;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* Раздел 16: focus-visible нельзя убирать, только заменять равноценным. */
+::selection {
+  background: rgba(88, 166, 255, 0.24);
+  color: var(--color-text-primary);
+}
+
 :focus-visible {
-  outline: 2px solid rgba(88, 166, 255, 0.8);
+  outline: 2px solid rgba(88, 166, 255, 0.82);
   outline-offset: 2px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-control);
 }
 
-/* Стекло — только для header, drawer, modal, dropdown (раздел 3). */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  color-scheme: dark;
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: var(--color-text-primary);
+  caret-color: var(--color-text-primary);
+  box-shadow: 0 0 0 1000px var(--surface-interactive) inset;
+  transition: background-color 9999s ease-out 0s;
+}
+
+/* Материал задаётся светом и микроконтрастом, без bitmap-текстур. */
+.material-mineral {
+  background:
+    radial-gradient(circle at 16% 0%, rgba(255, 255, 255, 0.016), transparent 34%),
+    var(--surface-workspace);
+}
+
+.material-metal {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), transparent 46%),
+    var(--surface-interactive);
+  border-color: var(--color-border);
+}
+
+.material-glass,
 .glass {
-  background: rgba(22, 27, 34, 0.82);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background:
+    linear-gradient(180deg, rgba(29, 35, 44, 0.965), rgba(18, 23, 30, 0.965)),
+    var(--surface-floating);
+  backdrop-filter: blur(18px) saturate(120%);
+  -webkit-backdrop-filter: blur(18px) saturate(120%);
   border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.ai-surface {
+  background:
+    linear-gradient(135deg, rgba(106, 169, 255, 0.075), rgba(155, 140, 255, 0.045) 58%, transparent),
+    var(--surface-workspace);
+}
+
+.ai-mark {
+  background:
+    linear-gradient(145deg, rgba(106, 169, 255, 0.2), rgba(155, 140, 255, 0.11)),
+    var(--surface-interactive);
+  border: 1px solid var(--color-ai-border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+}
+
+.instrument-surface {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.022), transparent 52%),
+    var(--surface-interactive);
+  border: 1px solid var(--color-border-subtle);
+  box-shadow: var(--shadow-surface);
+}
+
+.modal-overlay[data-entering],
+.drawer-overlay[data-entering] {
+  animation: overlay-in var(--duration-normal) var(--ease-standard);
+}
+
+.modal-overlay[data-exiting],
+.drawer-overlay[data-exiting] {
+  animation: overlay-out var(--duration-fast) var(--ease-standard);
+}
+
+.modal-surface[data-entering] {
+  animation: modal-in var(--duration-normal) var(--ease-standard);
+}
+
+.drawer-surface[data-entering] {
+  animation: drawer-in 210ms var(--ease-standard);
+}
+
+.drawer-surface[data-exiting] {
+  animation: drawer-out var(--duration-normal) var(--ease-standard);
+}
+
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.992); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes drawer-in {
+  from { transform: translateX(18px); opacity: 0.82; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes drawer-out {
+  from { transform: translateX(0); opacity: 1; }
+  to { transform: translateX(18px); opacity: 0.82; }
 }
 
 .markdown-body h1,

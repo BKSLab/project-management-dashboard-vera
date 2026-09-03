@@ -13,6 +13,7 @@ import { TaskDrawer } from "@/components/tasks/TaskDrawer";
 
 const TABS = [
     { path: "", label: "Обзор", end: true },
+    { path: "team", label: "Команда", end: false },
     { path: "board", label: "Канбан", end: false },
     { path: "tasks", label: "Задачи", end: false },
     { path: "calendar", label: "Календарь", end: false },
@@ -66,7 +67,7 @@ export function ProjectLayout() {
 
     return (
         <div className="flex h-full min-w-0 flex-col">
-            <header className="shrink-0 border-b border-line bg-surface px-5 pt-4">
+            <header className="material-mineral shrink-0 border-b border-line-subtle px-5 pt-4">
                 <div className="mx-auto flex w-full max-w-6xl flex-col gap-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="flex min-w-0 items-start gap-2.5">
@@ -79,7 +80,7 @@ export function ProjectLayout() {
                             )}
                             <div className="flex min-w-0 flex-col gap-1">
                                 <div className="flex flex-wrap items-center gap-2">
-                                    <h1 className="truncate text-lg font-semibold text-primary">
+                                    <h1 className="truncate text-xl font-semibold tracking-[-0.025em] text-primary">
                                         {project.name}
                                     </h1>
                                     <span className="font-mono text-[11px] text-muted">
@@ -126,7 +127,7 @@ export function ProjectLayout() {
                         </div>
                     </div>
 
-                    <nav aria-label="Разделы проекта" className="-mb-px flex gap-1 overflow-x-auto">
+                    <nav aria-label="Разделы проекта" className="-mb-px flex gap-0.5 overflow-x-auto">
                         {TABS.map((tab) => (
                             <NavLink
                                 key={tab.path}
@@ -134,11 +135,11 @@ export function ProjectLayout() {
                                 end={tab.end}
                                 className={({ isActive }) =>
                                     cn(
-                                        "border-b-2 px-3 py-2 text-[13px] whitespace-nowrap",
+                                        "border-b px-3 py-2 text-[13px] whitespace-nowrap",
                                         "transition-colors duration-[var(--duration-fast)]",
                                         isActive
-                                            ? "border-accent text-primary"
-                                            : "border-transparent text-muted hover:text-secondary",
+                                            ? "border-accent bg-accent/[0.035] text-primary"
+                                            : "border-transparent text-muted hover:bg-white/[0.02] hover:text-secondary",
                                     )
                                 }
                             >

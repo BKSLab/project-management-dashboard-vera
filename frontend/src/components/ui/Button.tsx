@@ -1,20 +1,21 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { Link, type LinkProps } from "react-router-dom";
 import { cn } from "@/lib/cn";
 
 const base =
-    "inline-flex items-center justify-center gap-2 rounded-md font-medium " +
-    "transition-[background-color,border-color,color,box-shadow] duration-[var(--duration-normal)] " +
-    "ease-[var(--ease-standard)] disabled:cursor-not-allowed disabled:opacity-55 " +
-    "disabled:hover:bg-inherit";
+    "inline-flex items-center justify-center gap-2 rounded-[var(--radius-control)] border border-transparent font-medium " +
+    "transition-[background-color,border-color,color,box-shadow,transform] duration-[var(--duration-fast)] " +
+    "ease-[var(--ease-standard)] active:translate-y-px motion-reduce:transform-none " +
+    "disabled:pointer-events-none disabled:opacity-45";
 
 const variants = {
-    primary: "bg-accent text-[#0d1117] font-semibold hover:bg-accent-hover active:brightness-95",
+    primary:
+        "border-accent/45 bg-accent/85 text-on-accent shadow-card font-semibold hover:border-accent/70 hover:bg-accent",
     secondary:
-        "border border-line bg-surface-2 text-primary hover:border-line-strong hover:bg-hover active:bg-active",
-    ghost: "text-secondary hover:bg-hover hover:text-primary active:bg-active",
+        "material-metal border-line-subtle text-primary shadow-card hover:border-line hover:bg-hover active:bg-active",
+    ghost: "text-secondary hover:bg-white/[0.045] hover:text-primary active:bg-active",
     destructive:
-        "border border-danger/40 bg-danger/10 text-danger hover:border-danger/60 hover:bg-danger/20",
+        "border-danger/30 bg-danger/[0.075] text-danger hover:border-danger/50 hover:bg-danger/15",
 } as const;
 
 const sizes = {
@@ -29,17 +30,21 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
     icon?: ReactNode;
 }
 
-export function Button({
-    variant = "secondary",
-    size = "md",
-    icon,
-    className,
-    type = "button",
-    children,
-    ...props
-}: ButtonProps) {
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
+    {
+        variant = "secondary",
+        size = "md",
+        icon,
+        className,
+        type = "button",
+        children,
+        ...props
+    },
+    ref,
+) {
     return (
         <button
+            ref={ref}
             type={type}
             className={cn(base, variants[variant], sizes[size], className)}
             {...props}
@@ -48,7 +53,7 @@ export function Button({
             {children}
         </button>
     );
-}
+});
 
 interface LinkButtonProps extends LinkProps {
     variant?: keyof typeof variants;
@@ -80,17 +85,21 @@ interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
     size?: "sm" | "md";
 }
 
-export function IconButton({
-    label,
-    variant = "ghost",
-    size = "md",
-    className,
-    type = "button",
-    children,
-    ...props
-}: IconButtonProps) {
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
+    {
+        label,
+        variant = "ghost",
+        size = "md",
+        className,
+        type = "button",
+        children,
+        ...props
+    },
+    ref,
+) {
     return (
         <button
+            ref={ref}
             type={type}
             aria-label={label}
             title={label}
@@ -106,4 +115,4 @@ export function IconButton({
             {children}
         </button>
     );
-}
+});

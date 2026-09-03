@@ -13,6 +13,9 @@ PROTECTED_REQUESTS = [
     ("post", "/api/v1/projects"),
     ("get", "/api/v1/projects/1"),
     ("get", "/api/v1/projects/1/stats"),
+    ("get", "/api/v1/projects/1/members"),
+    ("post", "/api/v1/projects/1/members"),
+    ("delete", "/api/v1/projects/1/members/2"),
     ("get", "/api/v1/projects/1/stages"),
     ("get", "/api/v1/projects/1/tasks"),
     ("get", "/api/v1/projects/1/wbs"),
@@ -46,7 +49,8 @@ async def test_protected_endpoint_requires_login(
     method: str,
     path: str,
 ) -> None:
-    response = await getattr(api_client, method)(path, **({"json": {}} if method != "get" else {}))
+    request_kwargs = {"json": {}} if method in {"post", "put", "patch"} else {}
+    response = await api_client.request(method.upper(), path, **request_kwargs)
 
     assert response.status_code == 401, f"{method.upper()} {path} доступен без входа"
 

@@ -9,7 +9,7 @@ import { useCurrentUser } from "@/lib/useAuth";
 import { useToast } from "@/lib/toast";
 import { Page } from "@/components/layout/AppShell";
 import { Button, IconButton } from "@/components/ui/Button";
-import { Card, Section } from "@/components/ui/Card";
+import { Section } from "@/components/ui/Card";
 import { Field, Input } from "@/components/ui/Field";
 import { ErrorMessage, Skeleton } from "@/components/ui/States";
 import { UserAvatar } from "@/components/users/UserAvatar";
@@ -141,7 +141,9 @@ function ProfileForm({ user }: { user: User }) {
     return (
         <Page className="max-w-3xl">
             <header className="flex flex-col gap-0.5">
-                <h1 className="text-lg font-semibold text-primary">Профиль</h1>
+                <h1 className="text-[22px] font-semibold tracking-[-0.03em] text-primary">
+                    Профиль
+                </h1>
                 <p className="text-[13px] text-muted">
                     Учётная запись <span className="font-mono">{user.username}</span> создана{" "}
                     {formatFullDate(user.created_at)}
@@ -149,7 +151,7 @@ function ProfileForm({ user }: { user: User }) {
             </header>
 
             <Section title="Фотография">
-                <Card className="flex flex-wrap items-center gap-4 p-4">
+                <div className="flex flex-wrap items-center gap-5 rounded-[var(--radius-card)] bg-surface/40 px-4 py-4">
                     <UserAvatar user={user} size="lg" version={avatarVersion} />
                     <div className="flex min-w-0 flex-1 flex-col gap-2">
                         {avatarError && <ErrorMessage message={avatarError} />}
@@ -184,11 +186,11 @@ function ProfileForm({ user }: { user: User }) {
                             )}
                         </div>
                     </div>
-                </Card>
+                </div>
             </Section>
 
-            <Section title="О пользователе">
-                <Card className="flex flex-col gap-4 p-5">
+            <Section title="О пользователе" className="border-t border-line-subtle pt-5">
+                <div className="flex flex-col gap-5 px-1">
                     {saveMutation.error && (
                         <ErrorMessage message={(saveMutation.error as Error).message} />
                     )}
@@ -267,7 +269,7 @@ function ProfileForm({ user }: { user: User }) {
                         </Field>
                     </div>
 
-                    <div className="flex justify-end border-t border-line-subtle pt-4">
+                    <div className="flex justify-end pt-1">
                         <Button
                             variant="primary"
                             disabled={
@@ -280,11 +282,11 @@ function ProfileForm({ user }: { user: User }) {
                             Сохранить
                         </Button>
                     </div>
-                </Card>
+                </div>
             </Section>
 
-            <Section title="Смена пароля">
-                <Card className="flex flex-col gap-4 p-5">
+            <Section title="Смена пароля" className="border-t border-line-subtle pt-5">
+                <div className="flex flex-col gap-5 px-1">
                     {passwordMutation.error && (
                         <ErrorMessage message={(passwordMutation.error as Error).message} />
                     )}
@@ -334,7 +336,7 @@ function ProfileForm({ user }: { user: User }) {
                         </Field>
                     </div>
 
-                    <div className="flex justify-end border-t border-line-subtle pt-4">
+                    <div className="flex justify-end pt-1">
                         <Button
                             disabled={!canChangePassword}
                             onClick={() =>
@@ -348,7 +350,7 @@ function ProfileForm({ user }: { user: User }) {
                             Сменить пароль
                         </Button>
                     </div>
-                </Card>
+                </div>
             </Section>
         </Page>
     );

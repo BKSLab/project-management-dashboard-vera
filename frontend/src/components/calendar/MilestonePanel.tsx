@@ -26,7 +26,7 @@ export function MilestonePanel({
     onDelete,
 }: MilestonePanelProps) {
     return (
-        <section className="rounded-lg border border-line bg-surface p-3 shadow-card">
+        <section className="rounded-[var(--radius-card)] bg-surface/55 p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                     <Diamond size={13} className="text-purple" aria-hidden="true" />
@@ -60,7 +60,7 @@ export function MilestonePanel({
                 {milestones.map((milestone) => (
                     <div
                         key={milestone.id}
-                        className="group flex items-center gap-1.5 rounded-md border border-line-subtle bg-surface-2 px-2 py-1.5"
+                        className="group flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 transition-colors hover:bg-white/[0.035]"
                     >
                         {milestone.status === "ACHIEVED" ? (
                             <Check size={11} className="shrink-0 text-success" aria-hidden="true" />

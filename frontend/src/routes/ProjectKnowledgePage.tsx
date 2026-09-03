@@ -26,7 +26,6 @@ import { useProjectOutlet } from "@/lib/useProjectOutlet";
 import { useRenderedMarkdown } from "@/lib/useRenderedMarkdown";
 import { useUiStore } from "@/stores/ui";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { ErrorMessage } from "@/components/ui/States";
 import { cn } from "@/lib/cn";
 
@@ -157,12 +156,12 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
     const indexing = Boolean(status && (status.pending_jobs > 0 || status.processing_jobs > 0));
 
     return (
-        <div className="h-full min-h-0 bg-app">
+        <div className="h-full min-h-0">
             <div className="mx-auto grid h-full w-full max-w-6xl gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_280px]">
-                <Card className="flex min-h-0 flex-col overflow-hidden">
-                    <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+                <section className="ai-surface flex min-h-0 flex-col overflow-hidden rounded-[var(--radius-panel)] border border-ai-border shadow-card">
+                    <div className="flex items-center justify-between gap-3 border-b border-line-subtle px-4 py-3">
                         <div className="flex min-w-0 items-center gap-2.5">
-                            <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-accent-soft text-accent">
+                            <span className="ai-mark flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-ai-blue">
                                 <Bot size={17} aria-hidden="true" />
                             </span>
                             <div className="min-w-0">
@@ -174,7 +173,7 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
                         </div>
                         <span
                             className={cn(
-                                "rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                                "rounded-[5px] border px-2 py-0.5 text-[10px] font-medium",
                                 status?.ready
                                     ? "border-success/30 bg-success/10 text-success"
                                     : "border-warning/30 bg-warning/10 text-warning",
@@ -187,7 +186,7 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
                     <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-4 py-5">
                         {messages.length === 0 ? (
                             <div className="mx-auto flex h-full max-w-xl flex-col items-center justify-center gap-5 py-8 text-center">
-                                <span className="flex size-12 items-center justify-center rounded-xl border border-accent-border bg-accent-soft text-accent">
+                                <span className="ai-mark flex size-11 items-center justify-center rounded-[var(--radius-card)] text-ai-blue">
                                     <Sparkles size={22} aria-hidden="true" />
                                 </span>
                                 <div className="flex flex-col gap-1.5">
@@ -198,13 +197,13 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
                                         Агент сверяет семантическую базу с актуальным состоянием задач.
                                     </p>
                                 </div>
-                                <div className="grid w-full gap-2 sm:grid-cols-2">
+                                <div className="grid w-full border-y border-line-subtle sm:grid-cols-2">
                                     {STARTERS.map((starter) => (
                                         <button
                                             key={starter}
                                             type="button"
                                             onClick={() => submit(starter)}
-                                            className="rounded-md border border-line bg-surface-2 px-3 py-2.5 text-left text-[12px] text-secondary transition-colors hover:border-accent-border hover:bg-accent-soft hover:text-primary"
+                                            className="px-3 py-2.5 text-left text-[12px] text-secondary transition-colors hover:bg-ai-soft hover:text-primary sm:odd:border-r sm:odd:border-line-subtle"
                                         >
                                             {starter}
                                         </button>
@@ -225,8 +224,8 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
                                             className={cn(
                                                 "max-w-[88%] rounded-lg px-3.5 py-3",
                                                 message.role === "user"
-                                                    ? "bg-accent text-[#0d1117]"
-                                                    : "border border-line bg-surface-2 text-secondary",
+                                                    ? "bg-accent/85 text-on-accent"
+                                                    : "bg-ai-soft text-secondary shadow-card",
                                             )}
                                         >
                                             {message.role === "assistant" ? (
@@ -272,8 +271,8 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
                         )}
                     </div>
 
-                    <form onSubmit={onSubmit} className="border-t border-line bg-surface px-4 py-3">
-                        <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-lg border border-line bg-surface-2 p-2 focus-within:border-accent-border">
+                    <form onSubmit={onSubmit} className="border-t border-line-subtle bg-surface/55 px-4 py-3">
+                        <div className="material-metal mx-auto flex max-w-3xl items-end gap-2 rounded-[var(--radius-card)] border border-ai-border p-2 transition-[border-color,box-shadow] focus-within:border-ai-blue/55 focus-within:shadow-focus">
                             <textarea
                                 value={question}
                                 onChange={(event) => setQuestion(event.target.value)}
@@ -298,10 +297,10 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
                             Enter — отправить, Shift+Enter — новая строка. Проверяйте важные решения по источникам.
                         </p>
                     </form>
-                </Card>
+                </section>
 
                 <aside className="scrollbar-thin hidden min-h-0 flex-col gap-3 overflow-y-auto lg:flex">
-                    <Card className="flex flex-col gap-3 p-4">
+                    <section className="flex flex-col gap-3 rounded-[var(--radius-card)] bg-surface/55 p-4">
                         <div className="flex items-center gap-2 text-[13px] font-semibold text-secondary">
                             <Database size={14} aria-hidden="true" />
                             AI-вики
@@ -350,8 +349,8 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
                         >
                             Переиндексировать
                         </Button>
-                    </Card>
-                    <Card className="p-4 text-[12px] leading-relaxed text-muted">
+                    </section>
+                    <section className="border-t border-line-subtle px-1 pt-4 text-[12px] leading-relaxed text-muted">
                         <p className="mb-2 font-medium text-secondary">Что знает агент</p>
                         <ul className="flex list-disc flex-col gap-1 pl-4">
                             <li>описание и структура проекта;</li>
@@ -359,7 +358,7 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
                             <li>вики-документы и комментарии;</li>
                             <li>текст PDF, DOCX, Markdown и TXT-вложений.</li>
                         </ul>
-                    </Card>
+                    </section>
                 </aside>
             </div>
         </div>

@@ -36,7 +36,7 @@ export function FilePreviewModal({
                             href={file.url}
                             target="_blank"
                             rel="noreferrer"
-                            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line bg-surface-2 px-3 text-[13px] font-medium text-primary hover:border-line-strong hover:bg-hover"
+                            className="material-metal inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] border border-line-subtle px-3 text-[13px] font-medium text-primary hover:border-line hover:bg-hover"
                         >
                             Открыть оригинал
                             <ExternalLink size={13} aria-hidden="true" />
@@ -44,7 +44,7 @@ export function FilePreviewModal({
                         <a
                             href={file.url}
                             download={file.name}
-                            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-semibold text-[#0d1117] hover:bg-accent-hover"
+                            className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] border border-accent/45 bg-accent/85 px-3 text-[13px] font-semibold text-on-accent hover:bg-accent"
                         >
                             Скачать
                             <Download size={13} aria-hidden="true" />
@@ -54,7 +54,7 @@ export function FilePreviewModal({
             }
         >
             {file.url && (
-                <div className="flex min-h-52 items-center justify-center overflow-hidden rounded-lg border border-line bg-app">
+                <div className="flex min-h-52 items-center justify-center overflow-hidden rounded-[var(--radius-card)] bg-app/70">
                     {!loadFailed ? (
                         <img
                             src={file.url}

@@ -14,6 +14,7 @@ interface ModalProps {
     /** Ширина диалога: обычные формы — sm, карточка задачи — lg. */
     size?: "sm" | "md" | "lg";
     isDismissable?: boolean;
+    tall?: boolean;
 }
 
 const SIZES = {
@@ -31,6 +32,7 @@ export function Modal({
     onOpenChange,
     size = "sm",
     isDismissable = true,
+    tall = false,
 }: ModalProps) {
     return (
         <ModalOverlay
@@ -38,21 +40,22 @@ export function Modal({
             onOpenChange={onOpenChange}
             isDismissable={isDismissable}
             className={cn(
-                "fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4",
-                "backdrop-blur-[2px]",
+                "modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4",
+                "backdrop-blur-[1.5px]",
             )}
         >
             <RACModal
                 className={cn(
-                    "glass relative flex max-h-[min(85vh,900px)] w-full flex-col overflow-hidden",
-                    "rounded-[var(--radius-xl)] shadow-panel",
+                    "modal-surface material-glass relative flex w-full flex-col overflow-hidden",
+                    tall ? "max-h-[min(92vh,1000px)]" : "max-h-[min(85vh,900px)]",
+                    "rounded-[var(--radius-floating)] shadow-panel",
                     SIZES[size],
                 )}
             >
                 <Dialog aria-label={title} className="flex min-h-0 flex-1 flex-col outline-none">
                     {({ close }) => (
                         <>
-                            <header className="flex shrink-0 items-start justify-between gap-4 border-b border-line px-5 py-4">
+                            <header className="flex shrink-0 items-start justify-between gap-4 border-b border-line-subtle bg-floating/45 px-5 py-4">
                                 <div className="flex min-w-0 flex-col gap-1">
                                     <Heading
                                         slot="title"
@@ -69,12 +72,12 @@ export function Modal({
                                 </IconButton>
                             </header>
 
-                            <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                            <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5">
                                 {children}
                             </div>
 
                             {footer && (
-                                <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line px-5 py-3">
+                                <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line-subtle bg-floating/35 px-5 py-3.5">
                                     {footer}
                                 </footer>
                             )}

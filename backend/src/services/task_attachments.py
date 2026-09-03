@@ -128,6 +128,7 @@ class TaskAttachmentsService:
         file_name: str,
         content_type: str | None,
         content: bytes,
+        index_for_knowledge: bool = True,
     ) -> TaskAttachmentSchema:
         """Проверяет и сохраняет новый файл задачи.
 
@@ -179,7 +180,7 @@ class TaskAttachmentsService:
                 task_id,
                 len(content),
             )
-            if self.knowledge_events is not None:
+            if self.knowledge_events is not None and index_for_knowledge:
                 await self.knowledge_events.upsert(
                     project_id=task.project_id,
                     entity_type=KnowledgeEntityType.ATTACHMENT,

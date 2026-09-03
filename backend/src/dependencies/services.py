@@ -16,6 +16,7 @@ from src.dependencies.repositories import (
     TaskAttachmentsRepositoryDep,
     TaskCommentsRepositoryDep,
     TaskDependenciesRepositoryDep,
+    TaskParticipantsRepositoryDep,
     TasksRepositoryDep,
     UnitOfWorkDep,
     UsersRepositoryDep,
@@ -32,12 +33,15 @@ from src.services.documents import DocumentsService
 from src.services.knowledge_events import KnowledgeEvents
 from src.services.milestones import MilestonesService
 from src.services.project_agent import ProjectAgentService
+from src.services.project_members import ProjectMembersService
 from src.services.project_stages import ProjectStagesService
 from src.services.projects import ProjectsService
 from src.services.task_activity import TaskActivityService
 from src.services.task_attachments import TaskAttachmentsService
 from src.services.task_comments import TaskCommentsService
 from src.services.task_dependencies import TaskDependenciesService
+from src.services.task_descriptions import TaskDescriptionService
+from src.services.task_documents import TaskDocumentImportService
 from src.services.tasks import TasksService
 from src.services.users import UsersService
 from src.services.wbs_nodes import WbsNodesService
@@ -95,6 +99,23 @@ def get_projects_service(
     )
 
 
+def get_project_members_service(
+    members_repository: ProjectMembersRepositoryDep,
+    users_repository: UsersRepositoryDep,
+    participants_repository: TaskParticipantsRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    unit_of_work: UnitOfWorkDep,
+) -> ProjectMembersService:
+    """Создаёт сервис управления проектной командой."""
+    return ProjectMembersService(
+        members_repository=members_repository,
+        users_repository=users_repository,
+        participants_repository=participants_repository,
+        tasks_repository=tasks_repository,
+        unit_of_work=unit_of_work,
+    )
+
+
 def get_project_stages_service(
     stages_repository: ProjectStagesRepositoryDep,
     projects_repository: ProjectsRepositoryDep,
@@ -112,6 +133,8 @@ def get_project_stages_service(
 
 def get_tasks_service(
     tasks_repository: TasksRepositoryDep,
+    members_repository: ProjectMembersRepositoryDep,
+    participants_repository: TaskParticipantsRepositoryDep,
     projects_repository: ProjectsRepositoryDep,
     stages_repository: ProjectStagesRepositoryDep,
     comments_repository: TaskCommentsRepositoryDep,
@@ -124,6 +147,8 @@ def get_tasks_service(
     """Создаёт сервис задач со всеми доменными зависимостями."""
     return TasksService(
         tasks_repository=tasks_repository,
+        members_repository=members_repository,
+        participants_repository=participants_repository,
         projects_repository=projects_repository,
         stages_repository=stages_repository,
         comments_repository=comments_repository,
@@ -350,10 +375,47 @@ def get_task_attachments_service(
     )
 
 
+def get_task_description_service(
+    projects_repository: ProjectsRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    documents_repository: DocumentsRepositoryDep,
+) -> TaskDescriptionService:
+    """Создаёт stateless-сервис переформулирования черновика задачи."""
+    settings = get_settings()
+    return TaskDescriptionService(
+        projects_repository=projects_repository,
+        tasks_repository=tasks_repository,
+        documents_repository=documents_repository,
+        file_context_limit=settings.llm.task_rephrase_file_max_chars,
+    )
+
+
+def get_task_document_import_service(
+    tasks_repository: TasksRepositoryDep,
+    attachments_service: Annotated[
+        TaskAttachmentsService,
+        Depends(get_task_attachments_service),
+    ],
+    documents_service: Annotated[DocumentsService, Depends(get_documents_service)],
+    links_service: Annotated[DocumentLinksService, Depends(get_document_links_service)],
+) -> TaskDocumentImportService:
+    """Создаёт составной импорт документа из формы задачи."""
+    return TaskDocumentImportService(
+        tasks_repository=tasks_repository,
+        attachments_service=attachments_service,
+        documents_service=documents_service,
+        links_service=links_service,
+    )
+
+
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
 UsersServiceDep = Annotated[UsersService, Depends(get_users_service)]
 ApiTokensServiceDep = Annotated[ApiTokensService, Depends(get_api_tokens_service)]
 ProjectsServiceDep = Annotated[ProjectsService, Depends(get_projects_service)]
+ProjectMembersServiceDep = Annotated[
+    ProjectMembersService,
+    Depends(get_project_members_service),
+]
 ProjectStagesServiceDep = Annotated[
     ProjectStagesService,
     Depends(get_project_stages_service),
@@ -387,5 +449,13 @@ TaskActivityServiceDep = Annotated[
 TaskAttachmentsServiceDep = Annotated[
     TaskAttachmentsService,
     Depends(get_task_attachments_service),
+]
+TaskDescriptionServiceDep = Annotated[
+    TaskDescriptionService,
+    Depends(get_task_description_service),
+]
+TaskDocumentImportServiceDep = Annotated[
+    TaskDocumentImportService,
+    Depends(get_task_document_import_service),
 ]
 ProjectAgentServiceDep = Annotated[ProjectAgentService, Depends(get_project_agent_service)]

@@ -29,7 +29,7 @@ export function CalendarAgenda({
 }: CalendarAgendaProps) {
     return (
         <div className="flex flex-col gap-3">
-            <section className="rounded-lg border border-line bg-surface p-3 shadow-card">
+            <section className="rounded-[var(--radius-card)] bg-surface/55 p-3">
                 <h3 className="mb-2 text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">
                     {dayTitle(selectedDate)}
                 </h3>
@@ -54,7 +54,7 @@ export function CalendarAgenda({
                 )}
             </section>
 
-            <section className="rounded-lg border border-line bg-surface p-3 shadow-card">
+            <section className="rounded-[var(--radius-card)] bg-surface/55 p-3">
                 <div className="mb-2 flex items-center gap-2">
                     <Inbox size={14} className="text-muted" aria-hidden="true" />
                     <h3 className="text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">

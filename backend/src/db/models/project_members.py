@@ -10,6 +10,7 @@ from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .projects import Project
+    from .task_participants import TaskParticipant
     from .users import User
 
 
@@ -62,6 +63,12 @@ class ProjectMember(Base, TimestampMixin):
 
     project: Mapped[Project] = relationship("Project", back_populates="members")
     user: Mapped[User] = relationship("User", back_populates="memberships")
+    task_participations: Mapped[list[TaskParticipant]] = relationship(
+        "TaskParticipant",
+        back_populates="project_member",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     def __repr__(self) -> str:
         return (

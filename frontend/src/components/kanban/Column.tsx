@@ -65,7 +65,7 @@ export function Column({ stage, tasks, selectedTaskId, onTaskOpen }: ColumnProps
                     "border transition-[background-color,border-color] duration-[var(--duration-fast)]",
                     isOver
                         ? "border-dashed border-accent-border bg-accent/[0.055]"
-                        : "border-transparent bg-surface/60",
+                        : "border-transparent bg-surface/35",
                 )}
             >
                 {tasks.map((task) => (

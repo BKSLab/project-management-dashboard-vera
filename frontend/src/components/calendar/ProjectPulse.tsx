@@ -36,18 +36,18 @@ export function ProjectPulse({ summary }: { summary: CalendarSummary }) {
     ];
 
     return (
-        <aside className="rounded-lg border border-line bg-surface p-3 shadow-card">
+        <aside className="rounded-[var(--radius-card)] bg-surface/55 p-3">
             <div className="mb-2 flex items-center justify-between">
                 <h3 className="text-[11px] font-semibold tracking-[0.08em] text-muted uppercase">
                     Пульс проекта
                 </h3>
-                <span className="size-1.5 rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)]" />
+                <span className="size-1.5 rounded-full bg-accent/80" />
             </div>
-            <div className="grid gap-1.5 sm:grid-cols-3 lg:grid-cols-1">
+            <div className="grid sm:grid-cols-3 lg:grid-cols-1">
                 {signals.map((signal) => (
                     <div
                         key={signal.label}
-                        className="flex items-center gap-2 rounded-md border border-line-subtle bg-surface-2 px-2.5 py-2"
+                        className="flex items-center gap-2 border-t border-line-subtle px-1 py-2 first:border-t-0"
                     >
                         <span className={signal.tone}>{signal.icon}</span>
                         <span className="min-w-0 flex-1 truncate text-[11px] text-muted">

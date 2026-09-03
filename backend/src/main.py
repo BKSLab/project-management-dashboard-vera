@@ -19,12 +19,14 @@ from src.api.v1.endpoints.document_links import router as document_links_router
 from src.api.v1.endpoints.documents import router as documents_router
 from src.api.v1.endpoints.knowledge import router as knowledge_router
 from src.api.v1.endpoints.milestones import router as milestones_router
+from src.api.v1.endpoints.project_members import router as project_members_router
 from src.api.v1.endpoints.project_stages import router as project_stages_router
 from src.api.v1.endpoints.projects import router as projects_router
 from src.api.v1.endpoints.task_activity import router as task_activity_router
 from src.api.v1.endpoints.task_attachments import router as task_attachments_router
 from src.api.v1.endpoints.task_comments import router as task_comments_router
 from src.api.v1.endpoints.task_dependencies import router as task_dependencies_router
+from src.api.v1.endpoints.task_documents import router as task_documents_router
 from src.api.v1.endpoints.tasks import router as tasks_router
 from src.api.v1.endpoints.users import router as users_router
 from src.api.v1.endpoints.wbs_nodes import router as wbs_nodes_router
@@ -142,6 +144,7 @@ for api_router in (
     calendar_scenarios_router,
     milestones_router,
     projects_router,
+    project_members_router,
     project_stages_router,
     tasks_router,
     wbs_nodes_router,
@@ -151,6 +154,7 @@ for api_router in (
     task_dependencies_router,
     task_activity_router,
     task_attachments_router,
+    task_documents_router,
     knowledge_router,
 ):
     app.include_router(api_router, prefix=settings.app.api_v1_prefix)

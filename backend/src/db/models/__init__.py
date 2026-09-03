@@ -16,6 +16,7 @@ from .task_activity import TaskActivity, TaskActivityEventType
 from .task_attachments import TaskAttachment
 from .task_comments import TaskComment
 from .task_dependencies import TaskDependency, TaskDependencyType
+from .task_participants import TaskParticipant, TaskParticipantRole
 from .tasks import Task, TaskPriority, TaskRole
 from .users import User
 from .wbs_nodes import WbsNode
@@ -44,6 +45,8 @@ __all__ = [
     "TaskComment",
     "TaskDependency",
     "TaskDependencyType",
+    "TaskParticipant",
+    "TaskParticipantRole",
     "TaskPriority",
     "TaskRole",
     "User",

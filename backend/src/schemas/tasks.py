@@ -2,7 +2,21 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.db.models.task_participants import TaskParticipantRole
 from src.db.models.tasks import TaskPriority, TaskRole
+from src.schemas.users import UserSummarySchema
+
+
+class TaskParticipantSchema(BaseModel):
+    """Член команды и его роль в конкретной задаче."""
+
+    id: int = Field(..., description="Идентификатор назначения.", examples=[18])
+    role: TaskParticipantRole = Field(
+        ...,
+        description="Исполнитель, постановщик или наблюдатель.",
+        examples=["EXECUTOR"],
+    )
+    user: UserSummarySchema = Field(..., description="Участник проектной команды.")
 
 
 class TaskSchema(BaseModel):
@@ -40,6 +54,10 @@ class TaskSchema(BaseModel):
         None,
         description="Подпись исполнителя.",
         examples=["Иван"],
+    )
+    participants: list[TaskParticipantSchema] = Field(
+        default_factory=list,
+        description="Ролевые назначения участников команды.",
     )
     start_date: date | None = Field(
         None,
@@ -175,6 +193,24 @@ class TaskCreateSchema(BaseModel):
         description="Подпись исполнителя.",
         examples=["Иван"],
     )
+    executor_id: int | None = Field(
+        None,
+        gt=0,
+        description="Пользователь-исполнитель из команды проекта.",
+        examples=[7],
+    )
+    reporter_id: int | None = Field(
+        None,
+        gt=0,
+        description="Пользователь-постановщик; по умолчанию автор запроса.",
+        examples=[3],
+    )
+    observer_ids: list[int] = Field(
+        default_factory=list,
+        max_length=50,
+        description="Пользователи-наблюдатели из команды проекта.",
+        examples=[[4, 9]],
+    )
     start_date: date | None = Field(
         None,
         description="Плановая дата начала.",
@@ -185,6 +221,34 @@ class TaskCreateSchema(BaseModel):
         description="Плановая дата завершения.",
         examples=["2026-09-08"],
     )
+
+
+class TaskRephraseRequestSchema(BaseModel):
+    """Черновик и выбранный контекст для переформулирования описания."""
+
+    title: str = Field("", max_length=512, description="Название новой или существующей задачи.")
+    description_md: str = Field(
+        ...,
+        min_length=1,
+        max_length=50_000,
+        description="Пользовательский черновик, который нужно сделать понятнее.",
+    )
+    task_id: int | None = Field(
+        None,
+        gt=0,
+        description="Существующая задача, если запрос выполняется из её карточки.",
+    )
+    document_ids: list[int] = Field(
+        default_factory=list,
+        max_length=50,
+        description="Документы этого проекта, выбранные как дополнительный контекст.",
+    )
+
+
+class TaskRephraseResultSchema(BaseModel):
+    """Переформулированный, но ещё не сохранённый черновик описания."""
+
+    description_md: str = Field(..., min_length=1, max_length=12_000)
 
 
 class TaskUpdateSchema(BaseModel):
@@ -215,6 +279,24 @@ class TaskUpdateSchema(BaseModel):
         max_length=255,
         description="Новая подпись исполнителя или null для очистки.",
         examples=["Мария"],
+    )
+    executor_id: int | None = Field(
+        None,
+        gt=0,
+        description="Новый исполнитель или null для снятия назначения.",
+        examples=[7],
+    )
+    reporter_id: int | None = Field(
+        None,
+        gt=0,
+        description="Новый постановщик или null для снятия назначения.",
+        examples=[3],
+    )
+    observer_ids: list[int] | None = Field(
+        None,
+        max_length=50,
+        description="Полный новый список наблюдателей; пустой список очищает его.",
+        examples=[[4, 9]],
     )
     start_date: date | None = Field(
         None,

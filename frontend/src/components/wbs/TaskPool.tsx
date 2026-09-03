@@ -83,7 +83,7 @@ export function TaskPool({
             className={cn(
                 "flex w-full shrink-0 flex-col border-r border-line bg-sidebar lg:w-72",
                 "transition-[background-color] duration-[var(--duration-fast)]",
-                isDropTarget && "bg-[rgba(88,166,255,0.06)]",
+                isDropTarget && "bg-accent/[0.06]",
             )}
         >
             <div className="flex shrink-0 flex-col gap-2 border-b border-line px-3 py-2.5">
@@ -229,7 +229,10 @@ export function TaskPool({
                             <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-muted">
                                 <span className="inline-flex min-w-0 items-center gap-1">
                                     <StatusDot
-                                        color={stagesById.get(task.stage_id)?.color ?? "#7d8793"}
+                                        color={
+                                            stagesById.get(task.stage_id)?.color ??
+                                            "var(--color-text-muted)"
+                                        }
                                     />
                                     <span className="truncate">
                                         {stagesById.get(task.stage_id)?.name ?? "—"}

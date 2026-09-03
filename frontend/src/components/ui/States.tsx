@@ -3,7 +3,7 @@ import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 export function Skeleton({ className }: { className?: string }) {
-    return <div aria-hidden="true" className={cn("animate-pulse rounded-md bg-white/6", className)} />;
+    return <div aria-hidden="true" className={cn("animate-pulse rounded-md bg-white/[0.045]", className)} />;
 }
 
 interface EmptyStateProps {
@@ -20,8 +20,8 @@ export function EmptyState({ title, description, action, icon, className }: Empt
         <div
             role="status"
             className={cn(
-                "flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed",
-                "border-line px-6 py-12 text-center",
+                "flex flex-col items-center justify-center gap-3 rounded-lg bg-surface/35",
+                "px-6 py-12 text-center",
                 className,
             )}
         >

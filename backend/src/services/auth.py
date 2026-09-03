@@ -14,7 +14,7 @@ from src.exceptions.users import (
     UsersRepositoryError,
 )
 from src.repositories.users import UsersRepository
-from src.schemas.users import UserSchema
+from src.schemas.users import UserSchema, UserSummarySchema
 from src.utils.security import hash_password, secrets_match, verify_password
 from src.utils.tokens import create_access_token
 
@@ -110,4 +110,16 @@ def to_user_schema(user: User) -> UserSchema:
         telegram=user.telegram,
         has_avatar=user.avatar_key is not None,
         created_at=user.created_at,
+    )
+
+
+def to_user_summary(user: User) -> UserSummarySchema:
+    """Преобразует пользователя в безопасную идентичность для команды."""
+    return UserSummarySchema(
+        id=user.id,
+        username=user.username,
+        last_name=user.last_name,
+        first_name=user.first_name,
+        middle_name=user.middle_name,
+        has_avatar=user.avatar_key is not None,
     )

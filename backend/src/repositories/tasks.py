@@ -932,6 +932,23 @@ class TasksRepository:
             logger.error("❌ Не удалось обновить задачу id=%s.", task.id, exc_info=True)
             raise TasksRepositoryError(f"Ошибка обновления задачи id={task.id}.") from error
 
+    async def clear_assignees(self, task_ids: list[int]) -> None:
+        """Очищает совместимую подпись исполнителя у набора задач."""
+        if not task_ids:
+            return
+        try:
+            await self.db_session.execute(
+                update(Task)
+                .where(Task.id.in_(task_ids))
+                .values(assignee=None)
+                .execution_options(synchronize_session="fetch")
+            )
+            await self.db_session.flush()
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось очистить исполнителей задач.", exc_info=True)
+            raise TasksRepositoryError("Ошибка очистки исполнителей задач.") from error
+
     async def delete(self, task: Task) -> None:
         """Удаляет задачу.
 

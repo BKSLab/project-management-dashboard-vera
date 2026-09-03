@@ -1,7 +1,8 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile, status
+from pydantic import ValidationError
 
 from src.api.v1.responses import (
     CONFLICT_RESPONSE,
@@ -10,14 +11,29 @@ from src.api.v1.responses import (
     VALIDATION_RESPONSE,
 )
 from src.dependencies.access import get_accessible_project, get_accessible_task
-from src.dependencies.services import DocumentLinksServiceDep, TasksServiceDep
+from src.dependencies.auth import CurrentUserDep
+from src.dependencies.services import (
+    DocumentLinksServiceDep,
+    TaskDescriptionServiceDep,
+    TasksServiceDep,
+)
 from src.exceptions.document_links import DocumentLinksServiceError
+from src.exceptions.knowledge import KnowledgeProviderError
 from src.exceptions.project_stages import ProjectStagesServiceError
 from src.exceptions.projects import ProjectsServiceError
 from src.exceptions.tasks import TasksServiceError
 from src.exceptions.wbs_nodes import WbsNodesServiceError
 from src.schemas.document_links import LinkedDocumentSchema
-from src.schemas.tasks import TaskCreateSchema, TaskMoveSchema, TaskSchema, TaskUpdateSchema
+from src.schemas.tasks import (
+    TaskCreateSchema,
+    TaskMoveSchema,
+    TaskRephraseRequestSchema,
+    TaskRephraseResultSchema,
+    TaskSchema,
+    TaskUpdateSchema,
+)
+from src.services.task_attachments import TaskAttachmentsService
+from src.services.task_descriptions import MAX_REPHRASE_FILES, TaskRephraseFile
 
 router = APIRouter(tags=["tasks"])
 logger = logging.getLogger(__name__)
@@ -105,6 +121,7 @@ async def get_tasks(
 async def create_task(
     project_id: Annotated[int, Path(gt=0, description="Идентификатор проекта.")],
     data: TaskCreateSchema,
+    user: CurrentUserDep,
     service: TasksServiceDep,
 ) -> TaskSchema:
     """Создаёт задачу проекта.
@@ -122,12 +139,86 @@ async def create_task(
     """
     logger.info("🚀 Запрос POST /projects/%s/tasks. Заголовок: %s.", project_id, data.title)
     try:
-        result = await service.create_task(project_id=project_id, data=data.model_dump())
+        result = await service.create_task(
+            project_id=project_id,
+            data=data.model_dump(),
+            created_by_user_id=user.id,
+        )
         logger.info("✅ Задача создана. id=%s, ключ=%s.", result.id, result.key)
         return result
     except TaskErrors as error:
         logger.exception("❌ Ошибка POST /projects/%s/tasks. Детали: %s", project_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+@router.post(
+    path="/projects/{project_id}/tasks/rephrase",
+    dependencies=[Depends(get_accessible_project)],
+    status_code=status.HTTP_200_OK,
+    summary="Переформулировать описание задачи",
+    description=(
+        "Возвращает улучшенный черновик с учётом проекта, других задач, выбранных "
+        "документов и ещё не загруженных файлов. Ничего не сохраняет."
+    ),
+    operation_id="rephraseTaskDescription",
+    responses={422: VALIDATION_RESPONSE, 503: SERVER_ERROR_RESPONSE},
+    response_model=TaskRephraseResultSchema,
+)
+async def rephrase_task_description(
+    project_id: Annotated[int, Path(gt=0, description="Идентификатор проекта.")],
+    payload: Annotated[str, Form(description="JSON с черновиком и document_ids.")],
+    service: TaskDescriptionServiceDep,
+    files: Annotated[
+        list[UploadFile] | None,
+        File(description="Новые документы, выбранные в форме задачи."),
+    ] = None,
+) -> TaskRephraseResultSchema:
+    """Переформулирует черновик, не изменяя сохранённые данные."""
+    uploads = files or []
+    if len(uploads) > MAX_REPHRASE_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Для одного запроса можно передать не более {MAX_REPHRASE_FILES} файлов.",
+        )
+    try:
+        try:
+            data = TaskRephraseRequestSchema.model_validate_json(payload)
+        except ValidationError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Некорректные данные для переформулирования.",
+            ) from error
+
+        context_files: list[TaskRephraseFile] = []
+        for upload in uploads:
+            content = await upload.read(TaskAttachmentsService.MAX_FILE_SIZE + 1)
+            if not content:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"Файл «{upload.filename or 'без имени'}» пуст.",
+                )
+            if len(content) > TaskAttachmentsService.MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail="Размер файла превышает допустимые 10 МБ.",
+                )
+            context_files.append(
+                TaskRephraseFile(name=upload.filename or "", content=content)
+            )
+        return await service.rephrase(
+            project_id=project_id,
+            data=data,
+            files=context_files,
+        )
+    except (TasksServiceError, KnowledgeProviderError) as error:
+        logger.exception(
+            "❌ Не удалось переформулировать описание в проекте id=%s.",
+            project_id,
+        )
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    finally:
+        for upload in uploads:
+            await upload.close()
 
 
 @router.get(
@@ -181,6 +272,7 @@ async def get_task(
 async def update_task(
     task_id: Annotated[int, Path(gt=0, description="Идентификатор задачи.")],
     data: TaskUpdateSchema,
+    user: CurrentUserDep,
     service: TasksServiceDep,
 ) -> TaskSchema:
     """Обновляет задачу.
@@ -201,6 +293,7 @@ async def update_task(
         result = await service.update_task(
             task_id=task_id,
             data=data.model_dump(exclude_unset=True),
+            updated_by_user_id=user.id,
         )
         logger.info("✅ Задача id=%s обновлена.", task_id)
         return result

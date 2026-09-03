@@ -225,7 +225,7 @@ export function StructurePage() {
 
     return (
         <div className="flex h-full min-w-0 flex-col">
-            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2">
+            <div className="material-metal flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-line-subtle px-4 py-2">
                 <div className="flex items-center gap-2 text-[12px] text-muted">
                     <span>
                         {structureQuery.data?.stats.total_nodes ?? 0} разделов ·{" "}
@@ -236,7 +236,7 @@ export function StructurePage() {
 
                 <div className="flex flex-wrap items-center gap-1.5">
                     <div
-                        className="flex rounded-md border border-line p-0.5"
+                        className="flex rounded-[var(--radius-control)] border border-line-subtle bg-app/20 p-0.5"
                         role="group"
                         aria-label="Режим раскладки"
                     >

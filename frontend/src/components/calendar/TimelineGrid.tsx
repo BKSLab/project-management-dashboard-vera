@@ -148,7 +148,7 @@ export function TimelineGrid({
     }
 
     return (
-        <section className="overflow-hidden rounded-lg border border-line bg-surface shadow-card">
+        <section className="instrument-surface overflow-hidden rounded-[var(--radius-panel)] border-line-subtle">
             <div className="scrollbar-thin overflow-x-auto">
                 <div className="relative min-w-max" style={{ width: 210 + timelineWidth }}>
                     <div
@@ -217,7 +217,7 @@ export function TimelineGrid({
                                     <div
                                         key={`today-${day.date}`}
                                         aria-label="Сегодня"
-                                        className="pointer-events-none absolute top-0 z-20 w-px bg-accent shadow-[0_0_8px_var(--color-accent)]"
+                                        className="pointer-events-none absolute top-0 z-20 w-px bg-accent/80"
                                         style={{
                                             left: 210 + index * dayWidth + dayWidth / 2,
                                             height: bodyHeight,
@@ -419,6 +419,7 @@ export function TimelineGrid({
                                         <button
                                             type="button"
                                             onClick={() => onOpenTask(task.id)}
+                                            title={`${task.key} · ${task.title}`}
                                             className="min-w-0 flex-1 truncate text-left text-[11px] text-secondary hover:text-primary"
                                         >
                                             <span className="font-mono text-[10px] text-accent">
@@ -465,6 +466,7 @@ export function TimelineGrid({
                                                 stage={stagesById.get(task.stage_id)}
                                                 geometry={geometry}
                                                 dayWidth={dayWidth}
+                                                timelineWidth={timelineWidth}
                                                 scale={scale}
                                                 onOpen={onOpenTask}
                                                 onResize={onResizeTask}
@@ -473,12 +475,12 @@ export function TimelineGrid({
                                         {scenarioGeometry && scenarioChange && (
                                             <div
                                                 aria-label={`Предложенный интервал ${task.key}`}
-                                                className="pointer-events-none absolute top-1.5 z-[15] flex h-8 items-center overflow-hidden rounded-lg border border-purple/80 px-2 text-[9px] font-semibold text-purple shadow-[0_0_12px_color-mix(in_srgb,var(--color-purple)_25%,transparent)]"
+                                                className="pointer-events-none absolute top-1.5 z-[15] flex h-8 items-center overflow-hidden rounded-[var(--radius-control)] border border-ai-violet/65 px-2 text-[9px] font-semibold text-ai-violet shadow-card"
                                                 style={{
                                                     left: scenarioGeometry.left,
                                                     width: scenarioGeometry.width,
                                                     backgroundImage:
-                                                        "repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--color-purple) 18%, transparent) 6px 10px)",
+                                                        "repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--color-ai-violet) 16%, transparent) 6px 10px)",
                                                 }}
                                                 title={`PROPOSED · ${scenarioChange.proposed.start_date ?? scenarioChange.proposed.due_date ?? "—"} — ${scenarioChange.proposed.due_date ?? "—"}`}
                                             >

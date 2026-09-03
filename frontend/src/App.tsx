@@ -7,6 +7,7 @@ import { DashboardPage } from "@/routes/DashboardPage";
 import { ProjectsPage } from "@/routes/ProjectsPage";
 import { NewProjectPage } from "@/routes/NewProjectPage";
 import { ProjectOverviewPage } from "@/routes/ProjectOverviewPage";
+import { ProjectTeamPage } from "@/routes/ProjectTeamPage";
 import { BoardPage } from "@/routes/BoardPage";
 import { TasksListPage } from "@/routes/TasksListPage";
 import { ProjectDocumentsPage } from "@/routes/ProjectDocumentsPage";
@@ -64,6 +65,7 @@ function ProtectedApp() {
                     <Route path="/mcp" element={<McpPage />} />
                     <Route path="/projects/:projectKey" element={<ProjectLayout />}>
                         <Route index element={<ProjectOverviewPage />} />
+                        <Route path="team" element={<ProjectTeamPage />} />
                         <Route path="board" element={<BoardPage />} />
                         <Route path="tasks" element={<TasksListPage />} />
                         <Route

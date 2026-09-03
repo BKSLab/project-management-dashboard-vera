@@ -1,13 +1,19 @@
 import logging
 
 from sqlalchemy import Result, and_, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from src.db.models.project_members import ProjectMember
-from src.exceptions.projects import ProjectsRepositoryError
+from src.exceptions.projects import (
+    ProjectMemberAlreadyExistsRepositoryError,
+    ProjectsRepositoryError,
+)
+from src.utils.db_errors import get_integrity_constraint_name
 
 logger = logging.getLogger(__name__)
+PROJECT_MEMBER_CONSTRAINTS = frozenset({"uq_project_members_project_user"})
 
 
 class ProjectMembersRepository:
@@ -83,6 +89,7 @@ class ProjectMembersRepository:
         try:
             result: Result = await self.db_session.execute(
                 select(ProjectMember)
+                .options(joinedload(ProjectMember.user))
                 .where(ProjectMember.project_id == project_id)
                 .order_by(ProjectMember.id)
             )
@@ -112,7 +119,31 @@ class ProjectMembersRepository:
             await self.db_session.flush()
             await self.db_session.refresh(member)
             return member
+        except IntegrityError as error:
+            await self.db_session.rollback()
+            if get_integrity_constraint_name(error) in PROJECT_MEMBER_CONSTRAINTS:
+                raise ProjectMemberAlreadyExistsRepositoryError(
+                    project_id=int(data.get("project_id", 0)),
+                    user_id=int(data.get("user_id", 0)),
+                ) from error
+            logger.error("❌ Ограничение БД не позволило добавить участника.", exc_info=True)
+            raise ProjectsRepositoryError("Ошибка ограничения при добавлении участника.") from error
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось добавить участника проекта.", exc_info=True)
             raise ProjectsRepositoryError("Ошибка добавления участника проекта.") from error
+
+    async def delete(self, member: ProjectMember) -> None:
+        """Удаляет участие пользователя из проекта."""
+        try:
+            await self.db_session.delete(member)
+            await self.db_session.flush()
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось удалить участника id=%s из проекта id=%s.",
+                member.user_id,
+                member.project_id,
+                exc_info=True,
+            )
+            raise ProjectsRepositoryError("Ошибка удаления участника проекта.") from error

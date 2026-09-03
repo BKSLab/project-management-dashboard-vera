@@ -14,10 +14,18 @@ export function ProjectCard({ project }: { project: DashboardProject }) {
     const percent = Math.round(project.completion_rate * 100);
 
     return (
-        <Card interactive className="min-w-0">
+        <Card
+            interactive
+            className="relative min-w-0 overflow-hidden focus-within:border-accent/55 focus-within:shadow-selected"
+        >
+            <span
+                aria-hidden="true"
+                style={{ backgroundColor: project.color }}
+                className="absolute top-4 bottom-4 left-0 w-px opacity-80"
+            />
             <Link
                 to={`/projects/${project.key}`}
-                className="flex min-w-0 flex-col gap-3 p-4 outline-none"
+                className="flex min-w-0 flex-col gap-3 p-4 pl-[17px] outline-none"
             >
                 <div className="flex min-w-0 items-start justify-between gap-3">
                     <div className="flex min-w-0 items-start gap-2.5">
@@ -29,7 +37,7 @@ export function ProjectCard({ project }: { project: DashboardProject }) {
                             <StatusDot color={project.color} className="mt-2" />
                         )}
                         <div className="flex min-w-0 flex-col gap-0.5">
-                            <h3 className="truncate text-[15px] font-semibold text-primary">
+                            <h3 className="truncate text-[15px] font-semibold tracking-[-0.015em] text-primary">
                                 {project.name}
                             </h3>
                             <span className="font-mono text-[11px] text-muted">{project.key}</span>

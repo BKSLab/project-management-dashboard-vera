@@ -63,14 +63,14 @@ export function SectionNode({ data, selected }: NodeProps) {
                 onOpenMenu(section.node.id, { x: event.clientX, y: event.clientY });
             }}
             className={cn(
-                "flex h-full w-full flex-col justify-between rounded-[12px] border bg-surface px-3 py-2.5",
+                "flex h-full w-full flex-col justify-between rounded-[var(--radius-card)] border bg-surface-2 px-3 py-2.5",
                 "transition-[background-color,border-color,box-shadow] duration-[var(--duration-normal)]",
-                "ease-[var(--ease-standard)] shadow-[0_4px_12px_rgba(0,0,0,0.22)]",
+                "ease-[var(--ease-standard)] shadow-card",
                 isDropTarget
-                    ? "border-[rgba(88,166,255,0.7)] bg-[rgba(88,166,255,0.08)]"
+                    ? "border-accent/70 bg-accent/[0.08] shadow-selected"
                     : selected
-                      ? "border-[rgba(88,166,255,0.65)] shadow-[0_0_0_1px_rgba(88,166,255,0.15),0_10px_30px_rgba(0,0,0,0.3)]"
-                      : "border-line hover:border-line-strong",
+                      ? "material-metal border-accent/60 shadow-selected"
+                      : "border-line-subtle hover:border-line hover:bg-elevated",
             )}
         >
             <Handle type="target" position={Position.Left} className="!opacity-0" isConnectable={false} />
@@ -122,7 +122,7 @@ export function SectionNode({ data, selected }: NodeProps) {
                                     onCancelRename();
                                 }
                             }}
-                            className="w-full rounded-sm border border-accent-border bg-surface-2 px-1 py-0.5 text-[13px] text-primary outline-none"
+                            className="w-full rounded-sm border border-accent/70 bg-elevated px-1 py-0.5 text-[13px] text-primary outline-none shadow-focus"
                         />
                     ) : (
                         <h3

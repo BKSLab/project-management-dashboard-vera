@@ -8,16 +8,16 @@ import type { FileDescriptor } from "@/lib/files";
 import type {
     DocumentListItem,
     LinkedDocument,
+    ProjectMember,
     ProjectStage,
     Task,
     TaskActivity,
     TaskAttachment,
     TaskComment,
     TaskPriority,
-    TaskRole,
     WbsStructure,
 } from "@/lib/types";
-import { PRIORITY_LABELS, PRIORITY_ORDER, ROLE_LABELS } from "@/lib/types";
+import { PRIORITY_LABELS, PRIORITY_ORDER } from "@/lib/types";
 import { useUiStore } from "@/stores/ui";
 import { useRenderedMarkdown } from "@/lib/useRenderedMarkdown";
 import { Button, IconButton } from "@/components/ui/Button";
@@ -28,6 +28,9 @@ import { DueDate } from "@/components/ui/DueDate";
 import { ErrorMessage, Skeleton } from "@/components/ui/States";
 import { FileList } from "@/components/files/FileList";
 import { FileUploadControl } from "@/components/files/FileUploadControl";
+import { observerUserIds, participantUserId } from "@/lib/taskParticipants";
+import { useCurrentUser } from "@/lib/useAuth";
+import { TaskPeopleFields } from "@/components/tasks/TaskPeopleFields";
 
 const EVENT_LABELS: Record<TaskActivity["event_type"], string> = {
     STAGE_CHANGED: "Стадия",
@@ -82,6 +85,7 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
     const [authorDraft, setAuthorDraft] = useState("");
     const [documentToLink, setDocumentToLink] = useState("");
     const [attachmentError, setAttachmentError] = useState<string | null>(null);
+    const currentUserQuery = useCurrentUser();
 
     const taskQuery = useQuery({
         queryKey: queryKeys.task(taskId),
@@ -93,6 +97,11 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
     const stagesQuery = useQuery({
         queryKey: queryKeys.stages(projectId ?? 0),
         queryFn: () => api.get<ProjectStage[]>(endpoints.projectStages(projectId as number)),
+        enabled: projectId !== undefined,
+    });
+    const membersQuery = useQuery({
+        queryKey: queryKeys.projectMembers(projectId ?? 0),
+        queryFn: () => api.get<ProjectMember[]>(endpoints.projectMembers(projectId as number)),
         enabled: projectId !== undefined,
     });
     const commentsQuery = useQuery({
@@ -135,7 +144,8 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
     const updateMutation = useMutation({
         mutationFn: (data: Record<string, unknown>) =>
             api.patch<Task>(endpoints.task(taskId), data),
-        onSuccess: () => {
+        onSuccess: (updated) => {
+            queryClient.setQueryData(queryKeys.task(taskId), updated);
             setIsEditingDescription(false);
             invalidateTask();
         },
@@ -221,6 +231,10 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
 
     const stage = stagesQuery.data?.find((item) => item.id === task?.stage_id);
     const wbsNode = wbsQuery.data?.nodes.find((node) => node.id === task?.wbs_node_id);
+    const canChangeReporter = membersQuery.data?.some(
+        (member) =>
+            member.user.id === currentUserQuery.data?.id && member.role === "OWNER",
+    );
     const mutationError =
         updateMutation.error ??
         moveMutation.error ??
@@ -343,42 +357,33 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                                 )}
                             </Field>
 
-                            <Field label="Исполнитель">
-                                {(id) => (
-                                    <Input
-                                        id={id}
-                                        defaultValue={task.assignee ?? ""}
-                                        placeholder="Не назначен"
-                                        onBlur={(event) => {
-                                            const value = event.target.value.trim();
-                                            if (value !== (task.assignee ?? "")) {
-                                                updateMutation.mutate({ assignee: value || null });
-                                            }
-                                        }}
-                                    />
+                            <div className="border-t border-line-subtle pt-3 sm:col-span-2">
+                                <TaskPeopleFields
+                                    members={membersQuery.data ?? []}
+                                    executorId={participantUserId(task, "EXECUTOR")}
+                                    reporterId={participantUserId(task, "REPORTER")}
+                                    observerIds={observerUserIds(task)}
+                                    canChangeReporter={canChangeReporter}
+                                    legacyExecutorLabel={task.assignee}
+                                    disabled={
+                                        membersQuery.isPending || updateMutation.isPending
+                                    }
+                                    onExecutorChange={(userId) =>
+                                        updateMutation.mutate({ executor_id: userId })
+                                    }
+                                    onReporterChange={(userId) =>
+                                        updateMutation.mutate({ reporter_id: userId })
+                                    }
+                                    onObserversChange={(userIds) =>
+                                        updateMutation.mutate({ observer_ids: userIds })
+                                    }
+                                />
+                                {membersQuery.error && (
+                                    <p className="mt-2 text-[11px] text-danger">
+                                        Не удалось загрузить команду проекта.
+                                    </p>
                                 )}
-                            </Field>
-
-                            <Field label="Роль">
-                                {(id) => (
-                                    <Select
-                                        id={id}
-                                        value={task.role ?? ""}
-                                        onChange={(event) =>
-                                            updateMutation.mutate({
-                                                role: (event.target.value || null) as TaskRole | null,
-                                            })
-                                        }
-                                    >
-                                        <option value="">Не указана</option>
-                                        {Object.entries(ROLE_LABELS).map(([value, label]) => (
-                                            <option key={value} value={value}>
-                                                {label}
-                                            </option>
-                                        ))}
-                                    </Select>
-                                )}
-                            </Field>
+                            </div>
 
                             <div className="flex flex-col gap-1.5">
                                 <span className="text-xs font-medium text-secondary">Раздел ИСР</span>
@@ -459,7 +464,7 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                             {linksQuery.data?.map((link) => (
                                 <div
                                     key={link.link_id}
-                                    className="flex items-center gap-2 rounded-md border border-line-subtle bg-surface-2 px-2.5 py-1.5"
+                                    className="flex items-center gap-2 rounded-[var(--radius-control)] bg-white/[0.03] px-2.5 py-1.5"
                                 >
                                     <Link2 size={13} className="shrink-0 text-muted" aria-hidden="true" />
                                     <span className="min-w-0 flex-1 truncate text-[13px] text-secondary">
@@ -551,7 +556,7 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                                 <p className="text-[13px] text-muted">Комментариев пока нет.</p>
                             )}
 
-                            <div className="flex flex-col gap-2 border-t border-line-subtle pt-2.5">
+                            <div className="flex flex-col gap-2 pt-1">
                                 <Input
                                     value={authorDraft}
                                     aria-label="Подпись автора комментария"
@@ -581,7 +586,7 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                         </div>
                     </DrawerSection>
 
-                    <DrawerSection title="История" count={activityQuery.data?.length ?? null}>
+                    <DrawerSection title="Activity" count={activityQuery.data?.length ?? null}>
                         <ol className="flex flex-col gap-2">
                             {activityQuery.data?.map((event) => (
                                 <li key={event.id} className="flex gap-2.5 text-[12px]">

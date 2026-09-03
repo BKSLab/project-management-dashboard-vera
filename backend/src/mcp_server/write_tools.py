@@ -24,7 +24,9 @@ from src.mcp_server.services import (
     build_milestones_service,
     build_tasks_service,
 )
+from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
+from src.repositories.users import UsersRepository
 from src.services.tasks import build_task_key
 
 logger = logging.getLogger(__name__)
@@ -57,7 +59,10 @@ async def create_task(
         str | None,
         Field(description="Приоритет: LOW, MEDIUM, HIGH или URGENT."),
     ] = None,
-    assignee: Annotated[str | None, Field(description="Имя исполнителя.")] = None,
+    assignee: Annotated[
+        str | None,
+        Field(description="Точный логин исполнителя из команды проекта."),
+    ] = None,
     due_date: Annotated[str | None, Field(description="Срок в формате ГГГГ-ММ-ДД.")] = None,
 ) -> dict:
     """Создаёт задачу в доступном проекте."""
@@ -72,7 +77,11 @@ async def create_task(
         if priority is not None:
             payload["priority"] = _parse_priority(priority)
         if assignee is not None:
-            payload["assignee"] = assignee.strip() or None
+            payload["executor_id"] = (
+                await _project_member_user_id(tools, project.id, assignee)
+                if assignee.strip()
+                else None
+            )
         if due_date is not None:
             payload["due_date"] = _parse_date(due_date)
 
@@ -80,6 +89,7 @@ async def create_task(
             created = await build_tasks_service(tools.session).create_task(
                 project_id=project.id,
                 data=payload,
+                created_by_user_id=tools.user.id,
             )
         except ApplicationError as error:
             raise ToolError(_domain_message(error, "Не удалось создать задачу.")) from error
@@ -104,7 +114,12 @@ async def update_task(
     ] = None,
     assignee: Annotated[
         str | None,
-        Field(description="Имя исполнителя; пустая строка снимает исполнителя."),
+        Field(
+            description=(
+                "Точный логин исполнителя из команды проекта; "
+                "пустая строка снимает исполнителя."
+            )
+        ),
     ] = None,
     due_date: Annotated[
         str | None,
@@ -113,7 +128,7 @@ async def update_task(
 ) -> dict:
     """Изменяет переданные поля задачи."""
     async with tool_context(context, require_write=True) as tools:
-        task, _ = await resolve_task(tools, task_key)
+        task, project = await resolve_task(tools, task_key)
         payload: dict = {}
         if title is not None:
             payload["title"] = title.strip()
@@ -122,7 +137,11 @@ async def update_task(
         if priority is not None:
             payload["priority"] = _parse_priority(priority)
         if assignee is not None:
-            payload["assignee"] = assignee.strip() or None
+            payload["executor_id"] = (
+                await _project_member_user_id(tools, project.id, assignee)
+                if assignee.strip()
+                else None
+            )
         if due_date is not None:
             payload["due_date"] = _parse_date(due_date) if due_date.strip() else None
         if not payload:
@@ -336,6 +355,29 @@ async def _project_stages(tools: ToolContext, project_id: int) -> list[ProjectSt
         return await ProjectStagesRepository(tools.session).get_by_project(project_id)
     except ApplicationError as error:
         raise ToolError("Не удалось получить стадии проекта.") from error
+
+
+async def _project_member_user_id(
+    tools: ToolContext,
+    project_id: int,
+    username: str,
+) -> int:
+    """Разрешает точный логин только внутри команды, не раскрывая каталог пользователей."""
+    try:
+        user = await UsersRepository(tools.session).get_by_username(username.strip())
+        member = (
+            await ProjectMembersRepository(tools.session).get(
+                project_id=project_id,
+                user_id=user.id,
+            )
+            if user is not None and user.is_active
+            else None
+        )
+    except ApplicationError as error:
+        raise ToolError("Не удалось проверить исполнителя задачи.") from error
+    if user is None or member is None:
+        raise ToolError("Активный пользователь с таким логином не входит в команду проекта.")
+    return user.id
 
 
 def _stage_by_name(stages: list[ProjectStage], name: str) -> ProjectStage:

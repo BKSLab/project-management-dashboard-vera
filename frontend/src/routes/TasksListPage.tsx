@@ -68,7 +68,7 @@ export function TasksListPage() {
     return (
         <div className="scrollbar-thin h-full overflow-y-auto">
             <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-4">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="material-metal -mx-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-line-subtle px-2 py-2 shadow-card">
                     <div className="relative min-w-0 flex-1 sm:max-w-xs">
                         <Search
                             size={14}
@@ -141,10 +141,10 @@ export function TasksListPage() {
                 )}
 
                 {rows.length > 0 && (
-                    <div className="scrollbar-thin overflow-x-auto rounded-lg border border-line">
+                    <div className="scrollbar-thin overflow-x-auto rounded-[var(--radius-card)] border border-line-subtle bg-surface/55 shadow-card">
                         <table className="w-full min-w-[720px] border-collapse text-left">
                             <thead>
-                                <tr className="border-b border-line bg-surface">
+                                <tr className="border-b border-line-subtle bg-surface-2/65">
                                     {["ID", "Задача", "Стадия", "Приоритет", "Исполнитель", "Срок"].map(
                                         (title) => (
                                             <th

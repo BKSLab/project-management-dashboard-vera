@@ -94,12 +94,12 @@ export function ProjectSettingsPage() {
         <div className="scrollbar-thin h-full overflow-y-auto">
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-5 py-5">
                 <Section title="Проект">
-                    <Card className="flex flex-col gap-4 p-5">
+                    <div className="flex flex-col gap-5 rounded-[var(--radius-card)] bg-surface/40 p-5">
                         {saveMutation.error && (
                             <ErrorMessage message={(saveMutation.error as Error).message} />
                         )}
                         <ProjectForm values={values} onChange={setValues} lockKey />
-                        <div className="flex justify-end border-t border-line-subtle pt-4">
+                        <div className="flex justify-end pt-1">
                             <Button
                                 variant="primary"
                                 disabled={!isProjectFormValid(values) || saveMutation.isPending}
@@ -108,7 +108,7 @@ export function ProjectSettingsPage() {
                                 Сохранить
                             </Button>
                         </div>
-                    </Card>
+                    </div>
                 </Section>
 
                 <Section title="Стадии канбана">
@@ -117,7 +117,7 @@ export function ProjectSettingsPage() {
                         {stagesQuery.data?.map((stage, index) => (
                             <div
                                 key={stage.id}
-                                className="flex flex-wrap items-center gap-2 rounded-md border border-line-subtle bg-surface-2 px-2.5 py-2"
+                                className="flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] bg-white/[0.025] px-2.5 py-2"
                             >
                                 <GripVertical
                                     size={14}

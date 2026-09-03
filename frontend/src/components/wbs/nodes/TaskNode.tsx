@@ -29,12 +29,12 @@ export function TaskNode({ data, selected }: NodeProps) {
                 onContextMenu(task.id, { x: event.clientX, y: event.clientY });
             }}
             className={cn(
-                "flex h-full w-full flex-col justify-center gap-1 rounded-[10px] border bg-elevated px-2.5 py-2 text-left",
+                "flex h-full w-full flex-col justify-center gap-1 rounded-[var(--radius-control)] border bg-surface px-2.5 py-2 text-left",
                 "transition-[background-color,border-color,box-shadow] duration-[var(--duration-normal)]",
-                "ease-[var(--ease-standard)] shadow-[0_1px_2px_rgba(0,0,0,0.28)]",
+                "ease-[var(--ease-standard)] shadow-card",
                 selected
-                    ? "border-[rgba(88,166,255,0.65)] shadow-[0_0_0_1px_rgba(88,166,255,0.15)]"
-                    : "border-line-subtle hover:border-line-strong",
+                    ? "border-accent/60 bg-elevated shadow-selected"
+                    : "border-line-subtle hover:border-line hover:bg-surface-2",
             )}
         >
             <Handle type="target" position={Position.Left} className="!opacity-0" isConnectable={false} />

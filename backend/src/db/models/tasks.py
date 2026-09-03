@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from .task_attachments import TaskAttachment
     from .task_comments import TaskComment
     from .task_dependencies import TaskDependency
+    from .task_participants import TaskParticipant
     from .wbs_nodes import WbsNode
 
 
@@ -214,6 +215,12 @@ class Task(Base, TimestampMixin):
         "TaskDependency",
         foreign_keys="TaskDependency.successor_task_id",
         back_populates="successor",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    participants: Mapped[list[TaskParticipant]] = relationship(
+        "TaskParticipant",
+        back_populates="task",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )

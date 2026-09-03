@@ -5,7 +5,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType
+from src.db.models.project_members import ProjectRole
 from src.db.models.task_activity import TaskActivityEventType
+from src.db.models.task_participants import TaskParticipantRole
 from src.db.models.tasks import TaskPriority
 from src.exceptions.project_stages import (
     ProjectStageForeignProjectError,
@@ -17,14 +19,18 @@ from src.exceptions.tasks import (
     TaskNotFoundError,
     TaskNumberAllocationError,
     TaskNumberAlreadyExistsRepositoryError,
+    TaskParticipantNotProjectMemberError,
+    TaskReporterPermissionError,
     TasksRepositoryError,
     TasksServiceError,
 )
 from src.exceptions.wbs_nodes import WbsNodeForeignProjectError, WbsNodeNotFoundError
+from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_comments import TaskCommentsRepository
+from src.repositories.task_participants import TaskParticipantsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.wbs_nodes import WbsNodesRepository
@@ -32,6 +38,29 @@ from src.services.knowledge_events import KnowledgeEvents
 from src.services.tasks import TasksService
 
 PROJECT = SimpleNamespace(id=1, key="PROJ")
+
+
+def member_for_task(
+    user_id: int,
+    membership_id: int,
+    username: str,
+    role: ProjectRole = ProjectRole.MEMBER,
+) -> SimpleNamespace:
+    """Возвращает участника проекта с загруженной идентичностью пользователя."""
+    return SimpleNamespace(
+        id=membership_id,
+        project_id=1,
+        user_id=user_id,
+        role=role,
+        user=SimpleNamespace(
+            id=user_id,
+            username=username,
+            last_name=f"Фамилия{user_id}",
+            first_name=f"Имя{user_id}",
+            middle_name=None,
+            avatar_key=None,
+        ),
+    )
 
 
 def make_task(
@@ -78,6 +107,8 @@ def build_service(
     wbs_nodes_repository: AsyncMock | None = None,
     projects_repository: AsyncMock | None = None,
     knowledge_events: AsyncMock | None = None,
+    members_repository: AsyncMock | None = None,
+    participants_repository: AsyncMock | None = None,
 ) -> TasksService:
     """Собирает сервис задач с подменёнными репозиториями."""
     projects = projects_repository or AsyncMock(spec=ProjectsRepository)
@@ -85,8 +116,13 @@ def build_service(
         projects.get_by_id.return_value = PROJECT
     comments_repository = AsyncMock(spec=TaskCommentsRepository)
     comments_repository.get_all.return_value = []
+    participants = participants_repository or AsyncMock(spec=TaskParticipantsRepository)
+    if participants_repository is None:
+        participants.get_by_task_ids.return_value = {}
     return TasksService(
         tasks_repository=tasks_repository or AsyncMock(spec=TasksRepository),
+        members_repository=members_repository or AsyncMock(spec=ProjectMembersRepository),
+        participants_repository=participants,
         projects_repository=projects,
         stages_repository=stages_repository or AsyncMock(spec=ProjectStagesRepository),
         comments_repository=comments_repository,
@@ -129,6 +165,85 @@ async def test_create_task_allocates_number_and_uses_first_stage() -> None:
         entity_type=KnowledgeEntityType.TASK,
         entity_id=10,
     )
+
+
+@pytest.mark.asyncio
+async def test_create_task_assigns_team_roles_and_defaults_reporter() -> None:
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_next_number.return_value = 43
+    tasks_repository.get_max_position_by_stage.return_value = 0.0
+    tasks_repository.save.return_value = make_task(number=43)
+    stages_repository = AsyncMock(spec=ProjectStagesRepository)
+    stages_repository.get_by_project.return_value = [SimpleNamespace(id=1)]
+    members_repository = AsyncMock(spec=ProjectMembersRepository)
+    owner = member_for_task(1, 11, "owner", ProjectRole.OWNER)
+    executor = member_for_task(2, 12, "executor")
+    observer = member_for_task(3, 13, "observer")
+    members_repository.get_for_project.return_value = [owner, executor, observer]
+    participants_repository = AsyncMock(spec=TaskParticipantsRepository)
+    participants_repository.get_by_task_ids.return_value = {}
+
+    await build_service(
+        tasks_repository,
+        stages_repository,
+        members_repository=members_repository,
+        participants_repository=participants_repository,
+    ).create_task(
+        project_id=1,
+        created_by_user_id=1,
+        data={"title": "С командой", "executor_id": 2, "observer_ids": [3]},
+    )
+
+    assert tasks_repository.save.await_args.kwargs["data"]["assignee"] == "Фамилия2 Имя2"
+    assignments = participants_repository.replace_for_task.await_args.kwargs["assignments"]
+    assert {(item["project_member_id"], item["role"]) for item in assignments} == {
+        (12, TaskParticipantRole.EXECUTOR),
+        (11, TaskParticipantRole.REPORTER),
+        (13, TaskParticipantRole.OBSERVER),
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_task_only_owner_can_choose_another_reporter() -> None:
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    members_repository = AsyncMock(spec=ProjectMembersRepository)
+    members_repository.get.return_value = member_for_task(
+        1,
+        11,
+        "member",
+        ProjectRole.MEMBER,
+    )
+
+    with pytest.raises(TaskReporterPermissionError) as exc_info:
+        await build_service(
+            tasks_repository=tasks_repository,
+            members_repository=members_repository,
+        ).create_task(
+            project_id=1,
+            created_by_user_id=1,
+            data={"title": "С чужим постановщиком", "reporter_id": 2},
+        )
+
+    assert exc_info.value.status_code == 403
+    tasks_repository.save.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_task_rejects_participant_outside_project_team() -> None:
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    members_repository = AsyncMock(spec=ProjectMembersRepository)
+    members_repository.get_for_project.return_value = [member_for_task(1, 11, "owner")]
+
+    with pytest.raises(TaskParticipantNotProjectMemberError):
+        await build_service(
+            tasks_repository=tasks_repository,
+            members_repository=members_repository,
+        ).create_task(
+            project_id=1,
+            data={"title": "Чужое назначение", "executor_id": 999},
+        )
+
+    tasks_repository.save.assert_not_awaited()
 
 
 @pytest.mark.asyncio

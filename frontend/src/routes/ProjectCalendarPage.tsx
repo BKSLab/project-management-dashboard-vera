@@ -32,6 +32,7 @@ import { ScenarioPanel } from "@/components/calendar/ScenarioPanel";
 import { TimelineGrid } from "@/components/calendar/TimelineGrid";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
+import { Popover } from "@/components/ui/Popover";
 import { EmptyState, ErrorMessage, Skeleton } from "@/components/ui/States";
 import {
     buildTimelineDays,
@@ -522,9 +523,10 @@ export function ProjectCalendarPage() {
     const error = calendarQuery.error ?? unscheduledQuery.error;
     const selectedTasks = groupedTasks.get(activeSelectedDate) ?? [];
     const hasFilters = FILTER_NAMES.some((name) => searchParams.has(name));
+    const activeFilterCount = FILTER_NAMES.filter((name) => searchParams.has(name)).length;
 
     return (
-        <div className="scrollbar-thin h-full overflow-y-auto bg-app">
+        <div className="scrollbar-thin h-full overflow-y-auto">
             <div className="mx-auto flex w-full max-w-[1700px] flex-col gap-3 px-3 py-3 sm:px-5 sm:py-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <CalendarToolbar
@@ -538,8 +540,13 @@ export function ProjectCalendarPage() {
                     <div className="flex flex-wrap items-center gap-1.5">
                         <Button
                             size="sm"
-                            variant={isScenarioMode ? "primary" : "secondary"}
+                            variant={isScenarioMode ? "secondary" : "ghost"}
                             icon={<Beaker size={13} aria-hidden="true" />}
+                            className={
+                                isScenarioMode
+                                    ? "border-ai-border bg-ai-soft text-ai-blue"
+                                    : undefined
+                            }
                             onClick={() => {
                                 if (isScenarioMode) stopScenario();
                                 else setScenarioMode(true);
@@ -547,68 +554,86 @@ export function ProjectCalendarPage() {
                         >
                             {isScenarioMode ? "Сценарий активен" : "Что, если"}
                         </Button>
-                        <Filter size={13} className="text-disabled" aria-hidden="true" />
-                        <Select
-                            aria-label="Фильтр календаря по стадии"
-                            value={stageFilter}
-                            className="w-auto min-w-32"
-                            onChange={(event) => setViewParam("stage", event.target.value)}
+                        <Popover
+                            label="Фильтры календаря"
+                            trigger={
+                                <>
+                                    <Filter size={13} aria-hidden="true" />
+                                    <span>Фильтры</span>
+                                    {activeFilterCount > 0 && (
+                                        <span className="font-mono text-[10px] text-accent">
+                                            · {activeFilterCount}
+                                        </span>
+                                    )}
+                                </>
+                            }
+                            triggerClassName={hasFilters ? "border-accent-border text-accent" : undefined}
                         >
-                            <option value="">Все стадии</option>
-                            {calendarQuery.data?.stages.map((stage) => (
-                                <option key={stage.id} value={stage.id}>
-                                    {stage.name}
-                                </option>
-                            ))}
-                        </Select>
-                        <Select
-                            aria-label="Фильтр календаря по приоритету"
-                            value={priorityFilter}
-                            className="w-auto min-w-32"
-                            onChange={(event) => setViewParam("priority", event.target.value)}
-                        >
-                            <option value="">Все приоритеты</option>
-                            {PRIORITY_ORDER.map((priority: TaskPriority) => (
-                                <option key={priority} value={priority}>
-                                    {PRIORITY_LABELS[priority]}
-                                </option>
-                            ))}
-                        </Select>
-                        <Select
-                            aria-label="Фильтр календаря по исполнителю"
-                            value={assigneeFilter}
-                            className="w-auto min-w-36"
-                            onChange={(event) => setViewParam("assignee", event.target.value)}
-                        >
-                            <option value="">Все исполнители</option>
-                            {calendarQuery.data?.assignees.map((assignee) => (
-                                <option key={assignee} value={assignee}>
-                                    {assignee}
-                                </option>
-                            ))}
-                        </Select>
-                        <Select
-                            aria-label="Фильтр календаря по разделу ИСР"
-                            value={wbsFilter}
-                            className="w-auto min-w-36"
-                            onChange={(event) => setViewParam("wbs", event.target.value)}
-                        >
-                            <option value="">Вся ИСР</option>
-                            {calendarQuery.data?.wbs_nodes.map((node) => (
-                                <option key={node.id} value={node.id}>
-                                    {node.title}
-                                </option>
-                            ))}
-                        </Select>
-                        {hasFilters && (
-                            <button
-                                type="button"
-                                onClick={resetFilters}
-                                className="h-7 px-2 text-[11px] text-muted hover:text-accent"
-                            >
-                                Сбросить
-                            </button>
-                        )}
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                                <p className="text-[11px] font-semibold tracking-[0.08em] text-muted uppercase">
+                                    Видимые задачи
+                                </p>
+                                {hasFilters && (
+                                    <button
+                                        type="button"
+                                        onClick={resetFilters}
+                                        className="text-[11px] text-muted hover:text-accent"
+                                    >
+                                        Сбросить
+                                    </button>
+                                )}
+                            </div>
+                            <div className="flex flex-col gap-2">
+                                <Select
+                                    aria-label="Фильтр календаря по стадии"
+                                    value={stageFilter}
+                                    onChange={(event) => setViewParam("stage", event.target.value)}
+                                >
+                                    <option value="">Все стадии</option>
+                                    {calendarQuery.data?.stages.map((stage) => (
+                                        <option key={stage.id} value={stage.id}>
+                                            {stage.name}
+                                        </option>
+                                    ))}
+                                </Select>
+                                <Select
+                                    aria-label="Фильтр календаря по приоритету"
+                                    value={priorityFilter}
+                                    onChange={(event) => setViewParam("priority", event.target.value)}
+                                >
+                                    <option value="">Все приоритеты</option>
+                                    {PRIORITY_ORDER.map((priority: TaskPriority) => (
+                                        <option key={priority} value={priority}>
+                                            {PRIORITY_LABELS[priority]}
+                                        </option>
+                                    ))}
+                                </Select>
+                                <Select
+                                    aria-label="Фильтр календаря по исполнителю"
+                                    value={assigneeFilter}
+                                    onChange={(event) => setViewParam("assignee", event.target.value)}
+                                >
+                                    <option value="">Все исполнители</option>
+                                    {calendarQuery.data?.assignees.map((assignee) => (
+                                        <option key={assignee} value={assignee}>
+                                            {assignee}
+                                        </option>
+                                    ))}
+                                </Select>
+                                <Select
+                                    aria-label="Фильтр календаря по разделу ИСР"
+                                    value={wbsFilter}
+                                    onChange={(event) => setViewParam("wbs", event.target.value)}
+                                >
+                                    <option value="">Вся ИСР</option>
+                                    {calendarQuery.data?.wbs_nodes.map((node) => (
+                                        <option key={node.id} value={node.id}>
+                                            {node.title}
+                                        </option>
+                                    ))}
+                                </Select>
+                            </div>
+                        </Popover>
                     </div>
                 </div>
 

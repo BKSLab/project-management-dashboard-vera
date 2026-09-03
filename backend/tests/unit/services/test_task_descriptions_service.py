@@ -1,0 +1,104 @@
+import json
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from src.exceptions.tasks import TaskContextDocumentError, TaskDescriptionRewriteError
+from src.repositories.documents import DocumentsRepository
+from src.repositories.projects import ProjectsRepository
+from src.repositories.tasks import TasksRepository
+from src.schemas.tasks import TaskRephraseRequestSchema, TaskRephraseResultSchema
+from src.services.task_descriptions import TaskDescriptionService, TaskRephraseFile
+
+
+def build_service(*, file_context_limit: int = 5000):
+    projects = AsyncMock(spec=ProjectsRepository)
+    projects.get_by_id.return_value = SimpleNamespace(
+        id=1,
+        key="VERA",
+        name="Вера",
+        description_md="Контекст проекта",
+    )
+    tasks = AsyncMock(spec=TasksRepository)
+    tasks.get_by_project.return_value = [
+        SimpleNamespace(
+            id=3,
+            number=7,
+            title="Согласовать макет",
+            description_md="Проверить состояния формы.",
+            updated_at=datetime.now(UTC),
+        )
+    ]
+    documents = AsyncMock(spec=DocumentsRepository)
+    documents.get_by_ids.return_value = [
+        SimpleNamespace(id=5, project_id=1, title="Требования", content_md="Данные документа")
+    ]
+    llm = AsyncMock()
+    llm.get_structured_response.return_value = TaskRephraseResultSchema(
+        description_md="Понятное описание задачи."
+    )
+    runtime = SimpleNamespace(llm_client=llm, vision_client=None)
+    service = TaskDescriptionService(
+        projects_repository=projects,
+        tasks_repository=tasks,
+        documents_repository=documents,
+        runtime=runtime,
+        file_context_limit=file_context_limit,
+    )
+    return service, projects, tasks, documents, llm
+
+
+@pytest.mark.asyncio
+async def test_rephrase_uses_project_tasks_documents_and_limited_file_text() -> None:
+    service, _, _, _, llm = build_service(file_context_limit=5)
+
+    result = await service.rephrase(
+        project_id=1,
+        data=TaskRephraseRequestSchema(
+            title="Новая задача",
+            description_md="сделать форму понятнее",
+            document_ids=[5],
+        ),
+        files=[TaskRephraseFile(name="brief.txt", content=b"abcdefghij")],
+    )
+
+    assert result.description_md == "Понятное описание задачи."
+    prompt = json.loads(llm.get_structured_response.await_args.kwargs["content"])
+    assert prompt["project"]["name"] == "Вера"
+    assert prompt["related_task_wording"][0]["key"] == "VERA-7"
+    assert prompt["selected_documents"][0]["title"] == "Требования"
+    assert prompt["new_files"][0]["content"] == "abcde"
+
+
+@pytest.mark.asyncio
+async def test_rephrase_rejects_document_from_another_project() -> None:
+    service, _, _, documents, llm = build_service()
+    documents.get_by_ids.return_value = [
+        SimpleNamespace(id=5, project_id=9, title="Чужой", content_md="секрет")
+    ]
+
+    with pytest.raises(TaskContextDocumentError):
+        await service.rephrase(
+            project_id=1,
+            data=TaskRephraseRequestSchema(description_md="Черновик", document_ids=[5]),
+            files=[],
+        )
+
+    llm.get_structured_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rephrase_rejects_excessively_expanded_result() -> None:
+    service, _, _, _, llm = build_service()
+    llm.get_structured_response.return_value = TaskRephraseResultSchema(
+        description_md="x" * 1000
+    )
+
+    with pytest.raises(TaskDescriptionRewriteError):
+        await service.rephrase(
+            project_id=1,
+            data=TaskRephraseRequestSchema(description_md="Короткий черновик"),
+            files=[],
+        )

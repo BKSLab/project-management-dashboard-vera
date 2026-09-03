@@ -184,9 +184,9 @@ export function DocumentDetailPage() {
                                 </p>
                             </header>
 
-                            <Card className="p-5">
+                            <div className="rounded-[var(--radius-card)] bg-surface/35 p-5">
                                 <RenderedDocument markdown={document.content_md} />
-                            </Card>
+                            </div>
                         </>
                     )
                 )}
@@ -196,7 +196,7 @@ export function DocumentDetailPage() {
                         <h2 className="text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">
                             Связанные задачи
                         </h2>
-                        <Card className="p-1.5">
+                        <div className="rounded-[var(--radius-card)] bg-surface/45 p-1.5">
                             {linksQuery.data?.map((link) => (
                                 <button
                                     key={link.link_id}
@@ -212,7 +212,7 @@ export function DocumentDetailPage() {
                                     </span>
                                 </button>
                             ))}
-                        </Card>
+                        </div>
                     </section>
                 )}
             </div>

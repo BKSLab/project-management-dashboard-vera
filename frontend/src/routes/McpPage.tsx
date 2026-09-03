@@ -117,7 +117,7 @@ export function McpPage() {
     return (
         <Page>
             <header className="flex flex-col gap-1">
-                <h1 className="flex items-center gap-2 text-lg font-semibold text-primary">
+                <h1 className="flex items-center gap-2 text-[22px] font-semibold tracking-[-0.03em] text-primary">
                     <Plug className="size-4 text-accent" />
                     MCP
                 </h1>
@@ -128,7 +128,7 @@ export function McpPage() {
             </header>
 
             <Section title="Подключение">
-                <Card className="flex flex-col gap-3 p-4">
+                <div className="flex flex-col gap-3 rounded-[var(--radius-card)] bg-surface/45 p-4">
                     <p className="text-[13px] text-secondary">
                         Адрес сервера:{" "}
                         <code className="rounded bg-hover px-1.5 py-0.5 text-primary">
@@ -147,7 +147,7 @@ export function McpPage() {
                     <div className="flex justify-end">
                         <CopyButton value={configSnippet} label="Скопировать конфигурацию" />
                     </div>
-                </Card>
+                </div>
             </Section>
 
             {issued !== null && (
@@ -170,7 +170,7 @@ export function McpPage() {
             )}
 
             <Section title="Выпустить токен">
-                <Card className="p-4">
+                <div className="rounded-[var(--radius-card)] bg-surface/35 p-4">
                     <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={submit}>
                         <Field label="Название" className="flex-1">
                             {(id) => (
@@ -222,12 +222,12 @@ export function McpPage() {
                         Токен на запись позволяет агенту создавать, изменять и удалять задачи.
                         Если нужны только сводки и поиск — оставьте «только чтение».
                     </p>
-                </Card>
+                </div>
             </Section>
 
             <Section title="Что разрешает токен">
-                <Card className="flex flex-col gap-3 p-4">
-                    <div>
+                <div className="flex flex-col gap-3 px-1">
+                    <div className="border-b border-line-subtle pb-3">
                         <p className="text-[13px] font-medium text-primary">Только чтение</p>
                         <p className="text-[12px] text-secondary">
                             {toolsForScope("READ").join(", ")}
@@ -243,7 +243,7 @@ export function McpPage() {
                         Токен видит только те проекты, в которых вы состоите. Управлять самими
                         токенами через MCP нельзя — только на этой странице.
                     </p>
-                </Card>
+                </div>
             </Section>
 
             <Section title="Выпущенные токены">
@@ -262,7 +262,7 @@ export function McpPage() {
                     />
                 )}
                 {tokensQuery.data !== undefined && tokensQuery.data.length > 0 && (
-                    <Card className="divide-y divide-line p-0">
+                    <div className="divide-y divide-line-subtle overflow-hidden rounded-[var(--radius-card)] bg-surface/55">
                         {tokensQuery.data.map((token) => {
                             const state = tokenState(token);
                             return (
@@ -294,7 +294,7 @@ export function McpPage() {
                                 </div>
                             );
                         })}
-                    </Card>
+                    </div>
                 )}
             </Section>
         </Page>

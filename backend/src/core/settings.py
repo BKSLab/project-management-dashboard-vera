@@ -66,6 +66,7 @@ class LlmSettings(SettingsBase):
     llm_retries: int = 3
     vision_model: str = "google/gemini-3.7-flash"
     vision_max_tokens: int = 4000
+    task_rephrase_file_max_chars: int = Field(default=5000, ge=500, le=50_000)
 
     @property
     def headers(self) -> dict[str, str]:

@@ -22,7 +22,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 className={cn(
                     "sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[70]",
                     "focus:rounded-md focus:bg-accent focus:px-3 focus:py-2 focus:text-[13px]",
-                    "focus:font-semibold focus:text-[#0d1117]",
+                    "focus:font-semibold focus:text-on-accent",
                 )}
             >
                 Перейти к содержимому
@@ -33,7 +33,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="flex min-w-0 flex-1 flex-col">
                 <nav
                     aria-label="Разделы"
-                    className="flex h-12 shrink-0 items-center gap-1 border-b border-line bg-sidebar px-3 md:hidden"
+                    className="material-metal flex h-12 shrink-0 items-center gap-1 border-b border-line-subtle px-3 md:hidden"
                 >
                     {MOBILE_ITEMS.map(({ to, label, icon: Icon, end }) => (
                         <NavLink
@@ -55,7 +55,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     ))}
                 </nav>
 
-                <main id="main-content" className="min-w-0 flex-1 overflow-hidden">
+                <main id="main-content" className="material-mineral min-w-0 flex-1 overflow-hidden">
                     {children}
                 </main>
             </div>
@@ -74,7 +74,7 @@ interface PageProps {
 export function Page({ children, className }: PageProps) {
     return (
         <div className="scrollbar-thin h-full overflow-y-auto">
-            <div className={cn("mx-auto flex w-full max-w-6xl flex-col gap-6 px-5 py-6", className)}>
+            <div className={cn("mx-auto flex w-full max-w-6xl flex-col gap-6 px-5 py-6 sm:px-6", className)}>
                 {children}
             </div>
         </div>

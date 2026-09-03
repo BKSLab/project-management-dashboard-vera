@@ -55,14 +55,15 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(function TaskC
             style={style}
             {...dragHandleProps}
             className={cn(
-                "group rounded-[var(--radius-md)] border bg-elevated shadow-card",
+                "group rounded-[var(--radius-card)] border bg-surface-2 shadow-card",
                 "transition-[background-color,border-color,box-shadow,transform]",
                 "duration-[var(--duration-normal)] ease-[var(--ease-standard)]",
+                "focus-within:border-accent/55 focus-within:shadow-selected",
                 isSelected
-                    ? "border-accent-border shadow-[0_0_0_1px_rgba(88,166,255,0.12)]"
+                    ? "border-accent/55 bg-elevated shadow-selected"
                     : "border-line",
                 !isDragging && "hover:-translate-y-px hover:border-line-strong hover:shadow-elevated",
-                isDragging && "rotate-[0.5deg] scale-[1.015] shadow-dragging",
+                isDragging && "border-line-strong shadow-dragging",
                 className,
             )}
         >

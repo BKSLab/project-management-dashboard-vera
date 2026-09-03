@@ -89,3 +89,17 @@ class TaskAttachmentLimitError(TaskAttachmentsServiceError):
     @property
     def detail(self) -> str:
         return f"К задаче можно прикрепить не более {self.max_files} файлов."
+
+
+class TaskDocumentImportError(TaskAttachmentsServiceError):
+    """Файл нельзя преобразовать в документ проекта."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    def __init__(self, detail: str) -> None:
+        self.import_detail = detail
+        super().__init__(error_details=detail)
+
+    @property
+    def detail(self) -> str:
+        return self.import_detail

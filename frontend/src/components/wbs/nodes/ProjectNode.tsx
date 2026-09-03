@@ -19,7 +19,7 @@ export function ProjectNode({ data }: NodeProps) {
     return (
         <div
             style={{ borderColor: `${project.color}66` }}
-            className="flex h-full w-full flex-col justify-between rounded-[14px] border-2 bg-surface-2 px-4 py-3 shadow-[0_4px_12px_rgba(0,0,0,0.28)]"
+            className="material-metal flex h-full w-full flex-col justify-between rounded-[var(--radius-panel)] border px-4 py-3 shadow-elevated"
         >
             <Handle type="source" position={Position.Right} className="!opacity-0" isConnectable={false} />
 

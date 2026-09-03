@@ -5,8 +5,8 @@ import { api, endpoints, queryKeys } from "@/lib/api";
 import type { Dashboard } from "@/lib/types";
 import { Page } from "@/components/layout/AppShell";
 import { LinkButton } from "@/components/ui/Button";
-import { Card, Section } from "@/components/ui/Card";
-import { StatTile } from "@/components/ui/Progress";
+import { Section } from "@/components/ui/Card";
+import { StatStrip, StatTile } from "@/components/ui/Progress";
 import { EmptyState, ErrorMessage, Skeleton } from "@/components/ui/States";
 import { ProjectCard } from "@/components/dashboard/ProjectCard";
 import { TaskRow } from "@/components/dashboard/TaskRow";
@@ -16,11 +16,7 @@ import { useUiStore } from "@/stores/ui";
 function DashboardSkeleton() {
     return (
         <div role="status" aria-label="Загрузка сводки" className="flex flex-col gap-6">
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                {[0, 1, 2, 3].map((index) => (
-                    <Skeleton key={index} className="h-[74px]" />
-                ))}
-            </div>
+            <Skeleton className="h-[88px] w-full" />
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {[0, 1, 2].map((index) => (
                     <Skeleton key={index} className="h-40" />
@@ -40,9 +36,11 @@ export function DashboardPage() {
 
     return (
         <Page>
-            <header className="flex flex-wrap items-center justify-between gap-3">
+            <header className="flex flex-wrap items-end justify-between gap-3">
                 <div className="flex flex-col gap-0.5">
-                    <h1 className="text-lg font-semibold text-primary">Дашборд</h1>
+                    <h1 className="text-[22px] font-semibold tracking-[-0.03em] text-primary">
+                        Дашборд
+                    </h1>
                     <p className="text-[13px] text-muted">Что происходит со всеми проектами сейчас</p>
                 </div>
                 <LinkButton to="/projects/new" variant="primary" icon={<Plus size={15} />}>
@@ -57,15 +55,15 @@ export function DashboardPage() {
 
             {dashboardQuery.data && (
                 <>
-                    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                    <StatStrip>
                         <StatTile
-                            label="Активные проекты"
+                            label="Проекты"
                             value={dashboardQuery.data.totals.active_projects}
                             hint={`Всего проектов: ${dashboardQuery.data.totals.total_projects}`}
                             icon={<FolderKanban size={12} />}
                         />
                         <StatTile
-                            label="Задачи в работе"
+                            label="В работе"
                             value={dashboardQuery.data.totals.in_progress_tasks}
                             hint={`Всего задач: ${dashboardQuery.data.totals.total_tasks}`}
                             icon={<ListTodo size={12} />}
@@ -90,7 +88,7 @@ export function DashboardPage() {
                             }
                             icon={<AlertTriangle size={12} />}
                         />
-                    </div>
+                    </StatStrip>
 
                     <Section
                         title="Проекты"
@@ -129,7 +127,7 @@ export function DashboardPage() {
 
                     <div className="grid gap-6 xl:grid-cols-2">
                         <Section title="Требуют внимания">
-                            <Card className="p-1.5">
+                            <div className="overflow-hidden rounded-[var(--radius-card)] bg-surface/55 p-1.5">
                                 {dashboardQuery.data.attention_tasks.length === 0 ? (
                                     <p className="px-2.5 py-6 text-center text-[13px] text-muted">
                                         Просроченных и ближайших сроков нет.
@@ -143,11 +141,11 @@ export function DashboardPage() {
                                         />
                                     ))
                                 )}
-                            </Card>
+                            </div>
                         </Section>
 
                         <Section title="Недавно изменённые">
-                            <Card className="p-1.5">
+                            <div className="overflow-hidden rounded-[var(--radius-card)] bg-surface/55 p-1.5">
                                 {dashboardQuery.data.recent_tasks.length === 0 ? (
                                     <p className="px-2.5 py-6 text-center text-[13px] text-muted">
                                         Изменений пока не было.
@@ -162,7 +160,7 @@ export function DashboardPage() {
                                         />
                                     ))
                                 )}
-                            </Card>
+                            </div>
                         </Section>
                     </div>
                 </>

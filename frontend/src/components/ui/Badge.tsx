@@ -14,8 +14,8 @@ export function Badge({ children, className, title }: BadgeProps) {
         <span
             title={title}
             className={cn(
-                "inline-flex items-center gap-1 rounded-sm border border-line-subtle",
-                "bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-muted",
+                "inline-flex items-center gap-1 rounded-[5px] border border-line-subtle",
+                "bg-white/[0.025] px-1.5 py-0.5 text-[11px] font-medium text-muted",
                 className,
             )}
         >
@@ -71,11 +71,11 @@ export function PriorityBadge({ priority, showLow = false, className }: Priority
 }
 
 const STATUS_VARIANTS: Record<ProjectStatus, string> = {
-    PLANNING: "border-line bg-surface-2 text-secondary",
+    PLANNING: "border-line-subtle bg-white/[0.025] text-secondary",
     ACTIVE: "border-accent-border bg-accent-soft text-accent",
     PAUSED: "border-warning/30 bg-warning/10 text-warning",
     COMPLETED: "border-success/30 bg-success/10 text-success",
-    ARCHIVED: "border-line-subtle bg-surface-2 text-disabled",
+    ARCHIVED: "border-line-subtle bg-white/[0.02] text-disabled",
 };
 
 export function ProjectStatusBadge({

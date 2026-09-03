@@ -25,7 +25,7 @@ export function ScenarioPanel({
     onCancel,
 }: ScenarioPanelProps) {
     return (
-        <aside className="rounded-lg border border-purple/45 bg-purple/5 p-3 shadow-card">
+        <aside className="material-glass rounded-[var(--radius-panel)] border border-ai-border p-3 shadow-panel">
             <div className="mb-2 flex items-center gap-2">
                 <Beaker size={14} className="text-purple" aria-hidden="true" />
                 <div className="min-w-0 flex-1">
@@ -49,7 +49,7 @@ export function ScenarioPanel({
                         {preview.changes.map((change) => (
                             <div
                                 key={change.task_id}
-                                className="rounded-md border border-line-subtle bg-surface-2 px-2 py-1.5"
+                                className="rounded-[var(--radius-control)] bg-white/[0.035] px-2 py-1.5"
                             >
                                 <div className="flex items-center gap-1.5 text-[10px]">
                                     <span className="font-mono text-accent">{change.task_key}</span>

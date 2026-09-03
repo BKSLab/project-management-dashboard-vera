@@ -46,6 +46,10 @@ export function FileUploadControl({
     disabled = false,
     uploading = false,
     scopeRef,
+    accept = TASK_FILE_ACCEPT,
+    maxFiles = MAX_TASK_FILES,
+    maxFileSize = MAX_TASK_FILE_SIZE,
+    label = "Прикрепить файлы",
 }: {
     onFiles: (files: File[]) => void | Promise<void>;
     onError: (message: string | null) => void;
@@ -53,21 +57,27 @@ export function FileUploadControl({
     disabled?: boolean;
     uploading?: boolean;
     scopeRef?: RefObject<HTMLElement | null>;
+    accept?: string;
+    maxFiles?: number;
+    maxFileSize?: number;
+    label?: string;
 }) {
     const rootRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const [isDragging, setIsDragging] = useState(false);
-    const blocked = disabled || uploading || currentCount >= MAX_TASK_FILES;
+    const blocked = disabled || uploading || currentCount >= maxFiles;
 
     const processFiles = useCallback((incoming: File[]) => {
         if (incoming.length === 0 || blocked) return;
-        if (currentCount + incoming.length > MAX_TASK_FILES) {
-            onError(`К задаче можно прикрепить не более ${MAX_TASK_FILES} файлов.`);
+        if (currentCount + incoming.length > maxFiles) {
+            onError(`Можно выбрать не более ${maxFiles} файлов.`);
             return;
         }
-        const oversized = incoming.find((file) => file.size > MAX_TASK_FILE_SIZE);
+        const oversized = incoming.find((file) => file.size > maxFileSize);
         if (oversized) {
-            onError(`Файл «${oversized.name}» превышает 10 МБ.`);
+            onError(
+                `Файл «${oversized.name}» превышает ${Math.floor(maxFileSize / 1024 / 1024)} МБ.`,
+            );
             return;
         }
         const empty = incoming.find((file) => file.size === 0);
@@ -75,14 +85,14 @@ export function FileUploadControl({
             onError(`Файл «${empty.name}» пуст.`);
             return;
         }
-        const unsupported = incoming.find((file) => !acceptsFile(file, TASK_FILE_ACCEPT));
+        const unsupported = incoming.find((file) => !acceptsFile(file, accept));
         if (unsupported) {
             onError(`Тип файла «${unsupported.name}» не поддерживается.`);
             return;
         }
         onError(null);
         void onFiles(incoming);
-    }, [blocked, currentCount, onError, onFiles]);
+    }, [accept, blocked, currentCount, maxFileSize, maxFiles, onError, onFiles]);
 
     useEffect(() => {
         const target = scopeRef?.current ?? rootRef.current;
@@ -134,7 +144,7 @@ export function FileUploadControl({
                 ref={inputRef}
                 type="file"
                 multiple
-                accept={TASK_FILE_ACCEPT}
+                accept={accept}
                 className="sr-only"
                 disabled={blocked}
                 onChange={(event) => {
@@ -147,7 +157,7 @@ export function FileUploadControl({
                 onClick={() => inputRef.current?.click()}
                 disabled={blocked}
                 className={cn(
-                    "inline-flex items-center gap-1.5 rounded-md border border-dashed border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-foreground transition-colors",
+                    "inline-flex items-center gap-1.5 rounded-[var(--radius-control)] border border-dashed border-line-strong bg-white/[0.025] px-3 py-1.5 text-xs font-semibold text-primary transition-colors",
                     "hover:border-accent/50 hover:text-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
                     isDragging && "border-accent bg-accent/10 text-accent-hover",
                     blocked && "cursor-not-allowed opacity-50",
@@ -166,7 +176,7 @@ export function FileUploadControl({
                 >
                     <path d="m21.4 11.6-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />
                 </svg>
-                {uploading ? "Загрузка…" : "Прикрепить файлы"}
+                {uploading ? "Загрузка…" : label}
                 <span className="font-normal text-muted">· Ctrl+V</span>
             </button>
         </div>

@@ -268,11 +268,31 @@ function CanvasInner({
         ],
     );
 
+    const selectedPathEdgeIds = useMemo(() => {
+        const ids = new Set<string>();
+        if (selectedTaskId === null) return ids;
+        let target = taskNodeId(selectedTaskId);
+        for (;;) {
+            const parentEdge = flowEdges.find((edge) => edge.target === target);
+            if (!parentEdge) break;
+            ids.add(parentEdge.id);
+            target = parentEdge.source;
+        }
+        return ids;
+    }, [flowEdges, selectedTaskId]);
+
     /** Ребро без обоих концов React Flow отрисовать не может. */
     const visibleEdges = useMemo(() => {
         const present = new Set(decoratedNodes.map((node) => node.id));
-        return flowEdges.filter((edge) => present.has(edge.source) && present.has(edge.target));
-    }, [decoratedNodes, flowEdges]);
+        return flowEdges
+            .filter((edge) => present.has(edge.source) && present.has(edge.target))
+            .map((edge) => ({
+                ...edge,
+                style: selectedPathEdgeIds.has(edge.id)
+                    ? { stroke: "var(--color-accent)", strokeWidth: 1.5, opacity: 0.78 }
+                    : { stroke: "var(--color-border-strong)", strokeWidth: 1, opacity: 0.52 },
+            }));
+    }, [decoratedNodes, flowEdges, selectedPathEdgeIds]);
 
     /**
      * Раздел под курсором — единственная валидная цель сброса (§26 ТЗ).
@@ -484,7 +504,7 @@ function CanvasInner({
 
     return (
         <div
-            className="relative h-full w-full"
+            className="material-mineral relative h-full w-full"
             onDragOver={handleDragOver}
             onDrop={handleDrop}
             onDragLeave={() => setDropTargetId(null)}
@@ -503,30 +523,30 @@ function CanvasInner({
                 maxZoom={1.8}
                 fitView
                 proOptions={{ hideAttribution: true }}
-                className="bg-app"
+                className="bg-transparent"
             >
                 <Background
                     variant={BackgroundVariant.Dots}
                     gap={22}
                     size={1}
-                    color="rgba(255,255,255,0.035)"
+                    color="var(--color-border-subtle)"
                 />
                 <Controls
                     showInteractive={false}
-                    className="!border-line !bg-surface [&_button]:!border-line [&_button]:!bg-surface [&_button]:!fill-secondary hover:[&_button]:!bg-hover"
+                    className="!overflow-hidden !rounded-[var(--radius-control)] !border-line-subtle !bg-floating !shadow-panel [&_button]:!border-line-subtle [&_button]:!bg-floating [&_button]:!fill-secondary hover:[&_button]:!bg-hover"
                 />
                 <MiniMap
                     pannable
                     zoomable
                     ariaLabel="Обзорная карта структуры"
-                    className="!border !border-line !bg-surface"
-                    maskColor="rgba(13,17,23,0.72)"
+                    className="!rounded-[var(--radius-control)] !border !border-line-subtle !bg-floating !shadow-panel"
+                    maskColor="var(--surface-void)"
                     nodeColor={(node) =>
                         node.type === "project"
                             ? project.color
                             : node.type === "section"
-                              ? "#58a6ff"
-                              : "#30363d"
+                              ? "var(--color-accent)"
+                              : "var(--surface-pressed)"
                     }
                 />
             </ReactFlow>

@@ -10,11 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.settings import get_settings
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
+from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.task_dependencies import TaskDependenciesRepository
+from src.repositories.task_participants import TaskParticipantsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.wbs_nodes import WbsNodesRepository
@@ -40,6 +42,8 @@ def build_tasks_service(session: AsyncSession) -> TasksService:
     settings = get_settings()
     return TasksService(
         tasks_repository=TasksRepository(session),
+        members_repository=ProjectMembersRepository(session),
+        participants_repository=TaskParticipantsRepository(session),
         projects_repository=ProjectsRepository(session),
         stages_repository=ProjectStagesRepository(session),
         comments_repository=TaskCommentsRepository(session),

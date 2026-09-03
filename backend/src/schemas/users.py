@@ -33,6 +33,17 @@ class UserSchema(BaseModel):
     )
 
 
+class UserSummarySchema(BaseModel):
+    """Безопасная идентичность пользователя для проектной команды."""
+
+    id: int = Field(..., description="Уникальный идентификатор пользователя.", examples=[1])
+    username: str = Field(..., description="Точный логин пользователя.", examples=["boris"])
+    last_name: str = Field(..., description="Фамилия.", examples=["Кузнецов"])
+    first_name: str = Field(..., description="Имя.", examples=["Борис"])
+    middle_name: str | None = Field(None, description="Отчество.", examples=["Сергеевич"])
+    has_avatar: bool = Field(..., description="Загружена ли фотография.", examples=[True])
+
+
 class PasswordPairMixin(BaseModel):
     """Проверка совпадения пароля и его подтверждения.
 

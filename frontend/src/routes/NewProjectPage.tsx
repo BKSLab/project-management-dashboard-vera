@@ -5,7 +5,6 @@ import { api, endpoints, queryKeys } from "@/lib/api";
 import type { Project } from "@/lib/types";
 import { Page } from "@/components/layout/AppShell";
 import { Button, LinkButton } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
 import { ErrorMessage } from "@/components/ui/States";
 import { ProjectForm } from "@/components/projects/ProjectForm";
 import {
@@ -32,13 +31,15 @@ export function NewProjectPage() {
     return (
         <Page className="max-w-3xl">
             <header className="flex flex-col gap-0.5">
-                <h1 className="text-lg font-semibold text-primary">Новый проект</h1>
+                <h1 className="text-[22px] font-semibold tracking-[-0.03em] text-primary">
+                    Новый проект
+                </h1>
                 <p className="text-[13px] text-muted">
                     Доска канбана со стандартными стадиями создаётся автоматически.
                 </p>
             </header>
 
-            <Card className="flex flex-col gap-4 p-5">
+            <div className="flex flex-col gap-5 rounded-[var(--radius-panel)] bg-surface/45 p-5 sm:p-6">
                 {createMutation.error && (
                     <ErrorMessage
                         title="Не удалось создать проект"
@@ -48,7 +49,7 @@ export function NewProjectPage() {
 
                 <ProjectForm values={values} onChange={setValues} />
 
-                <div className="flex justify-end gap-2 border-t border-line-subtle pt-4">
+                <div className="flex justify-end gap-2 pt-1">
                     <LinkButton to="/projects">Отмена</LinkButton>
                     <Button
                         variant="primary"
@@ -58,7 +59,7 @@ export function NewProjectPage() {
                         Создать проект
                     </Button>
                 </div>
-            </Card>
+            </div>
         </Page>
     );
 }

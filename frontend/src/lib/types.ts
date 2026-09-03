@@ -1,13 +1,16 @@
-export interface User {
+export interface UserSummary {
     id: number;
     username: string;
     last_name: string;
     first_name: string;
     middle_name: string | null;
+    has_avatar: boolean;
+}
+
+export interface User extends UserSummary {
     email: string | null;
     phone: string | null;
     telegram: string | null;
-    has_avatar: boolean;
     created_at: string;
 }
 
@@ -46,6 +49,24 @@ export type ProjectStatus = "PLANNING" | "ACTIVE" | "PAUSED" | "COMPLETED" | "AR
 export type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 
 export type TaskRole = "PM" | "BE" | "FE" | "UXR" | "UXD" | "EXPERT" | "QA" | "BA" | "MKT";
+
+export type ProjectRole = "OWNER" | "MEMBER";
+
+export interface ProjectMember {
+    id: number;
+    project_id: number;
+    role: ProjectRole;
+    user: UserSummary;
+    created_at: string;
+}
+
+export type TaskParticipantRole = "EXECUTOR" | "REPORTER" | "OBSERVER";
+
+export interface TaskParticipant {
+    id: number;
+    role: TaskParticipantRole;
+    user: UserSummary;
+}
 
 export interface Project {
     id: number;
@@ -139,6 +160,7 @@ export interface Task {
     priority: TaskPriority;
     role: TaskRole | null;
     assignee: string | null;
+    participants: TaskParticipant[];
     start_date: string | null;
     due_date: string | null;
     baseline_start_date: string | null;
@@ -354,6 +376,9 @@ export interface TaskCreate {
     priority?: TaskPriority;
     role?: TaskRole | null;
     assignee?: string | null;
+    executor_id?: number | null;
+    reporter_id?: number | null;
+    observer_ids?: number[];
     start_date?: string | null;
     due_date?: string | null;
 }
@@ -364,6 +389,9 @@ export interface TaskUpdate {
     priority?: TaskPriority;
     role?: TaskRole | null;
     assignee?: string | null;
+    executor_id?: number | null;
+    reporter_id?: number | null;
+    observer_ids?: number[] | null;
     start_date?: string | null;
     due_date?: string | null;
 }
@@ -405,6 +433,10 @@ export interface TaskAttachment {
     created_at: string;
     content_url: string;
     previewable: boolean;
+}
+
+export interface TaskRephraseResult {
+    description_md: string;
 }
 
 export interface WbsNode {
@@ -458,6 +490,18 @@ export interface LinkedDocument {
     document_id: number;
     slug: string;
     title: string;
+}
+
+export interface DocumentLink {
+    id: number;
+    document_id: number;
+    task_id: number;
+}
+
+export interface TaskDocumentImport {
+    attachment: TaskAttachment;
+    document: DocumentDetail;
+    link: DocumentLink;
 }
 
 export interface LinkedTask {
@@ -591,12 +635,12 @@ export const ROLE_LABELS: Record<TaskRole, string> = {
 };
 
 /** Полное имя: отчество есть не у всех, поэтому склеиваем через фильтр. */
-export function fullName(user: User): string {
+export function fullName(user: UserSummary): string {
     return [user.last_name, user.first_name, user.middle_name].filter(Boolean).join(" ");
 }
 
 /** Инициалы для аватара-заглушки. */
-export function initials(user: User): string {
+export function initials(user: UserSummary): string {
     return `${user.last_name.charAt(0)}${user.first_name.charAt(0)}`.toUpperCase();
 }
 

@@ -24,8 +24,8 @@ export function CalendarGrid({
     onOpenTask,
 }: CalendarGridProps) {
     return (
-        <div className="overflow-hidden rounded-lg border border-line bg-surface shadow-card">
-            <div className="grid grid-cols-7 border-b border-line bg-surface-2">
+        <div className="instrument-surface overflow-hidden rounded-[var(--radius-panel)] border-line-subtle">
+            <div className="grid grid-cols-7 border-b border-line-subtle bg-surface-2/70">
                 {WEEKDAYS.map((weekday, index) => (
                     <div
                         key={weekday}

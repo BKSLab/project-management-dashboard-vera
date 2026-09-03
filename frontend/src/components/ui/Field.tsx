@@ -8,11 +8,12 @@ import { useId } from "react";
 import { cn } from "@/lib/cn";
 
 const control =
-    "w-full rounded-md border border-line bg-surface-2 px-3 text-[13px] text-primary " +
-    "placeholder:text-disabled transition-[border-color,background-color] " +
-    "duration-[var(--duration-normal)] ease-[var(--ease-standard)] " +
-    "hover:border-line-strong focus:border-accent-border focus:bg-surface " +
-    "disabled:cursor-not-allowed disabled:opacity-55";
+    "w-full rounded-[var(--radius-control)] border border-line-subtle bg-control px-3 text-[13px] text-primary " +
+    "placeholder:text-disabled transition-[border-color,background-color,box-shadow] " +
+    "duration-[var(--duration-fast)] ease-[var(--ease-standard)] " +
+    "hover:border-line focus-visible:border-accent/70 focus-visible:bg-surface-2 " +
+    "focus-visible:shadow-focus focus-visible:outline-none aria-[invalid=true]:border-danger/60 " +
+    "disabled:cursor-not-allowed disabled:bg-white/[0.015] disabled:text-disabled disabled:opacity-60";
 
 interface FieldProps {
     label: string;
@@ -27,7 +28,7 @@ export function Field({ label, hint, error, children, className }: FieldProps) {
     const id = useId();
     return (
         <div className={cn("flex flex-col gap-1.5", className)}>
-            <label htmlFor={id} className="text-xs font-medium text-secondary">
+            <label htmlFor={id} className="text-[11px] font-medium text-secondary">
                 {label}
             </label>
             {children(id)}

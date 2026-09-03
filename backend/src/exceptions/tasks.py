@@ -81,3 +81,61 @@ class TaskDateRangeError(TasksServiceError):
 
     def __init__(self):
         super().__init__(error_details=self.detail)
+
+
+class TaskParticipantNotProjectMemberError(TasksServiceError):
+    """На задачу пытаются назначить пользователя не из команды проекта."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    detail = "На задачу можно назначать только участников команды проекта."
+
+    def __init__(self, user_id: int):
+        self.user_id = user_id
+        super().__init__(
+            error_details=f"Пользователь id={user_id} не состоит в команде проекта."
+        )
+
+
+class TaskReporterPermissionError(TasksServiceError):
+    """Участник проекта пытается назначить другого постановщика."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    detail = "Изменить постановщика может только владелец проекта."
+
+    def __init__(self) -> None:
+        super().__init__(error_details=self.detail)
+
+
+class TaskDescriptionRewriteError(TasksServiceError):
+    """LLM вернула непригодный результат переформулирования."""
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    detail = "Не удалось безопасно переформулировать описание. Исходный текст сохранён."
+
+    def __init__(self, error_details: str | None = None) -> None:
+        super().__init__(error_details=error_details or self.detail)
+
+
+class TaskContextDocumentError(TasksServiceError):
+    """В AI-контекст передан документ другого проекта или неизвестный документ."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    detail = "Для контекста можно использовать только документы текущего проекта."
+
+    def __init__(self, document_id: int) -> None:
+        self.document_id = document_id
+        super().__init__(error_details=f"Документ id={document_id} не принадлежит проекту.")
+
+
+class TaskContextFileError(TasksServiceError):
+    """Файл не удалось прочитать для AI-контекста."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    def __init__(self, file_name: str) -> None:
+        self.file_name = file_name
+        super().__init__(error_details=f"Не удалось извлечь текст из файла {file_name!r}.")
+
+    @property
+    def detail(self) -> str:
+        return f"Не удалось прочитать «{self.file_name}» для переформулирования."

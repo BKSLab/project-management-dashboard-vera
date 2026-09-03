@@ -15,9 +15,11 @@ export function ProjectsPage() {
 
     return (
         <Page>
-            <header className="flex flex-wrap items-center justify-between gap-3">
+            <header className="flex flex-wrap items-end justify-between gap-3">
                 <div className="flex flex-col gap-0.5">
-                    <h1 className="text-lg font-semibold text-primary">Проекты</h1>
+                    <h1 className="text-[22px] font-semibold tracking-[-0.03em] text-primary">
+                        Проекты
+                    </h1>
                     <p className="text-[13px] text-muted">
                         {dashboardQuery.data
                             ? `${dashboardQuery.data.totals.total_projects} проектов, ${dashboardQuery.data.totals.total_tasks} задач`

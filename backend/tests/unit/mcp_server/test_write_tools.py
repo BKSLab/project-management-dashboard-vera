@@ -51,10 +51,20 @@ class FakeTasksService:
         self.deleted: int | None = None
         self.milestones_service = FakeMilestonesService()
 
-    async def create_task(self, *, project_id: int, data: dict):
+    async def create_task(
+        self,
+        *,
+        project_id: int,
+        data: dict,
+        created_by_user_id: int | None = None,
+    ):
         if self.error:
             raise self.error
-        self.created = {"project_id": project_id, **data}
+        self.created = {
+            "project_id": project_id,
+            "created_by_user_id": created_by_user_id,
+            **data,
+        }
         return type("T", (), {"key": "PROJ-143", "title": data["title"]})()
 
     async def update_task(self, *, task_id: int, data: dict):
@@ -159,8 +169,35 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
         def __init__(self, session):
             pass
 
-        async def get(self, *, project_id: int, user_id: int) -> ProjectMember:
+        async def get(self, *, project_id: int, user_id: int) -> ProjectMember | None:
+            if user_id == 3:
+                return None
             return ProjectMember(project_id=project_id, user_id=user_id, role=ProjectRole.OWNER)
+
+    class Users:
+        def __init__(self, session):
+            pass
+
+        async def get_by_username(self, username: str) -> User | None:
+            users = {
+                "executor": User(
+                    id=2,
+                    username="executor",
+                    password_hash="hash",
+                    last_name="Исполнитель",
+                    first_name="Ирина",
+                    is_active=True,
+                ),
+                "outsider": User(
+                    id=3,
+                    username="outsider",
+                    password_hash="hash",
+                    last_name="Внешний",
+                    first_name="Олег",
+                    is_active=True,
+                ),
+            }
+            return users.get(username.casefold())
 
     class Tasks:
         def __init__(self, session):
@@ -177,7 +214,9 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
             return STAGES
 
     monkeypatch.setattr(wt, "tool_context", fake_tool_context)
+    monkeypatch.setattr(wt, "ProjectMembersRepository", Members)
     monkeypatch.setattr(wt, "ProjectStagesRepository", Stages)
+    monkeypatch.setattr(wt, "UsersRepository", Users)
     monkeypatch.setattr(wt, "build_tasks_service", lambda session: tasks_service)
     monkeypatch.setattr(wt, "build_comments_service", lambda session: comments_service)
     monkeypatch.setattr(
@@ -198,7 +237,11 @@ async def test_create_task_passes_only_given_fields(tracker) -> None:
     result = await wt.create_task(FakeContext(), project_key="PROJ", title="  Новая  ")
 
     assert result["created"] is True
-    assert tasks_service.created == {"project_id": 1, "title": "Новая"}
+    assert tasks_service.created == {
+        "project_id": 1,
+        "created_by_user_id": 1,
+        "title": "Новая",
+    }
 
 
 async def test_create_task_resolves_stage_by_name(tracker) -> None:
@@ -224,6 +267,37 @@ async def test_create_task_parses_priority_and_date(tracker) -> None:
 
     assert tasks_service.created["priority"] is TaskPriority.HIGH
     assert tasks_service.created["due_date"] == date(2026, 10, 1)
+
+
+async def test_create_task_resolves_executor_by_exact_team_login(tracker) -> None:
+    """Исполнитель задаётся логином существующего участника проекта."""
+    tasks_service, _ = tracker
+
+    await wt.create_task(
+        FakeContext(),
+        project_key="PROJ",
+        title="Новая",
+        assignee="executor",
+    )
+
+    assert tasks_service.created["executor_id"] == 2
+
+
+async def test_create_task_does_not_reveal_unknown_or_external_user(tracker) -> None:
+    """Одинаковая ошибка скрывает разницу между чужим и несуществующим логином."""
+    errors: list[str] = []
+    for login in ("outsider", "missing"):
+        with pytest.raises(ToolError) as error:
+            await wt.create_task(
+                FakeContext(),
+                project_key="PROJ",
+                title="Новая",
+                assignee=login,
+            )
+        errors.append(str(error.value))
+
+    assert errors[0] == errors[1]
+    assert "не входит в команду" in errors[0]
 
 
 async def test_create_task_rejects_unknown_priority(tracker) -> None:
@@ -285,7 +359,7 @@ async def test_update_task_empty_assignee_clears_it(tracker) -> None:
 
     await wt.update_task(FakeContext(), task_key="PROJ-142", assignee="   ")
 
-    assert tasks_service.updated["assignee"] is None
+    assert tasks_service.updated["executor_id"] is None
 
 
 async def test_update_task_empty_due_date_clears_it(tracker) -> None:

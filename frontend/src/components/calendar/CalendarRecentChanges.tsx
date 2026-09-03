@@ -15,7 +15,7 @@ export function CalendarRecentChanges({ changes, onOpenTask }: CalendarRecentCha
     if (changes.length === 0) return null;
 
     return (
-        <section className="rounded-lg border border-line bg-surface p-3 shadow-card">
+        <section className="rounded-[var(--radius-card)] bg-surface/55 p-3">
             <div className="mb-2 flex items-center gap-2">
                 <CalendarClock size={14} className="text-muted" aria-hidden="true" />
                 <h3 className="text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">
@@ -28,7 +28,7 @@ export function CalendarRecentChanges({ changes, onOpenTask }: CalendarRecentCha
                         key={change.id}
                         type="button"
                         onClick={() => onOpenTask(change.task_id)}
-                        className="rounded-md border border-line-subtle bg-surface-2 px-2 py-1.5 text-left hover:border-line-strong hover:bg-hover"
+                        className="rounded-[var(--radius-control)] px-2 py-1.5 text-left transition-colors hover:bg-white/[0.035]"
                     >
                         <span className="block truncate text-[11px] text-primary">
                             <span className="font-mono text-accent">{change.task_key}</span>{" "}

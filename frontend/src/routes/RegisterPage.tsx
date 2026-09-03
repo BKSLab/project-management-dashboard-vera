@@ -39,15 +39,18 @@ export function RegisterPage() {
 
     return (
         <div className="flex min-h-screen items-center justify-center bg-app px-4 py-10">
-            <div className="flex w-full max-w-md flex-col gap-5">
+            <div className="flex w-full max-w-md flex-col gap-6">
                 <header className="flex flex-col gap-1 text-center">
-                    <h1 className="text-lg font-semibold text-primary">Регистрация</h1>
+                    <span aria-hidden="true" className="mx-auto mb-2 size-2 rotate-45 rounded-[2px] bg-accent/80" />
+                    <h1 className="text-xl font-semibold tracking-[-0.025em] text-primary">
+                        Регистрация
+                    </h1>
                     <p className="text-[13px] text-muted">
                         Нужен код приглашения: регистрация закрыта для посторонних
                     </p>
                 </header>
 
-                <Card className="p-5">
+                <Card className="p-5 shadow-elevated">
                     <form
                         className="flex flex-col gap-4"
                         onSubmit={(event) => {
