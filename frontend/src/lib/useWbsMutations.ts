@@ -1,7 +1,16 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, endpoints, queryKeys } from "@/lib/api";
 import { useToast } from "@/lib/toast";
-import type { TaskCompact, WbsNode, WbsNodeDeleteResult, WbsStructure } from "@/lib/types";
+import type {
+    TaskCompact,
+    WbsNode,
+    WbsNodeDeleteResult,
+    WbsStructure,
+    WbsSuggestedAssignment,
+    WbsSuggestedNode,
+    WbsSuggestion,
+    WbsSuggestionApplyResult,
+} from "@/lib/types";
 
 interface MoveNodeVariables {
     nodeId: number;
@@ -9,9 +18,18 @@ interface MoveNodeVariables {
     beforeId: number | null;
 }
 
-interface AssignVariables {
+/**
+ * Одна операция для всех трёх состояний задачи: раздел ИСР, свободный холст
+ * и список-пул. Раздел и координаты взаимоисключающи — место задачи внутри
+ * структуры считает раскладка.
+ */
+export interface PlaceTaskVariables {
     taskId: number;
     wbsNodeId: number | null;
+    /** Задача раздела, перед которой встаёт перемещаемая; null — в конец. */
+    beforeTaskId?: number | null;
+    canvasX?: number | null;
+    canvasY?: number | null;
 }
 
 /**
@@ -123,31 +141,99 @@ export function useWbsMutations(projectId: number) {
         onSettled: invalidateAll,
     });
 
-    const assignTask = useMutation({
-        mutationFn: ({ taskId, wbsNodeId }: AssignVariables) =>
-            wbsNodeId === null
-                ? api.delete<TaskCompact>(endpoints.wbsTaskAssignment(projectId, taskId))
-                : api.post<TaskCompact>(endpoints.wbsTaskAssign(projectId, taskId), {
-                      wbs_node_id: wbsNodeId,
-                  }),
+    const placeTask = useMutation({
+        mutationFn: (variables: PlaceTaskVariables) =>
+            api.post<TaskCompact>(endpoints.wbsTaskPlacement(projectId, variables.taskId), {
+                wbs_node_id: variables.wbsNodeId,
+                before_task_id: variables.beforeTaskId ?? null,
+                canvas_x: variables.canvasX ?? null,
+                canvas_y: variables.canvasY ?? null,
+            }),
         onMutate: (variables) =>
             optimistic((current) => ({
                 ...current,
                 tasks: current.tasks.map((task) =>
-                    task.id === variables.taskId
-                        ? { ...task, wbs_node_id: variables.wbsNodeId }
-                        : task,
+                    task.id === variables.taskId ? applyPlacement(current, task, variables) : task,
                 ),
             })),
         onError: (error, _variables, context) =>
             rollback(context, `Не удалось переместить задачу: ${(error as Error).message}`),
+        onSuccess: (task) => {
+            // Итоговую позицию внутри раздела считает backend.
+            queryClient.setQueryData<WbsStructure>(structureKey, (current) =>
+                current
+                    ? {
+                          ...current,
+                          tasks: current.tasks.map((item) => (item.id === task.id ? task : item)),
+                      }
+                    : current,
+            );
+        },
         onSettled: () => {
             queryClient.invalidateQueries({ queryKey: structureKey });
             invalidateAll();
         },
     });
 
-    return { createNode, renameNode, moveNode, deleteNode, assignTask };
+    /** Черновик ИСР: запрос ничего не меняет в проекте, кэш не трогаем. */
+    const suggest = useMutation({
+        mutationFn: () => api.post<WbsSuggestion>(endpoints.wbsSuggestion(projectId), {}),
+        onError: (error) =>
+            toast.error(`Не удалось предложить структуру: ${(error as Error).message}`),
+    });
+
+    const applySuggestion = useMutation({
+        mutationFn: (variables: { nodes: WbsSuggestedNode[]; assignments: WbsSuggestedAssignment[] }) =>
+            api.post<WbsSuggestionApplyResult>(endpoints.wbsSuggestionApply(projectId), variables),
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: structureKey });
+            toast.success(
+                `Структура применена: разделов ${result.created_nodes}, задач ${result.assigned_tasks}`,
+            );
+        },
+        onError: (error) =>
+            toast.error(`Не удалось применить структуру: ${(error as Error).message}`),
+        onSettled: invalidateAll,
+    });
+
+    return { createNode, renameNode, moveNode, deleteNode, placeTask, suggest, applySuggestion };
+}
+
+/**
+ * Оптимистичный результат перемещения задачи. Точную позицию внутри раздела
+ * вернёт backend, здесь важно лишь не дать карточке «прыгнуть» до ответа.
+ */
+function applyPlacement(
+    structure: WbsStructure,
+    task: TaskCompact,
+    variables: PlaceTaskVariables,
+): TaskCompact {
+    if (variables.wbsNodeId === null) {
+        return {
+            ...task,
+            wbs_node_id: null,
+            wbs_position: null,
+            canvas_x: variables.canvasX ?? null,
+            canvas_y: variables.canvasY ?? null,
+        };
+    }
+    const siblings = structure.tasks
+        .filter((item) => item.wbs_node_id === variables.wbsNodeId && item.id !== task.id)
+        .sort((first, second) => (first.wbs_position ?? 0) - (second.wbs_position ?? 0));
+    const index =
+        variables.beforeTaskId == null
+            ? siblings.length
+            : siblings.findIndex((item) => item.id === variables.beforeTaskId);
+    const next = index < 0 ? siblings.length : index;
+    const previousPosition = next === 0 ? 0 : (siblings[next - 1].wbs_position ?? 0);
+    const nextPosition = siblings[next]?.wbs_position ?? previousPosition + 2000;
+    return {
+        ...task,
+        wbs_node_id: variables.wbsNodeId,
+        wbs_position: (previousPosition + nextPosition) / 2,
+        canvas_x: null,
+        canvas_y: null,
+    };
 }
 
 /**

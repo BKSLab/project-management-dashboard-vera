@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+    applyEdgeChanges,
+    applyNodeChanges,
     Background,
     BackgroundVariant,
     Controls,
@@ -7,8 +9,11 @@ import {
     ReactFlow,
     ReactFlowProvider,
     useReactFlow,
+    type Connection,
     type Edge,
+    type EdgeChange,
     type Node,
+    type NodeChange,
     type NodeMouseHandler,
     type OnNodeDrag,
 } from "@xyflow/react";
@@ -30,14 +35,17 @@ import {
     collectAncestorIds,
     collectSubtreeIds,
     flattenTree,
+    isFloatingTask,
     resolveSectionDrop,
     type SectionDropZone,
     type WbsTreeNode,
 } from "@/lib/wbsTree";
-import { TASK_DRAG_TYPE } from "@/components/wbs/TaskPool";
+import { isDraftNodeId } from "@/lib/wbsSuggestion";
+import { POOL_DROP_ATTRIBUTE, TASK_DRAG_TYPE } from "@/components/wbs/TaskPool";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Field";
 import { EmptyState } from "@/components/ui/States";
+import { AttachmentEdge } from "@/components/wbs/edges/AttachmentEdge";
 import { ProjectNode } from "@/components/wbs/nodes/ProjectNode";
 import { SectionNode } from "@/components/wbs/nodes/SectionNode";
 import { TaskNode } from "@/components/wbs/nodes/TaskNode";
@@ -47,8 +55,11 @@ const DETAIL_FULL_ZOOM = 0.75;
 const DETAIL_COMPACT_ZOOM = 0.45;
 /** Раскладка успевает пересчитаться до того, как мы центрируем результат поиска. */
 const FOCUS_DELAY_MS = 280;
+/** Смещение курсора, до которого перетаскивание считается кликом. */
+const CLICK_TOLERANCE_PX = 4;
 
 const NODE_TYPES = { project: ProjectNode, section: SectionNode, task: TaskNode };
+const EDGE_TYPES = { attachment: AttachmentEdge };
 
 /** React Flow отдаёт мышь или касание — берём координаты указателя из любого. */
 function pointerPosition(event: MouseEvent | TouchEvent): { x: number; y: number } | null {
@@ -59,11 +70,36 @@ function pointerPosition(event: MouseEvent | TouchEvent): { x: number; y: number
     return touch === undefined ? null : { x: touch.clientX, y: touch.clientY };
 }
 
+/** Список задач находится вне canvas, поэтому его границы ищем в документе. */
+function isOverPool(clientX: number, clientY: number): boolean {
+    const pool = document.querySelector(`[${POOL_DROP_ATTRIBUTE}]`);
+    if (pool === null) {
+        return false;
+    }
+    const rect = pool.getBoundingClientRect();
+    return (
+        clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom
+    );
+}
+
+/** Куда пользователь кладёт задачу: в раздел, на холст или обратно в пул. */
+export interface TaskPlacement {
+    wbsNodeId: number | null;
+    beforeTaskId?: number | null;
+    canvasX?: number | null;
+    canvasY?: number | null;
+}
+
 interface SectionDropState {
     movedId: number;
     targetId: number;
     zone: SectionDropZone;
 }
+
+type TaskDropState =
+    | { kind: "section"; taskId: number; nodeId: number; beforeTaskId: number | null }
+    | { kind: "canvas"; taskId: number }
+    | { kind: "pool"; taskId: number };
 
 export interface CanvasHandlers {
     onToggleCollapse: (nodeId: number) => void;
@@ -72,7 +108,7 @@ export interface CanvasHandlers {
     onOpenSectionMenu: (nodeId: number, anchor: { x: number; y: number }) => void;
     onOpenTaskMenu: (taskId: number, anchor: { x: number; y: number }) => void;
     onOpenTask: (taskId: number) => void;
-    onAssignTask: (taskId: number, wbsNodeId: number | null) => void;
+    onPlaceTask: (taskId: number, placement: TaskPlacement) => void;
     onMoveSection: (nodeId: number, parentId: number | null, beforeId: number | null) => void;
     onAddRootSection: () => void;
 }
@@ -117,10 +153,15 @@ function CanvasInner({
     const [zoom, setZoom] = useState(1);
     const [dropTargetId, setDropTargetId] = useState<number | null>(null);
     const [sectionDrop, setSectionDrop] = useState<SectionDropState | null>(null);
+    const [taskDrop, setTaskDrop] = useState<TaskDropState | null>(null);
     const [search, setSearch] = useState("");
     const [isSearchOpen, setSearchOpen] = useState(false);
     const layoutRequestRef = useRef(0);
+    /** Последняя раскладка: по ней узел возвращается на место после неудачного переноса. */
+    const layoutPositionsRef = useRef(new Map<string, { x: number; y: number }>());
     const layoutModeRef = useRef(layoutMode);
+    const dragOriginRef = useRef<{ x: number; y: number } | null>(null);
+    const dragMovedRef = useRef(false);
 
     const stagesById = useMemo(() => new Map(stages.map((stage) => [stage.id, stage])), [stages]);
     const isOverdue = useCallback(
@@ -134,17 +175,30 @@ function CanvasInner({
     const showTasks = detail !== "minimal";
 
     const graph = useMemo(
-        () => buildWbsGraph({ roots: tree.roots, collapsed, showTasks }),
-        [tree.roots, collapsed, showTasks],
+        () =>
+            buildWbsGraph({
+                roots: tree.roots,
+                collapsed,
+                showTasks,
+                floatingTasks: tree.floating,
+            }),
+        [tree.roots, tree.floating, collapsed, showTasks],
     );
 
     /**
-     * Раскладка пересчитывается только при смене топологии графа или режима —
-     * hover, выделение и открытие панели задачи её не трогают (§43 ТЗ).
+     * Раскладка пересчитывается при смене топологии, режима или координат
+     * карточек на холсте — hover, выделение и открытие панели задачи её не
+     * трогают (§43 ТЗ).
      */
     const topologyKey = useMemo(
-        () => `${layoutMode}|${graph.nodes.map((node) => node.id).join(",")}`,
-        [graph.nodes, layoutMode],
+        () =>
+            [
+                layoutMode,
+                graph.nodes.map((node) => node.id).join(","),
+                graph.edges.map((edge) => edge.id).join(","),
+                tree.floating.map((task) => `${task.id}:${task.canvas_x}:${task.canvas_y}`).join(","),
+            ].join("|"),
+        [graph.nodes, graph.edges, layoutMode, tree.floating],
     );
 
     useEffect(() => {
@@ -156,25 +210,57 @@ function CanvasInner({
                 if (cancelled || requestId !== layoutRequestRef.current) {
                     return;
                 }
+                layoutPositionsRef.current = positions;
                 setFlowNodes(
-                    graph.nodes.map((node) => ({
-                        id: node.id,
-                        type: node.kind,
-                        position: positions.get(node.id) ?? { x: 0, y: 0 },
-                        width: node.width,
-                        height: node.height,
-                        draggable: node.kind === "section",
-                        selectable: node.kind !== "project",
-                        data: {},
-                    })),
+                    graph.nodes.map((node) => {
+                        const parsed = parseGraphNodeId(node.id);
+                        const isDraft =
+                            parsed?.kind === "section" && isDraftNodeId(parsed.nodeId);
+                        return {
+                            id: node.id,
+                            type: node.kind,
+                            position: positions.get(node.id) ?? { x: 0, y: 0 },
+                            width: node.width,
+                            height: node.height,
+                            draggable: node.kind !== "project" && !isDraft,
+                            selectable: node.kind !== "project",
+                            // Удаление узлов идёт через меню и диалог
+                            // подтверждения, а не клавишей Delete.
+                            deletable: false,
+                            data: {},
+                        };
+                    }),
                 );
                 setFlowEdges(
-                    graph.edges.map((edge) => ({
-                        id: edge.id,
-                        source: edge.source,
-                        target: edge.target,
-                        type: "smoothstep",
-                    })),
+                    graph.edges.map((edge) => {
+                        const target = parseGraphNodeId(edge.target);
+                        const isAttachment = edge.kind === "attachment";
+                        const source = parseGraphNodeId(edge.source);
+                        const isDraft =
+                            source?.kind === "section" && isDraftNodeId(source.nodeId);
+                        return {
+                            id: edge.id,
+                            source: edge.source,
+                            target: edge.target,
+                            sourceHandle: isAttachment
+                                ? "bottom"
+                                : layoutMode === "vertical"
+                                  ? "bottom"
+                                  : "right",
+                            targetHandle: isAttachment
+                                ? "left"
+                                : layoutMode === "vertical"
+                                  ? "top"
+                                  : "left",
+                            type: isAttachment ? "attachment" : "smoothstep",
+                            selectable: isAttachment && !isDraft,
+                            deletable: isAttachment && !isDraft,
+                            data:
+                                isAttachment && target?.kind === "task"
+                                    ? { taskId: target.taskId, isDraft }
+                                    : undefined,
+                        };
+                    }),
                 );
                 // Смена режима полностью меняет геометрию — возвращаем граф в кадр.
                 if (layoutModeRef.current !== layoutMode) {
@@ -190,6 +276,29 @@ function CanvasInner({
         // graph пересобирается вместе с topologyKey, поэтому его достаточно.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [topologyKey]);
+
+    /** Возвращает узел туда, где его нарисовала раскладка. */
+    const restorePosition = useCallback((nodeId: string) => {
+        const position = layoutPositionsRef.current.get(nodeId);
+        setFlowNodes((current) =>
+            position === undefined
+                ? [...current]
+                : current.map((node) => (node.id === nodeId ? { ...node, position } : node)),
+        );
+    }, []);
+
+    /** Открепление задачи оставляет карточку там, где она сейчас нарисована. */
+    const detachTask = useCallback(
+        (taskId: number) => {
+            const current = flowNodes.find((node) => node.id === taskNodeId(taskId));
+            handlers.onPlaceTask(taskId, {
+                wbsNodeId: null,
+                canvasX: current?.position.x ?? null,
+                canvasY: current?.position.y ?? null,
+            });
+        },
+        [flowNodes, handlers],
+    );
 
     /**
      * Данные узлов обновляются отдельно от раскладки: изменение прогресса или
@@ -212,42 +321,51 @@ function CanvasInner({
                     }
                     const graphNode = graph.nodes.find((item) => item.id === node.id);
                     const isSectionTarget = sectionDrop?.targetId === parsed.nodeId;
-                    return [{
-                        ...node,
-                        data: {
-                            section,
-                            isCollapsed: collapsed.has(parsed.nodeId),
-                            hiddenSections: graphNode?.hiddenSections ?? 0,
-                            hiddenTasks: graphNode?.hiddenTasks ?? 0,
-                            isDropTarget:
-                                dropTargetId === parsed.nodeId ||
-                                (isSectionTarget && sectionDrop?.zone === "inside"),
-                            dropZone: isSectionTarget ? sectionDrop.zone : null,
-                            isEditing: editingNodeId === parsed.nodeId,
-                            detail,
-                            onToggleCollapse: handlers.onToggleCollapse,
-                            onRename: handlers.onRename,
-                            onCancelRename: handlers.onCancelRename,
-                            onOpenMenu: handlers.onOpenSectionMenu,
+                    return [
+                        {
+                            ...node,
+                            data: {
+                                section,
+                                isCollapsed: collapsed.has(parsed.nodeId),
+                                hiddenSections: graphNode?.hiddenSections ?? 0,
+                                hiddenTasks: graphNode?.hiddenTasks ?? 0,
+                                isDropTarget:
+                                    dropTargetId === parsed.nodeId ||
+                                    (taskDrop?.kind === "section" &&
+                                        taskDrop.nodeId === parsed.nodeId) ||
+                                    (isSectionTarget && sectionDrop?.zone === "inside"),
+                                dropZone: isSectionTarget ? sectionDrop.zone : null,
+                                isEditing: editingNodeId === parsed.nodeId,
+                                isDraft: isDraftNodeId(parsed.nodeId),
+                                detail,
+                                onToggleCollapse: handlers.onToggleCollapse,
+                                onRename: handlers.onRename,
+                                onCancelRename: handlers.onCancelRename,
+                                onOpenMenu: handlers.onOpenSectionMenu,
+                            },
                         },
-                    }];
+                    ];
                 }
                 if (parsed?.kind === "task") {
                     const task = tasks.find((item) => item.id === parsed.taskId);
                     if (task === undefined) {
                         return [];
                     }
-                    return [{
-                        ...node,
-                        selected: task.id === selectedTaskId,
-                        data: {
-                            task,
-                            stage: stagesById.get(task.stage_id),
-                            detail,
-                            onOpen: handlers.onOpenTask,
-                            onContextMenu: handlers.onOpenTaskMenu,
+                    return [
+                        {
+                            ...node,
+                            selected: task.id === selectedTaskId,
+                            data: {
+                                task,
+                                stage: stagesById.get(task.stage_id),
+                                detail,
+                                isFloating: isFloatingTask(task),
+                                isDraft:
+                                    task.wbs_node_id !== null && isDraftNodeId(task.wbs_node_id),
+                                onContextMenu: handlers.onOpenTaskMenu,
+                            },
                         },
-                    }];
+                    ];
                 }
                 return [];
             }),
@@ -261,6 +379,7 @@ function CanvasInner({
             collapsed,
             dropTargetId,
             sectionDrop,
+            taskDrop,
             editingNodeId,
             selectedTaskId,
             detail,
@@ -286,17 +405,34 @@ function CanvasInner({
         const present = new Set(decoratedNodes.map((node) => node.id));
         return flowEdges
             .filter((edge) => present.has(edge.source) && present.has(edge.target))
-            .map((edge) => ({
-                ...edge,
-                style: selectedPathEdgeIds.has(edge.id)
-                    ? { stroke: "var(--color-accent)", strokeWidth: 1.5, opacity: 0.78 }
-                    : { stroke: "var(--color-border-strong)", strokeWidth: 1, opacity: 0.52 },
-            }));
-    }, [decoratedNodes, flowEdges, selectedPathEdgeIds]);
+            .map((edge) =>
+                // Привязку задачи рисует собственный edge: он же даёт крестик,
+                // которым связь разрывают.
+                edge.type === "attachment"
+                    ? {
+                          ...edge,
+                          data: {
+                              ...edge.data,
+                              onDetach: detachTask,
+                              isOnSelectedPath: selectedPathEdgeIds.has(edge.id),
+                          },
+                      }
+                    : {
+                          ...edge,
+                          style: selectedPathEdgeIds.has(edge.id)
+                              ? { stroke: "var(--color-accent)", strokeWidth: 1.5, opacity: 0.78 }
+                              : {
+                                    stroke: "var(--color-border-strong)",
+                                    strokeWidth: 1,
+                                    opacity: 0.52,
+                                },
+                      },
+            );
+    }, [decoratedNodes, flowEdges, selectedPathEdgeIds, detachTask]);
 
     /**
-     * Раздел под курсором — единственная валидная цель сброса (§26 ТЗ).
-     * Верхняя и нижняя четверть узла означают вставку рядом, середина — внутрь.
+     * Раздел под курсором — цель сброса раздела (§26 ТЗ). Верхняя и нижняя
+     * четверть узла означают вставку рядом, середина — внутрь.
      */
     const findSectionAt = useCallback(
         (
@@ -334,6 +470,81 @@ function CanvasInner({
         [flowNodes, screenToFlowPosition, tree.byId],
     );
 
+    /** Задача под курсором вместе с половиной карточки — она задаёт порядок. */
+    const findTaskAt = useCallback(
+        (
+            clientX: number,
+            clientY: number,
+            excludeTaskId: number,
+        ): { task: TaskCompact; isAbove: boolean } | null => {
+            const point = screenToFlowPosition({ x: clientX, y: clientY });
+            for (const node of flowNodes) {
+                const parsed = parseGraphNodeId(node.id);
+                if (parsed?.kind !== "task" || parsed.taskId === excludeTaskId) {
+                    continue;
+                }
+                const width = node.width ?? 0;
+                const height = node.height ?? 0;
+                const inside =
+                    point.x >= node.position.x &&
+                    point.x <= node.position.x + width &&
+                    point.y >= node.position.y &&
+                    point.y <= node.position.y + height;
+                if (!inside) {
+                    continue;
+                }
+                const task = tasks.find((item) => item.id === parsed.taskId);
+                if (task === undefined || task.wbs_node_id === null) {
+                    return null;
+                }
+                return { task, isAbove: point.y - node.position.y < height / 2 };
+            }
+            return null;
+        },
+        [flowNodes, screenToFlowPosition, tasks],
+    );
+
+    /**
+     * Куда попадёт задача, если отпустить её здесь.
+     *
+     * Карточка над другой задачей встаёт рядом с ней и наследует её раздел,
+     * над разделом — уходит в конец его списка, над пустым холстом — остаётся
+     * вне структуры.
+     */
+    const resolveTaskDrop = useCallback(
+        (taskId: number, clientX: number, clientY: number): TaskDropState => {
+            if (isOverPool(clientX, clientY)) {
+                return { kind: "pool", taskId };
+            }
+            const neighbour = findTaskAt(clientX, clientY, taskId);
+            // Соседство с задачей из черновика ничего не значит: её раздела
+            // в проекте ещё нет.
+            if (
+                neighbour !== null &&
+                neighbour.task.wbs_node_id !== null &&
+                !isDraftNodeId(neighbour.task.wbs_node_id)
+            ) {
+                const siblings = tree.byId.get(neighbour.task.wbs_node_id)?.tasks ?? [];
+                const index = siblings.findIndex((item) => item.id === neighbour.task.id);
+                const beforeTaskId = neighbour.isAbove
+                    ? neighbour.task.id
+                    : (siblings[index + 1]?.id ?? null);
+                return {
+                    kind: "section",
+                    taskId,
+                    nodeId: neighbour.task.wbs_node_id,
+                    beforeTaskId: beforeTaskId === taskId ? null : beforeTaskId,
+                };
+            }
+            const hit = findSectionAt(clientX, clientY);
+            if (hit !== null && !isDraftNodeId(hit.section.node.id)) {
+                return { kind: "section", taskId, nodeId: hit.section.node.id, beforeTaskId: null };
+            }
+            return { kind: "canvas", taskId };
+        },
+        [findSectionAt, findTaskAt, tree.byId],
+    );
+
     const handleDragOver = useCallback(
         (event: React.DragEvent) => {
             if (!event.dataTransfer.types.includes(TASK_DRAG_TYPE)) {
@@ -342,11 +553,17 @@ function CanvasInner({
             event.preventDefault();
             event.dataTransfer.dropEffect = "move";
             const hit = findSectionAt(event.clientX, event.clientY);
-            setDropTargetId(hit?.section.node.id ?? null);
+            setDropTargetId(
+                hit === null || isDraftNodeId(hit.section.node.id) ? null : hit.section.node.id,
+            );
         },
         [findSectionAt],
     );
 
+    /**
+     * Сброс из пула: на раздел — в структуру, на пустое место — просто на холст.
+     * Второе и позволяет сначала разложить карточки, а связать их потом.
+     */
     const handleDrop = useCallback(
         (event: React.DragEvent) => {
             event.preventDefault();
@@ -354,64 +571,184 @@ function CanvasInner({
             // Идентификатор берём из dataTransfer: состояние React к моменту
             // drop может быть ещё не обновлено после dragstart.
             const taskId = Number(event.dataTransfer.getData(TASK_DRAG_TYPE));
-            const hit = findSectionAt(event.clientX, event.clientY);
-            if (!Number.isFinite(taskId) || taskId === 0 || hit === null) {
+            if (!Number.isFinite(taskId) || taskId === 0) {
                 return;
             }
-            handlers.onAssignTask(taskId, hit.section.node.id);
+            const drop = resolveTaskDrop(taskId, event.clientX, event.clientY);
+            if (drop.kind === "section") {
+                handlers.onPlaceTask(taskId, {
+                    wbsNodeId: drop.nodeId,
+                    beforeTaskId: drop.beforeTaskId,
+                });
+                return;
+            }
+            if (drop.kind === "canvas") {
+                const point = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+                handlers.onPlaceTask(taskId, {
+                    wbsNodeId: null,
+                    canvasX: point.x,
+                    canvasY: point.y,
+                });
+            }
         },
-        [findSectionAt, handlers],
+        [handlers, resolveTaskDrop, screenToFlowPosition],
     );
+
+    /**
+     * Выделение и перетаскивание живут во внутреннем состоянии React Flow,
+     * поэтому изменения нужно применять самим: без этого нельзя выделить
+     * стрелку, чтобы разорвать привязку.
+     */
+    const handleNodesChange = useCallback((changes: NodeChange[]) => {
+        setFlowNodes((current) => applyNodeChanges(changes, current));
+    }, []);
+
+    const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
+        setFlowEdges((current) => applyEdgeChanges(changes, current));
+    }, []);
+
+    const handleNodeDragStart: OnNodeDrag = useCallback((event) => {
+        dragOriginRef.current = pointerPosition(event);
+        dragMovedRef.current = false;
+    }, []);
 
     const handleNodeDrag: OnNodeDrag = useCallback(
         (event, node) => {
+            const pointer = pointerPosition(event);
+            const origin = dragOriginRef.current;
+            if (pointer !== null && origin !== null) {
+                dragMovedRef.current =
+                    dragMovedRef.current ||
+                    Math.abs(pointer.x - origin.x) > CLICK_TOLERANCE_PX ||
+                    Math.abs(pointer.y - origin.y) > CLICK_TOLERANCE_PX;
+            }
             const parsed = parseGraphNodeId(node.id);
+            if (parsed?.kind === "task") {
+                setTaskDrop(
+                    pointer === null
+                        ? null
+                        : resolveTaskDrop(parsed.taskId, pointer.x, pointer.y),
+                );
+                return;
+            }
             if (parsed?.kind !== "section") {
                 return;
             }
             // Перенос внутрь собственного потомка создал бы цикл — такие цели исключаем.
             const forbidden = collectSubtreeIds(nodes, parsed.nodeId);
-            const pointer = pointerPosition(event);
-            const hit =
-                pointer === null ? null : findSectionAt(pointer.x, pointer.y, forbidden);
+            const hit = pointer === null ? null : findSectionAt(pointer.x, pointer.y, forbidden);
             setSectionDrop(
-                hit === null
+                hit === null || isDraftNodeId(hit.section.node.id)
                     ? null
                     : { movedId: parsed.nodeId, targetId: hit.section.node.id, zone: hit.zone },
             );
         },
-        [nodes, findSectionAt],
+        [nodes, findSectionAt, resolveTaskDrop],
     );
 
     const handleNodeDragStop: OnNodeDrag = useCallback(
-        (_event, node) => {
-            const pending = sectionDrop;
-            setSectionDrop(null);
+        (event, node) => {
             const parsed = parseGraphNodeId(node.id);
-            if (parsed?.kind !== "section" || pending === null) {
-                // Без валидной цели узел вернётся на место следующей раскладкой.
-                setFlowNodes((current) => [...current]);
+            const pendingTask = taskDrop;
+            const pendingSection = sectionDrop;
+            setTaskDrop(null);
+            setSectionDrop(null);
+
+            if (parsed?.kind === "task") {
+                if (!dragMovedRef.current) {
+                    // Карточку не двигали: это клик, а не перенос.
+                    restorePosition(node.id);
+                    return;
+                }
+                const pointer = pointerPosition(event);
+                const drop =
+                    pendingTask ??
+                    (pointer === null
+                        ? null
+                        : resolveTaskDrop(parsed.taskId, pointer.x, pointer.y));
+                if (drop === null) {
+                    restorePosition(node.id);
+                    return;
+                }
+                if (drop.kind === "section") {
+                    handlers.onPlaceTask(parsed.taskId, {
+                        wbsNodeId: drop.nodeId,
+                        beforeTaskId: drop.beforeTaskId,
+                    });
+                    return;
+                }
+                if (drop.kind === "pool") {
+                    handlers.onPlaceTask(parsed.taskId, { wbsNodeId: null });
+                    return;
+                }
+                handlers.onPlaceTask(parsed.taskId, {
+                    wbsNodeId: null,
+                    canvasX: node.position.x,
+                    canvasY: node.position.y,
+                });
+                return;
+            }
+
+            if (parsed?.kind !== "section" || pendingSection === null) {
+                // Без валидной цели узел возвращается туда, где его нарисовала раскладка.
+                restorePosition(node.id);
                 return;
             }
             const target = resolveSectionDrop(
                 nodes,
-                pending.targetId,
-                pending.zone,
-                pending.movedId,
+                pendingSection.targetId,
+                pendingSection.zone,
+                pendingSection.movedId,
             );
             if (target === null) {
-                setFlowNodes((current) => [...current]);
+                restorePosition(node.id);
                 return;
             }
-            handlers.onMoveSection(pending.movedId, target.parentId, target.beforeId);
+            handlers.onMoveSection(pendingSection.movedId, target.parentId, target.beforeId);
         },
-        [nodes, sectionDrop, handlers],
+        [nodes, sectionDrop, taskDrop, handlers, resolveTaskDrop, restorePosition],
+    );
+
+    /** Стрелка от раздела к задаче и есть её привязка к структуре. */
+    const handleConnect = useCallback(
+        (connection: Connection) => {
+            const source = parseGraphNodeId(connection.source);
+            const target = parseGraphNodeId(connection.target);
+            if (source?.kind !== "section" || target?.kind !== "task") {
+                return;
+            }
+            if (isDraftNodeId(source.nodeId)) {
+                return;
+            }
+            handlers.onPlaceTask(target.taskId, { wbsNodeId: source.nodeId });
+        },
+        [handlers],
+    );
+
+    const isValidConnection = useCallback((connection: Connection | Edge) => {
+        const source = parseGraphNodeId(connection.source);
+        const target = parseGraphNodeId(connection.target);
+        return (
+            source?.kind === "section" && !isDraftNodeId(source.nodeId) && target?.kind === "task"
+        );
+    }, []);
+
+    const handleEdgesDelete = useCallback(
+        (edges: Edge[]) => {
+            for (const edge of edges) {
+                const target = parseGraphNodeId(edge.target);
+                if (edge.type === "attachment" && target?.kind === "task") {
+                    detachTask(target.taskId);
+                }
+            }
+        },
+        [detachTask],
     );
 
     const handleNodeClick: NodeMouseHandler = useCallback(
         (_event, node) => {
             const parsed = parseGraphNodeId(node.id);
-            if (parsed?.kind === "task") {
+            if (parsed?.kind === "task" && !dragMovedRef.current) {
                 handlers.onOpenTask(parsed.taskId);
             }
         },
@@ -468,25 +805,22 @@ function CanvasInner({
                     setCenter(
                         target.position.x + (target.width ?? 0) / 2,
                         target.position.y + (target.height ?? 0) / 2,
-                        { zoom: Math.max(getZoom(), 0.9), duration: 240 },
+                        { zoom: Math.max(getZoom(), DETAIL_FULL_ZOOM), duration: 320 },
                     );
                 }
             }, FOCUS_DELAY_MS);
-            setSearch("");
             setSearchOpen(false);
+            setSearch("");
         },
-        [nodes, collapsed, handlers, flowNodes, setCenter, getZoom],
+        [nodes, collapsed, flowNodes, handlers, setCenter, getZoom],
     );
 
-    if (tree.roots.length === 0) {
+    if (nodes.length === 0 && tree.floating.length === 0) {
         return (
             <div className="flex h-full items-center justify-center p-6">
                 <EmptyState
-                    title="Структура"
-                    description={
-                        "Организуйте задачи проекта в ИСР: создайте основные разделы, " +
-                        "а затем распределите по ним существующие задачи."
-                    }
+                    title="Структура пока пустая"
+                    description="Добавьте раздел или перетащите задачу из списка прямо на холст — связать её с разделом можно позже."
                     icon={<Network size={24} />}
                     action={
                         <Button
@@ -513,12 +847,19 @@ function CanvasInner({
                 nodes={decoratedNodes}
                 edges={visibleEdges}
                 nodeTypes={NODE_TYPES}
+                edgeTypes={EDGE_TYPES}
+                onNodesChange={handleNodesChange}
+                onEdgesChange={handleEdgesChange}
                 onNodeClick={handleNodeClick}
+                onNodeDragStart={handleNodeDragStart}
                 onNodeDrag={handleNodeDrag}
                 onNodeDragStop={handleNodeDragStop}
+                onConnect={handleConnect}
+                isValidConnection={isValidConnection}
+                onEdgesDelete={handleEdgesDelete}
                 onMove={(_event, viewport) => setZoom(viewport.zoom)}
-                nodesConnectable={false}
-                edgesFocusable={false}
+                nodesConnectable
+                connectionRadius={28}
                 minZoom={0.25}
                 maxZoom={1.8}
                 fitView
@@ -624,26 +965,66 @@ function CanvasInner({
                 </div>
             </div>
 
-            {sectionDrop !== null && (
-                <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2">
-                    <p className="glass rounded-md px-3 py-1.5 text-[12px] text-secondary shadow-panel">
-                        {sectionDrop.zone === "inside" && "Сделать подразделом: "}
-                        {sectionDrop.zone === "before" && "Поставить перед: "}
-                        {sectionDrop.zone === "after" && "Поставить после: "}
-                        {tree.byId.get(sectionDrop.targetId)?.node.title ?? ""}
-                    </p>
-                </div>
-            )}
+            <CanvasHint
+                sectionDrop={sectionDrop}
+                taskDrop={taskDrop}
+                draggingTask={draggingTask}
+                dropTargetId={dropTargetId}
+                tree={tree}
+            />
+        </div>
+    );
+}
 
-            {draggingTask !== null && sectionDrop === null && (
-                <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2">
-                    <p className="glass rounded-md px-3 py-1.5 text-[12px] text-secondary shadow-panel">
-                        {dropTargetId === null
-                            ? `Перетащите ${draggingTask.key} на раздел`
-                            : `Поместить в: ${tree.byId.get(dropTargetId)?.node.title ?? ""}`}
-                    </p>
-                </div>
-            )}
+interface CanvasHintProps {
+    sectionDrop: SectionDropState | null;
+    taskDrop: TaskDropState | null;
+    draggingTask: TaskCompact | null;
+    dropTargetId: number | null;
+    tree: ReturnType<typeof buildWbsTree>;
+}
+
+/** Подсказка внизу холста: что произойдёт, если отпустить сейчас. */
+function CanvasHint({
+    sectionDrop,
+    taskDrop,
+    draggingTask,
+    dropTargetId,
+    tree,
+}: CanvasHintProps) {
+    const title = (nodeId: number) => tree.byId.get(nodeId)?.node.title ?? "";
+    let message: string | null = null;
+
+    if (sectionDrop !== null) {
+        const target = title(sectionDrop.targetId);
+        message =
+            sectionDrop.zone === "inside"
+                ? `Сделать подразделом: ${target}`
+                : sectionDrop.zone === "before"
+                  ? `Поставить перед: ${target}`
+                  : `Поставить после: ${target}`;
+    } else if (taskDrop !== null) {
+        message =
+            taskDrop.kind === "section"
+                ? `Поместить в: ${title(taskDrop.nodeId)}`
+                : taskDrop.kind === "pool"
+                  ? "Вернуть в список задач"
+                  : "Оставить на холсте вне структуры";
+    } else if (draggingTask !== null) {
+        message =
+            dropTargetId === null
+                ? `${draggingTask.key}: на раздел — в структуру, на холст — просто положить`
+                : `Поместить в: ${title(dropTargetId)}`;
+    }
+
+    if (message === null) {
+        return null;
+    }
+    return (
+        <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2">
+            <p className="glass rounded-md px-3 py-1.5 text-[12px] text-secondary shadow-panel">
+                {message}
+            </p>
         </div>
     );
 }

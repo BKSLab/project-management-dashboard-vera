@@ -140,6 +140,11 @@ export const endpoints = {
         `${V1}/projects/${projectId}/wbs/tasks/${taskId}/assign`,
     wbsTaskAssignment: (projectId: number, taskId: number) =>
         `${V1}/projects/${projectId}/wbs/tasks/${taskId}/assignment`,
+    wbsTaskPlacement: (projectId: number, taskId: number) =>
+        `${V1}/projects/${projectId}/wbs/tasks/${taskId}/placement`,
+    wbsSuggestion: (projectId: number) => `${V1}/projects/${projectId}/wbs/suggestion`,
+    wbsSuggestionApply: (projectId: number) =>
+        `${V1}/projects/${projectId}/wbs/suggestion/apply`,
 };
 
 /** Ключи кэша TanStack Query: всё, что относится к проекту, инвалидируется вместе. */

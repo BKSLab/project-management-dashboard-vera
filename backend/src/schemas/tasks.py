@@ -125,6 +125,21 @@ class TaskCompactSchema(BaseModel):
     )
     stage_id: int = Field(..., description="Идентификатор текущей стадии.", examples=[2])
     wbs_node_id: int | None = Field(None, description="Раздел ИСР.", examples=[32])
+    wbs_position: float | None = Field(
+        None,
+        description="Позиция задачи среди задач своего раздела ИСР.",
+        examples=[2000.0],
+    )
+    canvas_x: float | None = Field(
+        None,
+        description="Координата X карточки на холсте ИСР; null — задача в списке-пуле.",
+        examples=[420.0],
+    )
+    canvas_y: float | None = Field(
+        None,
+        description="Координата Y карточки на холсте ИСР; null — задача в списке-пуле.",
+        examples=[180.0],
+    )
     priority: TaskPriority = Field(..., description="Приоритет задачи.", examples=["HIGH"])
     assignee: str | None = Field(None, description="Подпись исполнителя.", examples=["Иван"])
     start_date: date | None = Field(None, description="Плановая дата начала.")

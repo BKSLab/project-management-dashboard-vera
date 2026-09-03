@@ -45,6 +45,7 @@ from src.services.task_documents import TaskDocumentImportService
 from src.services.tasks import TasksService
 from src.services.users import UsersService
 from src.services.wbs_nodes import WbsNodesService
+from src.services.wbs_suggestion import WbsSuggestionService
 
 
 def get_knowledge_events(
@@ -171,6 +172,27 @@ def get_wbs_nodes_service(
 ) -> WbsNodesService:
     """Создаёт сервис структуры ИСР."""
     return WbsNodesService(
+        wbs_nodes_repository=wbs_nodes_repository,
+        projects_repository=projects_repository,
+        stages_repository=stages_repository,
+        tasks_repository=tasks_repository,
+        activity_repository=activity_repository,
+        knowledge_events=knowledge_events,
+        unit_of_work=unit_of_work,
+    )
+
+
+def get_wbs_suggestion_service(
+    wbs_nodes_repository: WbsNodesRepositoryDep,
+    projects_repository: ProjectsRepositoryDep,
+    stages_repository: ProjectStagesRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    activity_repository: TaskActivityRepositoryDep,
+    knowledge_events: KnowledgeEventsDep,
+    unit_of_work: UnitOfWorkDep,
+) -> WbsSuggestionService:
+    """Создаёт сервис предложения структуры ИСР."""
+    return WbsSuggestionService(
         wbs_nodes_repository=wbs_nodes_repository,
         projects_repository=projects_repository,
         stages_repository=stages_repository,
@@ -422,6 +444,7 @@ ProjectStagesServiceDep = Annotated[
 ]
 TasksServiceDep = Annotated[TasksService, Depends(get_tasks_service)]
 WbsNodesServiceDep = Annotated[WbsNodesService, Depends(get_wbs_nodes_service)]
+WbsSuggestionServiceDep = Annotated[WbsSuggestionService, Depends(get_wbs_suggestion_service)]
 DashboardServiceDep = Annotated[DashboardService, Depends(get_dashboard_service)]
 CalendarServiceDep = Annotated[CalendarService, Depends(get_calendar_service)]
 CalendarScenarioServiceDep = Annotated[

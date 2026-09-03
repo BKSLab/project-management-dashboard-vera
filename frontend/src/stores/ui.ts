@@ -46,6 +46,7 @@ export const useUiStore = create<UiState>((set) => ({
             return { collapsedWbsNodes: next };
         }),
 
-    wbsLayoutMode: "horizontal",
+    // ИСР почти всегда рисуют сверху вниз, поэтому это и режим по умолчанию.
+    wbsLayoutMode: "vertical",
     setWbsLayoutMode: (mode) => set({ wbsLayoutMode: mode }),
 }));

@@ -141,9 +141,65 @@ class WbsNodeMoveSchema(BaseModel):
 class WbsTaskAssignSchema(BaseModel):
     """Тело запроса для назначения задачи в раздел ИСР."""
 
-    model_config = ConfigDict(json_schema_extra={"example": {"wbs_node_id": 32}})
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"wbs_node_id": 32, "before_task_id": 88}}
+    )
 
     wbs_node_id: int = Field(..., gt=0, description="Целевой раздел ИСР.", examples=[32])
+    before_task_id: int | None = Field(
+        None,
+        gt=0,
+        description="Задача раздела, перед которой встаёт перемещаемая; null — в конец.",
+        examples=[88],
+    )
+
+
+class WbsTaskPlacementSchema(BaseModel):
+    """Тело запроса на размещение задачи в структуре или на холсте.
+
+    Одна операция описывает все три состояния задачи, между которыми её
+    перетаскивают: раздел ИСР, свободный холст и список-пул.
+
+    * ``wbs_node_id`` задан — задача уходит в структуру, координаты холста
+      очищаются: положение блока считает раскладка.
+    * ``wbs_node_id`` пуст, координаты заданы — задача лежит на холсте вне
+      структуры и ждёт, когда её свяжут с разделом.
+    * всё пусто — задача возвращается в список-пул.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "wbs_node_id": None,
+                "before_task_id": None,
+                "canvas_x": 420.0,
+                "canvas_y": 180.0,
+            }
+        }
+    )
+
+    wbs_node_id: int | None = Field(
+        None,
+        gt=0,
+        description="Целевой раздел ИСР; null — задача вне структуры.",
+        examples=[32],
+    )
+    before_task_id: int | None = Field(
+        None,
+        gt=0,
+        description="Задача раздела, перед которой встаёт перемещаемая; null — в конец.",
+        examples=[88],
+    )
+    canvas_x: float | None = Field(
+        None,
+        description="Координата X карточки на холсте; учитывается только вне структуры.",
+        examples=[420.0],
+    )
+    canvas_y: float | None = Field(
+        None,
+        description="Координата Y карточки на холсте; учитывается только вне структуры.",
+        examples=[180.0],
+    )
 
 
 class WbsNodeDeleteResultSchema(BaseModel):

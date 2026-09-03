@@ -6,17 +6,19 @@ import {
     CornerDownRight,
     ExternalLink,
     FolderPlus,
+    Inbox,
     Move,
     Pencil,
+    Sparkles,
     Trash2,
     Unlink,
 } from "lucide-react";
 import { api, endpoints, queryKeys } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import type { ProjectStage, WbsStructure } from "@/lib/types";
+import type { ProjectStage, WbsStructure, WbsSuggestion } from "@/lib/types";
 import { useProjectOutlet } from "@/lib/useProjectOutlet";
 import { useWbsMutations } from "@/lib/useWbsMutations";
-import { buildWbsTree, flattenTree } from "@/lib/wbsTree";
+import { buildWbsTree, flattenTree, isFloatingTask } from "@/lib/wbsTree";
 import type { WbsLayoutMode } from "@/lib/wbsLayout";
 import { useUiStore } from "@/stores/ui";
 import { Button } from "@/components/ui/Button";
@@ -26,9 +28,15 @@ import { ErrorMessage, Skeleton } from "@/components/ui/States";
 import { CreateTaskDialog } from "@/components/tasks/CreateTaskDialog";
 import { ContextMenu, type ContextMenuItem } from "@/components/wbs/ContextMenu";
 import { MoveNodeDialog, MoveTaskDialog } from "@/components/wbs/MoveDialogs";
-import { StructureCanvas, type CanvasHandlers } from "@/components/wbs/StructureCanvas";
+import {
+    StructureCanvas,
+    type CanvasHandlers,
+    type TaskPlacement,
+} from "@/components/wbs/StructureCanvas";
+import { SuggestionPanel } from "@/components/wbs/SuggestionPanel";
 import { TASK_DRAG_TYPE, TaskPool } from "@/components/wbs/TaskPool";
 import type { TaskCompact } from "@/lib/types";
+import { buildSuggestionPreview, removeSuggestedNode } from "@/lib/wbsSuggestion";
 
 type MenuState =
     | { kind: "section"; nodeId: number; anchor: { x: number; y: number } }
@@ -55,6 +63,7 @@ export function StructurePage() {
     const [moveTaskId, setMoveTaskId] = useState<number | null>(null);
     const [isCreateTaskOpen, setCreateTaskOpen] = useState(false);
     const [isPoolDropTarget, setPoolDropTarget] = useState(false);
+    const [draft, setDraft] = useState<WbsSuggestion | null>(null);
 
     const structureQuery = useQuery({
         queryKey: queryKeys.wbs(project.id),
@@ -71,11 +80,24 @@ export function StructurePage() {
     const tasks = useMemo(() => structureQuery.data?.tasks ?? [], [structureQuery.data]);
     const tree = useMemo(() => buildWbsTree(nodes, tasks), [nodes, tasks]);
 
-    const handleAssignTask = useCallback(
-        (taskId: number, wbsNodeId: number | null) => {
-            mutations.assignTask.mutate({ taskId, wbsNodeId });
+    /**
+     * Пока открыт черновик, холст показывает структуру вместе с предложением:
+     * предложенные разделы получают отрицательные идентификаторы и рисуются
+     * пунктиром, но в проекте их ещё нет.
+     */
+    const preview = useMemo(
+        () =>
+            draft === null
+                ? { nodes, tasks }
+                : buildSuggestionPreview(draft, nodes, tasks, project.id),
+        [draft, nodes, tasks, project.id],
+    );
+
+    const handlePlaceTask = useCallback(
+        (taskId: number, placement: TaskPlacement) => {
+            mutations.placeTask.mutate({ taskId, ...placement });
         },
-        [mutations.assignTask],
+        [mutations.placeTask],
     );
 
     const handleRename = useCallback(
@@ -98,18 +120,12 @@ export function StructurePage() {
             onOpenSectionMenu: (nodeId, anchor) => setMenu({ kind: "section", nodeId, anchor }),
             onOpenTaskMenu: (taskId, anchor) => setMenu({ kind: "task", taskId, anchor }),
             onOpenTask: setSelectedTaskId,
-            onAssignTask: handleAssignTask,
+            onPlaceTask: handlePlaceTask,
             onMoveSection: (nodeId, parentId, beforeId) =>
                 mutations.moveNode.mutate({ nodeId, parentId, beforeId }),
             onAddRootSection: () => setCreateParentId(null),
         }),
-        [
-            toggleWbsNode,
-            handleRename,
-            setSelectedTaskId,
-            handleAssignTask,
-            mutations.moveNode,
-        ],
+        [toggleWbsNode, handleRename, setSelectedTaskId, handlePlaceTask, mutations.moveNode],
     );
 
     function createSection() {
@@ -174,6 +190,7 @@ export function StructurePage() {
                 },
             ];
         }
+        const task = tasks.find((item) => item.id === menu.taskId);
         return [
             {
                 key: "open",
@@ -188,13 +205,21 @@ export function StructurePage() {
                 onSelect: () => setMoveTaskId(menu.taskId),
             },
             {
-                key: "unassign",
-                label: "Убрать из структуры",
-                icon: Unlink,
-                onSelect: () => handleAssignTask(menu.taskId, null),
+                // Открепление мышью оставляет карточку на холсте; из меню
+                // задача возвращается в список — там её всегда легко найти.
+                key: "to-pool",
+                label:
+                    task !== undefined && task.wbs_node_id !== null
+                        ? "Убрать из структуры"
+                        : "Вернуть в список задач",
+                icon: task !== undefined && task.wbs_node_id !== null ? Unlink : Inbox,
+                disabled:
+                    task === undefined ||
+                    (task.wbs_node_id === null && !isFloatingTask(task)),
+                onSelect: () => handlePlaceTask(menu.taskId, { wbsNodeId: null }),
             },
         ];
-    }, [menu, tree.byId, collapsed, toggleWbsNode, setSelectedTaskId, handleAssignTask]);
+    }, [menu, tree.byId, collapsed, tasks, toggleWbsNode, setSelectedTaskId, handlePlaceTask]);
 
     const deleteTarget = deleteNodeId === null ? undefined : tree.byId.get(deleteNodeId);
     const moveTarget = moveNodeId === null ? undefined : tree.byId.get(moveNodeId);
@@ -278,6 +303,20 @@ export function StructurePage() {
                     </Button>
 
                     <Button
+                        size="sm"
+                        icon={<Sparkles size={14} />}
+                        disabled={mutations.suggest.isPending || draft !== null}
+                        title="Модель разложит задачи проекта по разделам; изменения применяются вручную"
+                        onClick={() =>
+                            mutations.suggest.mutate(undefined, {
+                                onSuccess: (suggestion) => setDraft(suggestion),
+                            })
+                        }
+                    >
+                        {mutations.suggest.isPending ? "Думает…" : "Предложить ИСР"}
+                    </Button>
+
+                    <Button
                         variant="primary"
                         size="sm"
                         icon={<FolderPlus size={14} />}
@@ -307,8 +346,11 @@ export function StructurePage() {
                         setPoolDropTarget(false);
                         const taskId = Number(event.dataTransfer.getData(TASK_DRAG_TYPE));
                         const dropped = tasks.find((item) => item.id === taskId);
-                        if (dropped !== undefined && dropped.wbs_node_id !== null) {
-                            handleAssignTask(dropped.id, null);
+                        if (
+                            dropped !== undefined &&
+                            (dropped.wbs_node_id !== null || isFloatingTask(dropped))
+                        ) {
+                            handlePlaceTask(dropped.id, { wbsNodeId: null });
                         }
                     }}
                     className="flex shrink-0"
@@ -331,8 +373,8 @@ export function StructurePage() {
                 <div className="min-h-80 min-w-0 flex-1">
                     <StructureCanvas
                         project={project}
-                        nodes={nodes}
-                        tasks={tasks}
+                        nodes={preview.nodes}
+                        tasks={preview.tasks}
                         stages={stagesQuery.data ?? []}
                         collapsed={collapsed}
                         layoutMode={layoutMode}
@@ -342,6 +384,51 @@ export function StructurePage() {
                         handlers={handlers}
                     />
                 </div>
+
+                {draft !== null && (
+                    <SuggestionPanel
+                        suggestion={draft}
+                        tasks={tasks}
+                        isApplying={mutations.applySuggestion.isPending}
+                        onRemoveNode={(tempId) =>
+                            setDraft((current) =>
+                                current === null ? null : removeSuggestedNode(current, tempId),
+                            )
+                        }
+                        onRenameNode={(tempId, title) =>
+                            setDraft((current) =>
+                                current === null
+                                    ? null
+                                    : {
+                                          ...current,
+                                          nodes: current.nodes.map((node) =>
+                                              node.temp_id === tempId ? { ...node, title } : node,
+                                          ),
+                                      },
+                            )
+                        }
+                        onRemoveAssignment={(taskId) =>
+                            setDraft((current) =>
+                                current === null
+                                    ? null
+                                    : {
+                                          ...current,
+                                          assignments: current.assignments.filter(
+                                              (item) => item.task_id !== taskId,
+                                          ),
+                                          skipped_task_ids: [...current.skipped_task_ids, taskId],
+                                      },
+                            )
+                        }
+                        onApply={() =>
+                            mutations.applySuggestion.mutate(
+                                { nodes: draft.nodes, assignments: draft.assignments },
+                                { onSuccess: () => setDraft(null) },
+                            )
+                        }
+                        onCancel={() => setDraft(null)}
+                    />
+                )}
             </div>
 
             {menu !== null && (
@@ -447,7 +534,7 @@ export function StructurePage() {
                     currentNodeId={moveTask.wbs_node_id}
                     isOpen
                     onClose={() => setMoveTaskId(null)}
-                    onSubmit={(wbsNodeId) => handleAssignTask(moveTask.id, wbsNodeId)}
+                    onSubmit={(wbsNodeId) => handlePlaceTask(moveTask.id, { wbsNodeId })}
                 />
             )}
 

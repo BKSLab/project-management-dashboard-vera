@@ -182,6 +182,11 @@ export interface TaskCompact {
     title: string;
     stage_id: number;
     wbs_node_id: number | null;
+    /** Порядок задачи среди задач своего раздела ИСР. */
+    wbs_position: number | null;
+    /** Координаты карточки на холсте ИСР; null — задача в списке-пуле. */
+    canvas_x: number | null;
+    canvas_y: number | null;
     priority: TaskPriority;
     assignee: string | null;
     start_date: string | null;
@@ -467,6 +472,31 @@ export interface WbsStructure {
 export interface WbsNodeDeleteResult {
     deleted_nodes: number;
     released_tasks: number;
+}
+
+/** Раздел черновика ИСР: настоящего идентификатора у него ещё нет. */
+export interface WbsSuggestedNode {
+    temp_id: string;
+    parent_temp_id: string | null;
+    title: string;
+    rationale: string | null;
+}
+
+export interface WbsSuggestedAssignment {
+    task_id: number;
+    node_temp_id: string;
+}
+
+export interface WbsSuggestion {
+    nodes: WbsSuggestedNode[];
+    assignments: WbsSuggestedAssignment[];
+    summary: string;
+    skipped_task_ids: number[];
+}
+
+export interface WbsSuggestionApplyResult {
+    created_nodes: number;
+    assigned_tasks: number;
 }
 
 export interface DocumentListItem {

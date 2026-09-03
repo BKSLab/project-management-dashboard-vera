@@ -53,6 +53,9 @@ def task(
     stage_id: int = 1,
     wbs_node_id: int | None = None,
     due_date: date | None = None,
+    wbs_position: float | None = None,
+    canvas_x: float | None = None,
+    canvas_y: float | None = None,
 ) -> SimpleNamespace:
     """Возвращает дублёр задачи для структуры ИСР."""
     return SimpleNamespace(
@@ -62,6 +65,9 @@ def task(
         title=f"Задача {task_id}",
         stage_id=stage_id,
         wbs_node_id=wbs_node_id,
+        wbs_position=wbs_position,
+        canvas_x=canvas_x,
+        canvas_y=canvas_y,
         priority=TaskPriority.MEDIUM,
         assignee=None,
         start_date=None,
@@ -427,7 +433,8 @@ async def test_assign_task_records_history_and_updates_node() -> None:
     wbs_repository.get_by_project.return_value = [node(5, title="API")]
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_id.return_value = task(11)
-    tasks_repository.update.return_value = task(11, wbs_node_id=5)
+    tasks_repository.get_by_wbs_node.return_value = []
+    tasks_repository.update.return_value = task(11, wbs_node_id=5, wbs_position=POSITION_STEP)
     activity_repository = AsyncMock(spec=TaskActivityRepository)
 
     result = await build_service(
@@ -436,7 +443,12 @@ async def test_assign_task_records_history_and_updates_node() -> None:
         activity_repository,
     ).assign_task(project_id=1, task_id=11, wbs_node_id=5)
 
-    assert tasks_repository.update.await_args.kwargs["data"] == {"wbs_node_id": 5}
+    assert tasks_repository.update.await_args.kwargs["data"] == {
+        "wbs_node_id": 5,
+        "wbs_position": POSITION_STEP,
+        "canvas_x": None,
+        "canvas_y": None,
+    }
     event = activity_repository.save.await_args.kwargs
     assert event["event_type"] == TaskActivityEventType.WBS_NODE_CHANGED
     assert event["from_value"] is None
@@ -496,7 +508,7 @@ async def test_unassign_task_returns_it_to_pool() -> None:
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [node(5, title="API")]
     tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_id.return_value = task(11, wbs_node_id=5)
+    tasks_repository.get_by_id.return_value = task(11, wbs_node_id=5, wbs_position=1000.0)
     tasks_repository.update.return_value = task(11)
     activity_repository = AsyncMock(spec=TaskActivityRepository)
 
@@ -506,11 +518,113 @@ async def test_unassign_task_returns_it_to_pool() -> None:
         activity_repository,
     ).unassign_task(project_id=1, task_id=11)
 
-    assert tasks_repository.update.await_args.kwargs["data"] == {"wbs_node_id": None}
+    assert tasks_repository.update.await_args.kwargs["data"] == {
+        "wbs_node_id": None,
+        "wbs_position": None,
+        "canvas_x": None,
+        "canvas_y": None,
+    }
     event = activity_repository.save.await_args.kwargs
     assert event["from_value"] == "API"
     assert event["to_value"] is None
     assert result.wbs_node_id is None
+
+
+@pytest.mark.asyncio
+async def test_place_task_on_canvas_keeps_it_outside_structure() -> None:
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = []
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = task(11)
+    tasks_repository.update.return_value = task(11, canvas_x=420.0, canvas_y=180.0)
+    activity_repository = AsyncMock(spec=TaskActivityRepository)
+
+    result = await build_service(
+        wbs_repository,
+        tasks_repository,
+        activity_repository,
+    ).place_task(
+        project_id=1,
+        task_id=11,
+        wbs_node_id=None,
+        canvas_x=420.0,
+        canvas_y=180.0,
+    )
+
+    assert tasks_repository.update.await_args.kwargs["data"] == {
+        "wbs_node_id": None,
+        "wbs_position": None,
+        "canvas_x": 420.0,
+        "canvas_y": 180.0,
+    }
+    # Задача и так была вне структуры: раздел не менялся, событие не нужно.
+    activity_repository.save.assert_not_awaited()
+    assert result.canvas_x == 420.0
+
+
+@pytest.mark.asyncio
+async def test_place_task_in_node_clears_canvas_coordinates() -> None:
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [node(5, title="API")]
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = task(11, canvas_x=420.0, canvas_y=180.0)
+    tasks_repository.get_by_wbs_node.return_value = []
+    tasks_repository.update.return_value = task(11, wbs_node_id=5, wbs_position=POSITION_STEP)
+
+    await build_service(wbs_repository, tasks_repository).place_task(
+        project_id=1,
+        task_id=11,
+        wbs_node_id=5,
+    )
+
+    assert tasks_repository.update.await_args.kwargs["data"]["canvas_x"] is None
+    assert tasks_repository.update.await_args.kwargs["data"]["canvas_y"] is None
+
+
+@pytest.mark.asyncio
+async def test_place_task_before_sibling_gets_position_between_neighbours() -> None:
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [node(5)]
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = task(11)
+    tasks_repository.get_by_wbs_node.return_value = [
+        task(21, wbs_node_id=5, wbs_position=1000.0),
+        task(22, wbs_node_id=5, wbs_position=2000.0),
+    ]
+    tasks_repository.update.return_value = task(11, wbs_node_id=5, wbs_position=1500.0)
+
+    await build_service(wbs_repository, tasks_repository).place_task(
+        project_id=1,
+        task_id=11,
+        wbs_node_id=5,
+        before_task_id=22,
+    )
+
+    assert tasks_repository.update.await_args.kwargs["data"]["wbs_position"] == 1500.0
+
+
+@pytest.mark.asyncio
+async def test_place_task_compacts_positions_of_tasks_without_order() -> None:
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [node(5)]
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = task(11)
+    tasks_repository.get_by_wbs_node.return_value = [
+        task(21, wbs_node_id=5),
+        task(22, wbs_node_id=5),
+    ]
+    tasks_repository.update.return_value = task(11, wbs_node_id=5, wbs_position=3000.0)
+
+    await build_service(wbs_repository, tasks_repository).place_task(
+        project_id=1,
+        task_id=11,
+        wbs_node_id=5,
+    )
+
+    tasks_repository.update_wbs_positions.assert_awaited_once_with(
+        positions={21: 1000.0, 22: 2000.0},
+    )
+    assert tasks_repository.update.await_args.kwargs["data"]["wbs_position"] == 3000.0
 
 
 @pytest.mark.asyncio
@@ -543,14 +657,12 @@ async def test_get_structure_wraps_repository_error() -> None:
 
 
 def test_next_position_on_empty_level() -> None:
-    assert _next_position(siblings=[], before_index=0) == POSITION_STEP
+    assert _next_position(positions=[], before_index=0) == POSITION_STEP
 
 
 def test_next_position_before_first_sibling_halves_it() -> None:
-    assert _next_position(siblings=[node(1, position=1000.0)], before_index=0) == 500.0
+    assert _next_position(positions=[1000.0], before_index=0) == 500.0
 
 
 def test_next_position_signals_compaction_when_gap_is_too_small() -> None:
-    siblings = [node(1, position=1000.0), node(2, position=1000.0000001)]
-
-    assert _next_position(siblings=siblings, before_index=1) is None
+    assert _next_position(positions=[1000.0, 1000.0000001], before_index=1) is None

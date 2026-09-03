@@ -61,3 +61,31 @@ class WbsNodeCycleError(WbsNodesServiceError):
     @property
     def detail(self) -> str:
         return "Раздел нельзя перенести внутрь самого себя или собственного подраздела."
+
+
+class WbsSuggestionError(WbsNodesServiceError):
+    """Модель не смогла предложить структуру ИСР."""
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    detail = "Не удалось получить предложение по структуре ИСР."
+
+
+class WbsSuggestionInvalidError(WbsNodesServiceError):
+    """Предложение не проходит проверку структуры."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(error_details=f"Некорректное предложение ИСР: {reason}")
+
+    @property
+    def detail(self) -> str:
+        return f"Предложение по структуре ИСР некорректно: {self.reason}"
+
+
+class WbsSuggestionEmptyError(WbsNodesServiceError):
+    """В проекте нет задач, которые можно разложить по структуре."""
+
+    status_code = status.HTTP_409_CONFLICT
+    detail = "В проекте нет задач: структуру ИСР пока не из чего собирать."

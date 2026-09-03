@@ -21,8 +21,16 @@ export interface WbsTreeNode {
 export interface WbsTree {
     roots: WbsTreeNode[];
     byId: Map<number, WbsTreeNode>;
+    /** Задачи вне структуры: и в списке-пуле, и выложенные на холст. */
     unassigned: TaskCompact[];
+    /** Задачи, выложенные на холст, но ещё не связанные с разделом. */
+    floating: TaskCompact[];
     total: WbsProgress;
+}
+
+/** Задача считается выложенной на холст, когда у неё есть обе координаты. */
+export function isFloatingTask(task: TaskCompact): boolean {
+    return task.wbs_node_id === null && task.canvas_x !== null && task.canvas_y !== null;
 }
 
 function emptyProgress(): WbsProgress {
@@ -84,6 +92,14 @@ export function buildWbsTree(
         bucket.push(task);
         tasksByNode.set(task.wbs_node_id, bucket);
     }
+    // Порядок задач внутри раздела задаёт пользователь перетаскиванием.
+    for (const bucket of tasksByNode.values()) {
+        bucket.sort(
+            (first, second) =>
+                (first.wbs_position ?? Number.MAX_SAFE_INTEGER) -
+                    (second.wbs_position ?? Number.MAX_SAFE_INTEGER) || first.id - second.id,
+        );
+    }
 
     const byId = new Map<number, WbsTreeNode>();
 
@@ -108,7 +124,7 @@ export function buildWbsTree(
     );
 
     const total = taskProgress(tasks, isOverdue);
-    return { roots, byId, unassigned, total };
+    return { roots, byId, unassigned, floating: unassigned.filter(isFloatingTask), total };
 }
 
 /** Идентификаторы всех предков раздела — нужны, чтобы раскрыть путь к результату поиска. */

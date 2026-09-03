@@ -14,6 +14,8 @@ export interface SectionNodeData {
     /** Показывает результат переноса до отпускания мыши (§30 ТЗ). */
     dropZone: "before" | "inside" | "after" | null;
     isEditing: boolean;
+    /** Раздел предложен ИИ и ещё не сохранён в проекте. */
+    isDraft: boolean;
     /** Уровень детализации из semantic zoom: при отдалении прячем вторичное. */
     detail: "full" | "compact" | "minimal";
     onToggleCollapse: (nodeId: number) => void;
@@ -36,6 +38,7 @@ export function SectionNode({ data, selected }: NodeProps) {
         isDropTarget,
         dropZone,
         isEditing,
+        isDraft,
         detail,
         onToggleCollapse,
         onRename,
@@ -63,18 +66,51 @@ export function SectionNode({ data, selected }: NodeProps) {
                 onOpenMenu(section.node.id, { x: event.clientX, y: event.clientY });
             }}
             className={cn(
-                "flex h-full w-full flex-col justify-between rounded-[var(--radius-card)] border bg-surface-2 px-3 py-2.5",
+                "group/section flex h-full w-full flex-col justify-between rounded-[var(--radius-card)] border bg-surface-2 px-3 py-2.5",
                 "transition-[background-color,border-color,box-shadow] duration-[var(--duration-normal)]",
                 "ease-[var(--ease-standard)] shadow-card",
                 isDropTarget
                     ? "border-accent/70 bg-accent/[0.08] shadow-selected"
                     : selected
                       ? "material-metal border-accent/60 shadow-selected"
-                      : "border-line-subtle hover:border-line hover:bg-elevated",
+                      : isDraft
+                        ? "border-dashed border-accent/50 bg-accent/[0.05]"
+                        : "border-line-subtle hover:border-line hover:bg-elevated",
             )}
         >
-            <Handle type="target" position={Position.Left} className="!opacity-0" isConnectable={false} />
-            <Handle type="source" position={Position.Right} className="!opacity-0" isConnectable={false} />
+            <Handle
+                type="target"
+                id="top"
+                position={Position.Top}
+                className="!opacity-0"
+                isConnectable={false}
+            />
+            <Handle
+                type="target"
+                id="left"
+                position={Position.Left}
+                className="!opacity-0"
+                isConnectable={false}
+            />
+            <Handle
+                type="source"
+                id="right"
+                position={Position.Right}
+                className="!opacity-0"
+                isConnectable={false}
+            />
+            {/* Из этой точки тянут стрелку к задаче: связь и означает привязку. */}
+            <Handle
+                type="source"
+                id="bottom"
+                position={Position.Bottom}
+                title="Связать с задачей"
+                className={cn(
+                    "!size-2.5 !border-2 !border-surface-2 !bg-accent",
+                    "!opacity-0 transition-opacity duration-[var(--duration-fast)]",
+                    !isDraft && "group-hover/section:!opacity-100",
+                )}
+            />
 
             {(dropZone === "before" || dropZone === "after") && (
                 <span

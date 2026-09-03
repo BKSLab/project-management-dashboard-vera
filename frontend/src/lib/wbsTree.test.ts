@@ -25,6 +25,8 @@ function task(
     wbsNodeId: number | null,
     isDone = false,
     dueDate: string | null = null,
+    wbsPosition: number | null = null,
+    canvas: { x: number; y: number } | null = null,
 ): TaskCompact {
     return {
         id,
@@ -32,6 +34,9 @@ function task(
         title: `Задача ${id}`,
         stage_id: 1,
         wbs_node_id: wbsNodeId,
+        wbs_position: wbsPosition,
+        canvas_x: canvas?.x ?? null,
+        canvas_y: canvas?.y ?? null,
         priority: "MEDIUM",
         assignee: null,
         start_date: null,
@@ -95,6 +100,38 @@ describe("buildWbsTree", () => {
         const tree = buildWbsTree([node(1, null, 1000)], [task(11, null), task(12, 1)]);
 
         expect(tree.unassigned.map((item) => item.id)).toEqual([11]);
+    });
+
+    it("упорядочивает задачи раздела по позиции, заданной пользователем", () => {
+        const tree = buildWbsTree(
+            [node(1, null, 1000)],
+            [
+                task(11, 1, false, null, 3000),
+                task(12, 1, false, null, 1000),
+                task(13, 1, false, null, 2000),
+            ],
+        );
+
+        expect(tree.roots[0].tasks.map((item) => item.id)).toEqual([12, 13, 11]);
+    });
+
+    it("ставит задачу без позиции в конец раздела", () => {
+        const tree = buildWbsTree(
+            [node(1, null, 1000)],
+            [task(11, 1), task(12, 1, false, null, 1000)],
+        );
+
+        expect(tree.roots[0].tasks.map((item) => item.id)).toEqual([12, 11]);
+    });
+
+    it("отделяет карточки на холсте от задач в списке", () => {
+        const tree = buildWbsTree(
+            [node(1, null, 1000)],
+            [task(11, null), task(12, null, false, null, null, { x: 10, y: 20 })],
+        );
+
+        expect(tree.unassigned.map((item) => item.id)).toEqual([11, 12]);
+        expect(tree.floating.map((item) => item.id)).toEqual([12]);
     });
 
     it("возвращает в пул задачу удалённого раздела", () => {

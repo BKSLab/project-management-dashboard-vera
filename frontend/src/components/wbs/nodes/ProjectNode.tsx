@@ -21,7 +21,20 @@ export function ProjectNode({ data }: NodeProps) {
             style={{ borderColor: `${project.color}66` }}
             className="material-metal flex h-full w-full flex-col justify-between rounded-[var(--radius-panel)] border px-4 py-3 shadow-elevated"
         >
-            <Handle type="source" position={Position.Right} className="!opacity-0" isConnectable={false} />
+            <Handle
+                type="source"
+                id="bottom"
+                position={Position.Bottom}
+                className="!opacity-0"
+                isConnectable={false}
+            />
+            <Handle
+                type="source"
+                id="right"
+                position={Position.Right}
+                className="!opacity-0"
+                isConnectable={false}
+            />
 
             <div className="flex min-w-0 items-start gap-2">
                 {project.icon ? (

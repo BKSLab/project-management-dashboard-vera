@@ -4,6 +4,7 @@ import { cn } from "@/lib/cn";
 import type { ProjectStage, TaskCompact, TaskPriority } from "@/lib/types";
 import { PRIORITY_LABELS, PRIORITY_ORDER } from "@/lib/types";
 import { dueTone } from "@/lib/dates";
+import { isFloatingTask } from "@/lib/wbsTree";
 import { Button } from "@/components/ui/Button";
 import { Input, Select } from "@/components/ui/Field";
 import { DueDate } from "@/components/ui/DueDate";
@@ -12,8 +13,19 @@ import { EmptyState } from "@/components/ui/States";
 
 export type PoolScope = "unassigned" | "all";
 
+/** Задача в списке-пуле: не в структуре и не выложена на холст. */
+function isInPool(task: TaskCompact): boolean {
+    return task.wbs_node_id === null && !isFloatingTask(task);
+}
+
 /** Тип полезной нагрузки перетаскивания: и пул, и canvas читают один ключ. */
 export const TASK_DRAG_TYPE = "text/plain";
+
+/**
+ * Метка списка задач в DOM. Перетаскивание карточки внутри canvas не порождает
+ * HTML5-события, поэтому canvas ищет границы пула по этому атрибуту.
+ */
+export const POOL_DROP_ATTRIBUTE = "data-wbs-task-pool";
 
 interface TaskPoolProps {
     tasks: TaskCompact[];
@@ -56,7 +68,8 @@ export function TaskPool({
     const visible = useMemo(() => {
         const query = search.trim().toLowerCase();
         return tasks
-            .filter((task) => (scope === "unassigned" ? task.wbs_node_id === null : true))
+            // Карточка, выложенная на холст, живёт там, а не в списке.
+            .filter((task) => (scope === "unassigned" ? isInPool(task) : true))
             .filter(
                 (task) =>
                     query === "" ||
@@ -75,11 +88,12 @@ export function TaskPool({
             .sort((first, second) => first.key.localeCompare(second.key, "ru", { numeric: true }));
     }, [tasks, scope, search, stageFilter, priorityFilter, dueFilter]);
 
-    const unassignedCount = tasks.filter((task) => task.wbs_node_id === null).length;
+    const unassignedCount = tasks.filter(isInPool).length;
 
     return (
         <aside
             aria-label="Задачи проекта"
+            {...{ [POOL_DROP_ATTRIBUTE]: "" }}
             className={cn(
                 "flex w-full shrink-0 flex-col border-r border-line bg-sidebar lg:w-72",
                 "transition-[background-color] duration-[var(--duration-fast)]",

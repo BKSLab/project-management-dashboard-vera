@@ -275,7 +275,10 @@ class WbsNodesService:
                 before_id=before_id,
                 project_id=project_id,
             )
-            position = _next_position(siblings=siblings, before_index=before_index)
+            position = _next_position(
+                positions=[sibling.position for sibling in siblings],
+                before_index=before_index,
+            )
             if position is None:
                 position = await self._compact_positions(
                     siblings=siblings,
@@ -359,6 +362,7 @@ class WbsNodesService:
         project_id: int,
         task_id: int,
         wbs_node_id: int,
+        before_task_id: int | None = None,
     ) -> TaskCompactSchema:
         """Помещает задачу в раздел ИСР того же проекта.
 
@@ -366,6 +370,7 @@ class WbsNodesService:
             project_id: Идентификатор проекта.
             task_id: Идентификатор задачи.
             wbs_node_id: Целевой раздел ИСР.
+            before_task_id: Задача раздела, перед которой встаёт перемещаемая.
 
         Returns:
             Компактное представление обновлённой задачи.
@@ -377,10 +382,11 @@ class WbsNodesService:
             WbsNodeForeignProjectError: Если раздел принадлежит другому проекту.
             WbsNodesServiceError: Если назначить задачу не удалось.
         """
-        return await self._change_task_assignment(
+        return await self.place_task(
             project_id=project_id,
             task_id=task_id,
             wbs_node_id=wbs_node_id,
+            before_task_id=before_task_id,
         )
 
     async def unassign_task(self, project_id: int, task_id: int) -> TaskCompactSchema:
@@ -398,19 +404,47 @@ class WbsNodesService:
             TaskForeignProjectError: Если задача принадлежит другому проекту.
             WbsNodesServiceError: Если снять привязку не удалось.
         """
-        return await self._change_task_assignment(
+        return await self.place_task(
             project_id=project_id,
             task_id=task_id,
             wbs_node_id=None,
         )
 
-    async def _change_task_assignment(
+    async def place_task(
         self,
         project_id: int,
         task_id: int,
         wbs_node_id: int | None,
+        before_task_id: int | None = None,
+        canvas_x: float | None = None,
+        canvas_y: float | None = None,
     ) -> TaskCompactSchema:
-        """Меняет привязку задачи к разделу и фиксирует событие в истории."""
+        """Размещает задачу в разделе ИСР, на холсте или в списке-пуле.
+
+        Все три состояния задачи описываются одной операцией, потому что для
+        пользователя это одно и то же перетаскивание карточки. Привязка к
+        разделу очищает координаты холста: положение блока внутри структуры
+        считает раскладка.
+
+        Args:
+            project_id: Идентификатор проекта.
+            task_id: Идентификатор задачи.
+            wbs_node_id: Целевой раздел ИСР или ``None`` для места вне структуры.
+            before_task_id: Задача раздела, перед которой встаёт перемещаемая.
+            canvas_x: Координата X на холсте; учитывается вне структуры.
+            canvas_y: Координата Y на холсте; учитывается вне структуры.
+
+        Returns:
+            Компактное представление обновлённой задачи.
+
+        Raises:
+            ProjectNotFoundError: Если проект не найден.
+            TaskNotFoundError: Если задача не найдена.
+            TaskForeignProjectError: Если задача принадлежит другому проекту.
+            WbsNodeNotFoundError: Если раздел не найден.
+            WbsNodeForeignProjectError: Если раздел принадлежит другому проекту.
+            WbsNodesServiceError: Если разместить задачу не удалось.
+        """
         try:
             project = await self._get_project(project_id=project_id)
             task = await self.tasks_repository.get_by_id(task_id=task_id)
@@ -423,22 +457,31 @@ class WbsNodesService:
             nodes_by_id = {node.id: node for node in nodes}
             if wbs_node_id is not None:
                 self._require_node(nodes=nodes, node_id=wbs_node_id, project_id=project_id)
-            if task.wbs_node_id == wbs_node_id:
+
+            changes = await self._build_placement(
+                task=task,
+                wbs_node_id=wbs_node_id,
+                before_task_id=before_task_id,
+                canvas_x=canvas_x,
+                canvas_y=canvas_y,
+            )
+            if changes is None:
                 return await self._to_compact(task=task, project=project)
 
-            from_node = nodes_by_id.get(task.wbs_node_id) if task.wbs_node_id else None
-            to_node = nodes_by_id.get(wbs_node_id) if wbs_node_id else None
-            await self.activity_repository.save(
-                task_id=task_id,
-                event_type=TaskActivityEventType.WBS_NODE_CHANGED,
-                from_value=from_node.title if from_node else None,
-                to_value=to_node.title if to_node else None,
-            )
-            updated = await self.tasks_repository.update(
-                task=task,
-                data={"wbs_node_id": wbs_node_id},
-            )
-            if self.knowledge_events is not None:
+            node_changed = task.wbs_node_id != wbs_node_id
+            if node_changed:
+                from_node = nodes_by_id.get(task.wbs_node_id) if task.wbs_node_id else None
+                to_node = nodes_by_id.get(wbs_node_id) if wbs_node_id else None
+                await self.activity_repository.save(
+                    task_id=task_id,
+                    event_type=TaskActivityEventType.WBS_NODE_CHANGED,
+                    from_value=from_node.title if from_node else None,
+                    to_value=to_node.title if to_node else None,
+                )
+            updated = await self.tasks_repository.update(task=task, data=changes)
+            # Перекладывание карточки по холсту не меняет содержания задачи,
+            # поэтому переиндексация нужна только при смене раздела.
+            if self.knowledge_events is not None and node_changed:
                 await self.knowledge_events.upsert(
                     project_id=project_id,
                     entity_type=KnowledgeEntityType.TASK,
@@ -456,8 +499,101 @@ class WbsNodesService:
         ):
             raise
         except RepositoryErrors as error:
-            logger.error("❌ Ошибка изменения раздела задачи id=%s.", task_id, exc_info=True)
+            logger.error("❌ Ошибка размещения задачи id=%s.", task_id, exc_info=True)
             raise WbsNodesServiceError(str(error)) from error
+
+    async def _build_placement(
+        self,
+        task: Task,
+        wbs_node_id: int | None,
+        before_task_id: int | None,
+        canvas_x: float | None,
+        canvas_y: float | None,
+    ) -> dict | None:
+        """Считает новые поля размещения задачи.
+
+        Returns:
+            Изменяемые поля либо ``None``, если размещение не поменялось.
+        """
+        if wbs_node_id is None:
+            # Точку задаёт пара координат: одна без другой смысла не имеет.
+            on_canvas = canvas_x is not None and canvas_y is not None
+            changes = {
+                "wbs_node_id": None,
+                "wbs_position": None,
+                "canvas_x": canvas_x if on_canvas else None,
+                "canvas_y": canvas_y if on_canvas else None,
+            }
+        elif task.wbs_node_id == wbs_node_id and before_task_id is None:
+            # Возврат задачи в собственный раздел без соседа ничего не меняет.
+            return None
+        else:
+            position = await self._resolve_task_position(
+                node_id=wbs_node_id,
+                task_id=task.id,
+                before_task_id=before_task_id,
+            )
+            changes = {
+                "wbs_node_id": wbs_node_id,
+                "wbs_position": position,
+                "canvas_x": None,
+                "canvas_y": None,
+            }
+        if all(getattr(task, field) == value for field, value in changes.items()):
+            return None
+        return changes
+
+    async def _resolve_task_position(
+        self,
+        node_id: int,
+        task_id: int,
+        before_task_id: int | None,
+    ) -> float:
+        """Возвращает позицию задачи среди задач раздела.
+
+        Неизвестный ``before_task_id`` означает вставку в конец: задача могла
+        быть перенесена другим пользователем, пока карточку тащили.
+        """
+        siblings = [
+            sibling
+            for sibling in await self.tasks_repository.get_by_wbs_node(node_id=node_id)
+            if sibling.id != task_id
+        ]
+        # Задачи, размещённые до появления порядка внутри раздела, позиций не
+        # имеют — расставляем их в текущем порядке отображения.
+        if any(sibling.wbs_position is None for sibling in siblings):
+            await self._compact_task_positions(siblings=siblings)
+
+        before_index = len(siblings)
+        for index, sibling in enumerate(siblings):
+            if sibling.id == before_task_id:
+                before_index = index
+                break
+
+        position = _next_position(
+            positions=[sibling.wbs_position or 0.0 for sibling in siblings],
+            before_index=before_index,
+        )
+        if position is not None:
+            return position
+        await self._compact_task_positions(siblings=siblings)
+        return (
+            _next_position(
+                positions=[sibling.wbs_position or 0.0 for sibling in siblings],
+                before_index=before_index,
+            )
+            or POSITION_STEP
+        )
+
+    async def _compact_task_positions(self, siblings: list[Task]) -> None:
+        """Переприсваивает задачам раздела равномерные разреженные позиции."""
+        positions = {
+            sibling.id: float(index + 1) * POSITION_STEP for index, sibling in enumerate(siblings)
+        }
+        await self.tasks_repository.update_wbs_positions(positions=positions)
+        for sibling in siblings:
+            sibling.wbs_position = positions[sibling.id]
+        logger.info("✅ Позиции задач раздела ИСР уплотнены: %s задач.", len(siblings))
 
     async def _to_compact(self, task: Task, project: Project) -> TaskCompactSchema:
         """Строит компактное представление задачи с признаком выполнения."""
@@ -526,27 +662,36 @@ class WbsNodesService:
         for sibling in siblings:
             sibling.position = positions[sibling.id]
         logger.info("✅ Позиции уровня ИСР уплотнены: %s узлов.", len(siblings))
-        return _next_position(siblings=siblings, before_index=before_index) or POSITION_STEP
+        return (
+            _next_position(
+                positions=[sibling.position for sibling in siblings],
+                before_index=before_index,
+            )
+            or POSITION_STEP
+        )
 
 
-def _next_position(siblings: list[WbsNode], before_index: int) -> float | None:
+def _next_position(positions: list[float], before_index: int) -> float | None:
     """Возвращает позицию вставки или ``None``, если промежуток исчерпан.
 
+    Правило одно и для разделов уровня, и для задач внутри раздела, поэтому
+    функция работает с голым списком позиций.
+
     Args:
-        siblings: Соседи уровня, отсортированные по позиции.
-        before_index: Индекс, перед которым вставляется узел.
+        positions: Позиции соседей, отсортированные по возрастанию.
+        before_index: Индекс, перед которым выполняется вставка.
 
     Returns:
-        Свободная позиция либо ``None``, когда требуется уплотнение уровня.
+        Свободная позиция либо ``None``, когда требуется уплотнение.
     """
-    if not siblings:
+    if not positions:
         return POSITION_STEP
-    if before_index >= len(siblings):
-        return siblings[-1].position + POSITION_STEP
-    next_position = siblings[before_index].position
+    if before_index >= len(positions):
+        return positions[-1] + POSITION_STEP
+    next_position = positions[before_index]
     if before_index == 0:
         return next_position / 2 if next_position > MIN_POSITION_GAP else None
-    previous_position = siblings[before_index - 1].position
+    previous_position = positions[before_index - 1]
     if next_position - previous_position <= MIN_POSITION_GAP:
         return None
     return (previous_position + next_position) / 2
@@ -577,6 +722,9 @@ def _to_compact_task(task: Task, project_key: str, is_done: bool) -> TaskCompact
         title=task.title,
         stage_id=task.stage_id,
         wbs_node_id=task.wbs_node_id,
+        wbs_position=task.wbs_position,
+        canvas_x=task.canvas_x,
+        canvas_y=task.canvas_y,
         priority=task.priority,
         assignee=task.assignee,
         start_date=task.start_date,

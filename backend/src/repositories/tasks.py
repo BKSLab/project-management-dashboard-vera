@@ -862,7 +862,7 @@ class TasksRepository:
             result = await self.db_session.execute(
                 update(Task)
                 .where(Task.wbs_node_id.in_(node_ids))
-                .values(wbs_node_id=None)
+                .values(wbs_node_id=None, wbs_position=None)
                 .execution_options(synchronize_session="fetch")
             )
             await self.db_session.flush()
@@ -871,6 +871,61 @@ class TasksRepository:
             await self.db_session.rollback()
             logger.error("❌ Не удалось снять привязку задач к разделам ИСР.", exc_info=True)
             raise TasksRepositoryError("Ошибка снятия привязки задач к разделам ИСР.") from error
+
+    async def get_by_wbs_node(self, node_id: int) -> list[Task]:
+        """Возвращает задачи раздела ИСР в порядке их размещения.
+
+        Args:
+            node_id: Идентификатор раздела ИСР.
+
+        Returns:
+            Задачи раздела, упорядоченные по позиции внутри раздела.
+
+        Raises:
+            TasksRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        try:
+            result: Result = await self.db_session.execute(
+                select(Task)
+                .where(Task.wbs_node_id == node_id)
+                .order_by(Task.wbs_position.nulls_last(), Task.id)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить задачи раздела ИСР id=%s.", node_id, exc_info=True)
+            raise TasksRepositoryError(
+                f"Ошибка получения задач раздела ИСР id={node_id}."
+            ) from error
+
+    async def update_wbs_positions(self, positions: dict[int, float]) -> None:
+        """Переприсваивает позиции задач внутри раздела одной транзакцией.
+
+        Используется при уплотнении разреженных позиций, когда между
+        соседними задачами не остаётся свободного промежутка.
+
+        Args:
+            positions: Соответствие идентификатора задачи новой позиции.
+
+        Returns:
+            ``None`` после успешного обновления.
+
+        Raises:
+            TasksRepositoryError: Если обновить позиции не удалось.
+        """
+        if not positions:
+            return
+        try:
+            result: Result = await self.db_session.execute(
+                select(Task).where(Task.id.in_(positions))
+            )
+            for task in result.scalars().all():
+                task.wbs_position = positions[task.id]
+            await self.db_session.flush()
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось обновить позиции задач в разделе ИСР.", exc_info=True)
+            raise TasksRepositoryError("Ошибка обновления позиций задач в разделе ИСР.") from error
 
     async def save(self, data: dict) -> Task:
         """Создаёт задачу и возвращает сохранённую модель.
