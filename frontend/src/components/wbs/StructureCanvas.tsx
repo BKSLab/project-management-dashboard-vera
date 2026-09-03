@@ -247,16 +247,10 @@ function CanvasInner({
                             id: edge.id,
                             source: edge.source,
                             target: edge.target,
-                            sourceHandle: isAttachment
-                                ? "bottom"
-                                : layoutMode === "vertical"
-                                  ? "bottom"
-                                  : "right",
-                            targetHandle: isAttachment
-                                ? "left"
-                                : layoutMode === "vertical"
-                                  ? "top"
-                                  : "left",
+                            // Привязка задачи рисуется теми же концами, что и
+                            // связь разделов: задача стоит в общем ряду ветки.
+                            sourceHandle: layoutMode === "vertical" ? "bottom" : "right",
+                            targetHandle: layoutMode === "vertical" ? "top" : "left",
                             type: isAttachment ? "attachment" : "smoothstep",
                             selectable: isAttachment && !isDraft,
                             deletable: isAttachment && !isDraft,

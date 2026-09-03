@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { TaskCompact, WbsNode } from "@/lib/types";
-import { buildWbsGraph, parseGraphNodeId, PROJECT_NODE_ID } from "@/lib/wbsLayout";
+import {
+    buildWbsGraph,
+    layoutWbsGraph,
+    parseGraphNodeId,
+    PROJECT_NODE_ID,
+} from "@/lib/wbsLayout";
 import { buildWbsTree } from "@/lib/wbsTree";
 
 function node(id: number, parentId: number | null = null): WbsNode {
@@ -48,17 +53,43 @@ function buildGraph(nodes: WbsNode[], tasks: TaskCompact[], showTasks = true) {
     });
 }
 
-describe("buildWbsGraph", () => {
-    it("подчиняет задачу разделу и запоминает её место в стопке", () => {
+describe("layoutWbsGraph", () => {
+    it("ставит задачи раздела в один ряд под ним, а не друг за другом", async () => {
         const graph = buildGraph(
             [node(1)],
-            [task(11, 1, 2000), task(12, 1, 1000)],
+            [task(11, 1, 1000), task(12, 1, 2000), task(13, 1, 3000)],
         );
+
+        const { positions } = await layoutWbsGraph(graph, "vertical");
+        const section = positions.get("section-1");
+        const tasks = ["task-11", "task-12", "task-13"].map(
+            (id) => positions.get(id) as { x: number; y: number },
+        );
+
+        expect(section).toBeDefined();
+        // Один ряд: общая координата по вертикали и разные — по горизонтали.
+        expect(new Set(tasks.map((item) => item.y)).size).toBe(1);
+        expect(new Set(tasks.map((item) => item.x)).size).toBe(3);
+        expect(tasks.every((item) => item.y > (section as { y: number }).y)).toBe(true);
+        // Порядок ряда повторяет порядок, заданный пользователем.
+        expect([...tasks].sort((first, second) => first.x - second.x)).toEqual(tasks);
+    });
+
+    it("оставляет карточку холста там, куда её положил пользователь", async () => {
+        const graph = buildGraph([node(1)], [task(11, null, null, { x: 420, y: 180 })]);
+
+        const { positions } = await layoutWbsGraph(graph, "vertical");
+
+        expect(positions.get("task-11")).toEqual({ x: 420, y: 180 });
+    });
+});
+
+describe("buildWbsGraph", () => {
+    it("выстраивает задачи раздела в порядке, заданном пользователем", () => {
+        const graph = buildGraph([node(1)], [task(11, 1, 2000), task(12, 1, 1000)]);
 
         const tasks = graph.nodes.filter((item) => item.kind === "task");
         expect(tasks.map((item) => item.task?.id)).toEqual([12, 11]);
-        expect(tasks.map((item) => item.stackIndex)).toEqual([0, 1]);
-        expect(tasks.every((item) => item.parentId === "section-1")).toBe(true);
     });
 
     it("отличает связь разделов от привязки задачи", () => {

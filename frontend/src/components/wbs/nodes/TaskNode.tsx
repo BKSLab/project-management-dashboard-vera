@@ -53,7 +53,14 @@ export function TaskNode({ data, selected }: NodeProps) {
                         : "border-line hover:border-line-strong hover:bg-elevated",
             )}
         >
-            {/* Видимый конец стрелки: к нему привязана отрисовка связи. */}
+            {/* Концы стрелки: сверху в вертикальной раскладке, слева в горизонтальной. */}
+            <Handle
+                type="target"
+                id="top"
+                position={Position.Top}
+                isConnectableStart={false}
+                className="!size-1.5 !border-0 !bg-accent !opacity-0"
+            />
             <Handle
                 type="target"
                 id="left"

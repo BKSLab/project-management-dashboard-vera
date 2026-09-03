@@ -15,10 +15,6 @@ export interface WbsGraphNode {
     isCollapsed?: boolean;
     hiddenSections?: number;
     hiddenTasks?: number;
-    /** Раздел-владелец задачи: под ним задача и встаёт стопкой. */
-    parentId?: string;
-    /** Порядковый номер задачи в стопке своего раздела. */
-    stackIndex?: number;
     /**
      * Задача лежит на холсте вне структуры. Её координаты задал пользователь,
      * поэтому раскладка их не трогает.
@@ -49,12 +45,6 @@ export const NESTED_SECTION_NODE_SIZE = { width: 200, height: 78 };
 // Высота считается по содержимому карточки: ключ с бейджем, заголовок и
 // строка стадии со сроком. Если её занизить, заголовок схлопывается в ноль.
 export const TASK_NODE_SIZE = { width: 232, height: 78 };
-
-/** Отступ стопки задач от левого края раздела — место для вертикальной связки. */
-const TASK_STACK_INDENT = 26;
-const TASK_STACK_GAP = 8;
-/** Зазор между низом раздела и первой задачей его стопки. */
-const SECTION_TASK_GAP = 14;
 
 export const PROJECT_NODE_ID = "project-root";
 
@@ -149,23 +139,16 @@ export function buildWbsGraph({
         }
 
         if (showTasks) {
-            section.tasks.forEach((task, index) => {
+            for (const task of section.tasks) {
                 const taskGraphId = taskNodeId(task.id);
-                nodes.push({
-                    id: taskGraphId,
-                    kind: "task",
-                    task,
-                    parentId: graphId,
-                    stackIndex: index,
-                    ...TASK_NODE_SIZE,
-                });
+                nodes.push({ id: taskGraphId, kind: "task", task, ...TASK_NODE_SIZE });
                 edges.push({
                     id: `${graphId}->${taskGraphId}`,
                     source: graphId,
                     target: taskGraphId,
                     kind: "attachment",
                 });
-            });
+            }
         }
 
         for (const child of section.children) {
@@ -201,6 +184,9 @@ const LAYOUT_OPTIONS: Record<WbsLayoutMode, Record<string, string>> = {
         "elk.spacing.nodeNode": "28",
         "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
         "elk.layered.crossingMinimization.semiInteractive": "true",
+        // Порядок задач внутри раздела задаёт пользователь — раскладка
+        // не должна переставлять их ради красоты рёбер.
+        "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
     },
     horizontal: {
         "elk.algorithm": "layered",
@@ -209,45 +195,37 @@ const LAYOUT_OPTIONS: Record<WbsLayoutMode, Record<string, string>> = {
         "elk.spacing.nodeNode": "24",
         "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
         "elk.layered.crossingMinimization.semiInteractive": "true",
+        // Порядок задач внутри раздела задаёт пользователь — раскладка
+        // не должна переставлять их ради красоты рёбер.
+        "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
     },
 };
 
 /**
  * Считает координаты блок-схемы.
  *
- * Раскладку получают только разделы: задачи встают стопкой под своим
- * разделом, поэтому ветка читается как блок-схема, а не расползается вширь.
- * Раздел резервирует место под собственную стопку, чтобы соседние ветки на
- * неё не наехали. Карточки на холсте раскладке не подчиняются: их координаты
- * задал пользователь.
+ * Задачи участвуют в раскладке наравне с разделами: в ИСР работы одного
+ * раздела — параллельные ветки, поэтому они встают в ряд под своим разделом,
+ * а не выстраиваются друг за другом. Порядок внутри ряда — тот, который задал
+ * пользователь. Карточки на холсте раскладке не подчиняются: их координаты он
+ * задал сам.
  */
 export async function layoutWbsGraph(
     graph: WbsGraph,
     mode: WbsLayoutMode,
 ): Promise<WbsLayoutResult> {
-    const stacks = new Map<string, WbsGraphNode[]>();
-    for (const node of graph.nodes) {
-        if (node.kind !== "task" || node.parentId === undefined) {
-            continue;
-        }
-        const stack = stacks.get(node.parentId) ?? [];
-        stack.push(node);
-        stacks.set(node.parentId, stack);
-    }
-
-    const laidOut = graph.nodes.filter(
-        (node) => node.kind !== "task" && node.fixedPosition === undefined,
-    );
+    const laidOut = graph.nodes.filter((node) => node.fixedPosition === undefined);
+    const present = new Set(laidOut.map((node) => node.id));
     const elkGraph: ElkNode = {
         id: "root",
         layoutOptions: LAYOUT_OPTIONS[mode],
         children: laidOut.map((node) => ({
             id: node.id,
-            width: Math.max(node.width, stackWidth(stacks.get(node.id))),
-            height: node.height + stackHeight(stacks.get(node.id)),
+            width: node.width,
+            height: node.height,
         })),
         edges: graph.edges
-            .filter((edge) => edge.kind === "structure")
+            .filter((edge) => present.has(edge.source) && present.has(edge.target))
             .map((edge) => ({ id: edge.id, sources: [edge.source], targets: [edge.target] })),
     };
 
@@ -256,46 +234,10 @@ export async function layoutWbsGraph(
     for (const child of layout.children ?? []) {
         positions.set(child.id, { x: child.x ?? 0, y: child.y ?? 0 });
     }
-
-    for (const [sectionId, stack] of stacks) {
-        const anchor = positions.get(sectionId);
-        const section = laidOut.find((node) => node.id === sectionId);
-        if (anchor === undefined || section === undefined) {
-            continue;
-        }
-        const top = anchor.y + section.height + SECTION_TASK_GAP;
-        stack.forEach((node, index) => {
-            positions.set(node.id, {
-                x: anchor.x + TASK_STACK_INDENT,
-                y: top + index * (node.height + TASK_STACK_GAP),
-            });
-        });
-    }
-
     for (const node of graph.nodes) {
         if (node.fixedPosition !== undefined) {
             positions.set(node.id, node.fixedPosition);
         }
     }
     return { positions };
-}
-
-/** Место, которое стопка задач занимает по вертикали вместе с зазорами. */
-function stackHeight(stack: WbsGraphNode[] | undefined): number {
-    if (stack === undefined || stack.length === 0) {
-        return 0;
-    }
-    return (
-        SECTION_TASK_GAP +
-        stack.reduce((total, node) => total + node.height + TASK_STACK_GAP, 0) -
-        TASK_STACK_GAP
-    );
-}
-
-/** Ширина, которую резервирует стопка задач с учётом отступа связки. */
-function stackWidth(stack: WbsGraphNode[] | undefined): number {
-    if (stack === undefined || stack.length === 0) {
-        return 0;
-    }
-    return TASK_STACK_INDENT + Math.max(...stack.map((node) => node.width));
 }

@@ -357,7 +357,10 @@ export function StructurePage() {
                     className="flex shrink-0"
                 >
                     <TaskPool
-                        tasks={tasks}
+                        // Пока открыт черновик, список показывает то же, что и
+                        // холст: задача, которую предложение забирает в раздел,
+                        // не должна одновременно висеть в пуле.
+                        tasks={preview.tasks}
                         stages={stagesQuery.data ?? []}
                         onOpenTask={setSelectedTaskId}
                         onMoveTask={setMoveTaskId}
