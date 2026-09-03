@@ -7,5 +7,10 @@
  */
 export const EDGE_COLOR = "rgba(148, 163, 184, 0.55)";
 export const EDGE_ACCENT_COLOR = "var(--color-accent)";
+/**
+ * Последовательность работ — другой смысл, чем структура, поэтому и цвет
+ * другой: связи ИСР серые, зависимости — тёплые.
+ */
+export const DEPENDENCY_COLOR = "rgba(217, 161, 89, 0.75)";
 export const EDGE_WIDTH = 1.8;
 export const EDGE_ACCENT_WIDTH = 2.4;

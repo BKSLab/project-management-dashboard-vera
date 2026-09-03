@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { api, endpoints, queryKeys } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import type { ProjectStage, WbsStructure, WbsSuggestion } from "@/lib/types";
+import type { ProjectStage, TaskDependency, WbsStructure, WbsSuggestion } from "@/lib/types";
 import { useProjectOutlet } from "@/lib/useProjectOutlet";
 import { useWbsMutations } from "@/lib/useWbsMutations";
 import { buildWbsTree, flattenTree, isFloatingTask } from "@/lib/wbsTree";
@@ -73,6 +73,11 @@ export function StructurePage() {
         queryKey: queryKeys.stages(project.id),
         queryFn: () => api.get<ProjectStage[]>(endpoints.projectStages(project.id)),
     });
+    const dependenciesQuery = useQuery({
+        queryKey: queryKeys.taskDependencies(project.id),
+        queryFn: () =>
+            api.get<TaskDependency[]>(endpoints.projectTaskDependencies(project.id)),
+    });
 
     const mutations = useWbsMutations(project.id);
 
@@ -122,11 +127,23 @@ export function StructurePage() {
             onOpenTask: setSelectedTaskId,
             onPlaceTask: handlePlaceTask,
             onPoolHover: setPoolDropTarget,
+            onCreateDependency: (predecessorTaskId, successorTaskId) =>
+                mutations.createDependency.mutate({ predecessorTaskId, successorTaskId }),
+            onRemoveDependency: (dependencyId) =>
+                mutations.deleteDependency.mutate(dependencyId),
             onMoveSection: (nodeId, parentId, beforeId) =>
                 mutations.moveNode.mutate({ nodeId, parentId, beforeId }),
             onAddRootSection: () => setCreateParentId(null),
         }),
-        [toggleWbsNode, handleRename, setSelectedTaskId, handlePlaceTask, mutations.moveNode],
+        [
+            toggleWbsNode,
+            handleRename,
+            setSelectedTaskId,
+            handlePlaceTask,
+            mutations.moveNode,
+            mutations.createDependency,
+            mutations.deleteDependency,
+        ],
     );
 
     function createSection() {
@@ -385,6 +402,7 @@ export function StructurePage() {
                         editingNodeId={editingNodeId}
                         selectedTaskId={selectedTaskId}
                         draggingTask={draggingTask}
+                        dependencies={dependenciesQuery.data ?? []}
                         handlers={handlers}
                     />
                 </div>

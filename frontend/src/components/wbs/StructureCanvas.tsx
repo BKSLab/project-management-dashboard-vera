@@ -22,7 +22,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { Maximize2, Network, Plus, Search } from "lucide-react";
 import { cn } from "@/lib/cn";
-import type { Project, ProjectStage, TaskCompact, WbsNode } from "@/lib/types";
+import type { Project, ProjectStage, TaskCompact, TaskDependency, WbsNode } from "@/lib/types";
 import { dueTone } from "@/lib/dates";
 import {
     buildWbsGraph,
@@ -48,8 +48,9 @@ import { POOL_DROP_ATTRIBUTE, TASK_DRAG_TYPE } from "@/components/wbs/TaskPool";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Field";
 import { EmptyState } from "@/components/ui/States";
-import { AttachmentEdge } from "@/components/wbs/edges/AttachmentEdge";
+import { LinkEdge } from "@/components/wbs/edges/LinkEdge";
 import {
+    DEPENDENCY_COLOR,
     EDGE_ACCENT_COLOR,
     EDGE_ACCENT_WIDTH,
     EDGE_COLOR,
@@ -68,7 +69,7 @@ const FOCUS_DELAY_MS = 280;
 const CLICK_TOLERANCE_PX = 4;
 
 const NODE_TYPES = { project: ProjectNode, section: SectionNode, task: TaskNode };
-const EDGE_TYPES = { attachment: AttachmentEdge };
+const EDGE_TYPES = { link: LinkEdge };
 
 /** React Flow отдаёт мышь или касание — берём координаты указателя из любого. */
 function pointerPosition(event: MouseEvent | TouchEvent): { x: number; y: number } | null {
@@ -93,22 +94,27 @@ function poolRect(): DOMRect | null {
 }
 
 /**
- * Карточка считается принесённой в список, когда она сама заехала на него, а
- * не когда туда попал курсор: пользователь тащит карточку и смотрит на неё, а
- * взял он её за любой край.
+ * Насколько карточка заехала на список задач по горизонтали.
+ *
+ * Считаем по самой карточке, а не по курсору: пользователь тащит карточку и
+ * смотрит на неё, а взял он её за любой край.
  */
-function overlapsPool(rect: ScreenRect): boolean {
+function poolOverlap(rect: ScreenRect): number {
     const pool = poolRect();
     if (pool === null) {
-        return false;
+        return 0;
     }
     const overlapX = Math.min(rect.x + rect.width, pool.right) - Math.max(rect.x, pool.left);
     const overlapY = Math.min(rect.y + rect.height, pool.bottom) - Math.max(rect.y, pool.top);
-    if (overlapX <= 0 || overlapY <= 0) {
-        return false;
-    }
-    // Случайное касание краем не должно уводить задачу из структуры.
-    return overlapX >= Math.min(rect.width * 0.3, 70);
+    return overlapX > 0 && overlapY > 0 ? overlapX : 0;
+}
+
+/**
+ * Карточка считается принесённой в список. Случайное касание краем не должно
+ * уводить задачу из структуры, поэтому нужен заметный заход.
+ */
+function overlapsPool(rect: ScreenRect): boolean {
+    return poolOverlap(rect) >= Math.min(rect.width * 0.3, 70);
 }
 
 /** Куда пользователь кладёт задачу: в раздел, на холст или обратно в пул. */
@@ -138,6 +144,9 @@ export interface CanvasHandlers {
     onOpenTaskMenu: (taskId: number, anchor: { x: number; y: number }) => void;
     onOpenTask: (taskId: number) => void;
     onPlaceTask: (taskId: number, placement: TaskPlacement) => void;
+    /** Стрелка между задачами задаёт последовательность работ. */
+    onCreateDependency: (predecessorTaskId: number, successorTaskId: number) => void;
+    onRemoveDependency: (dependencyId: number) => void;
     /** Указатель с карточкой над списком задач: пул подсвечивается как цель. */
     onPoolHover: (isOver: boolean) => void;
     onMoveSection: (nodeId: number, parentId: number | null, beforeId: number | null) => void;
@@ -155,6 +164,8 @@ interface StructureCanvasProps {
     selectedTaskId: number | null;
     /** Задача, которую сейчас тащат из пула. */
     draggingTask: TaskCompact | null;
+    /** Зависимости задач проекта: последовательность работ поверх структуры. */
+    dependencies: TaskDependency[];
     handlers: CanvasHandlers;
 }
 
@@ -176,6 +187,7 @@ function CanvasInner({
     editingNodeId,
     selectedTaskId,
     draggingTask,
+    dependencies,
     handlers,
 }: StructureCanvasProps) {
     const { fitView, setCenter, getZoom, screenToFlowPosition, flowToScreenPosition } =
@@ -192,9 +204,11 @@ function CanvasInner({
      * Карточку у края холста обрезает область React Flow, поэтому над
      * списком задач за курсором едет её двойник поверх всей страницы.
      */
-    const [poolGhost, setPoolGhost] = useState<{ rect: ScreenRect; task: TaskCompact } | null>(
-        null,
-    );
+    const [poolGhost, setPoolGhost] = useState<{
+        rect: ScreenRect;
+        task: TaskCompact;
+        isTarget: boolean;
+    } | null>(null);
     const [search, setSearch] = useState("");
     const [isSearchOpen, setSearchOpen] = useState(false);
     const layoutRequestRef = useRef(0);
@@ -222,8 +236,9 @@ function CanvasInner({
                 collapsed,
                 showTasks,
                 floatingTasks: tree.floating,
+                dependencies,
             }),
-        [tree.roots, tree.floating, collapsed, showTasks],
+        [tree.roots, tree.floating, collapsed, showTasks, dependencies],
     );
 
     /**
@@ -275,33 +290,46 @@ function CanvasInner({
                 setFlowEdges(
                     graph.edges.map((edge) => {
                         const target = parseGraphNodeId(edge.target);
-                        const isAttachment = edge.kind === "attachment";
                         const source = parseGraphNodeId(edge.source);
+                        const isAttachment = edge.kind === "attachment";
+                        const isDependency = edge.kind === "dependency";
                         const isDraft =
                             source?.kind === "section" && isDraftNodeId(source.nodeId);
+                        // Последовательность работ идёт слева направо, а связи
+                        // структуры — вдоль выбранной раскладки.
+                        const structureHandles = {
+                            sourceHandle: layoutMode === "vertical" ? "bottom" : "right",
+                            targetHandle: layoutMode === "vertical" ? "top" : "left",
+                        };
                         return {
                             id: edge.id,
                             source: edge.source,
                             target: edge.target,
-                            // Привязка задачи рисуется теми же концами, что и
-                            // связь разделов: задача стоит в общем ряду ветки.
-                            sourceHandle: layoutMode === "vertical" ? "bottom" : "right",
-                            targetHandle: layoutMode === "vertical" ? "top" : "left",
-                            type: isAttachment ? "attachment" : "smoothstep",
-                            markerEnd: isAttachment
-                                ? {
-                                      type: MarkerType.ArrowClosed,
-                                      width: 14,
-                                      height: 14,
-                                      color: EDGE_COLOR,
-                                  }
-                                : undefined,
-                            selectable: isAttachment && !isDraft,
-                            deletable: isAttachment && !isDraft,
+                            ...(isDependency
+                                ? { sourceHandle: "right", targetHandle: "left" }
+                                : structureHandles),
+                            type: isAttachment || isDependency ? "link" : "smoothstep",
+                            markerEnd:
+                                isAttachment || isDependency
+                                    ? {
+                                          type: MarkerType.ArrowClosed,
+                                          width: 14,
+                                          height: 14,
+                                          color: isDependency ? DEPENDENCY_COLOR : EDGE_COLOR,
+                                      }
+                                    : undefined,
+                            selectable: (isAttachment && !isDraft) || isDependency,
+                            deletable: (isAttachment && !isDraft) || isDependency,
                             data:
                                 isAttachment && target?.kind === "task"
-                                    ? { taskId: target.taskId, isDraft }
-                                    : undefined,
+                                    ? { tone: "attachment", taskId: target.taskId, isDraft }
+                                    : isDependency
+                                      ? {
+                                            tone: "dependency",
+                                            dependencyId: edge.dependencyId,
+                                            isDraft: false,
+                                        }
+                                      : undefined,
                         };
                     }),
                 );
@@ -450,26 +478,43 @@ function CanvasInner({
         const present = new Set(decoratedNodes.map((node) => node.id));
         return flowEdges
             .filter((edge) => present.has(edge.source) && present.has(edge.target))
-            .map((edge) =>
-                // Привязку задачи рисует собственный edge: он же даёт крестик,
-                // которым связь разрывают.
-                edge.type === "attachment"
-                    ? {
-                          ...edge,
-                          data: {
-                              ...edge.data,
-                              onDetach: detachTask,
-                              isOnSelectedPath: selectedPathEdgeIds.has(edge.id),
-                          },
-                      }
-                    : {
-                          ...edge,
-                          style: selectedPathEdgeIds.has(edge.id)
-                              ? { stroke: EDGE_ACCENT_COLOR, strokeWidth: EDGE_ACCENT_WIDTH, opacity: 1 }
-                              : { stroke: EDGE_COLOR, strokeWidth: EDGE_WIDTH, opacity: 1 },
-                      },
-            );
-    }, [decoratedNodes, flowEdges, selectedPathEdgeIds, detachTask]);
+            .map((edge) => {
+                // Связи, которые провёл пользователь, рисует собственный edge:
+                // он же даёт крестик, которым связь разрывают.
+                if (edge.type !== "link") {
+                    return {
+                        ...edge,
+                        style: selectedPathEdgeIds.has(edge.id)
+                            ? {
+                                  stroke: EDGE_ACCENT_COLOR,
+                                  strokeWidth: EDGE_ACCENT_WIDTH,
+                                  opacity: 1,
+                              }
+                            : { stroke: EDGE_COLOR, strokeWidth: EDGE_WIDTH, opacity: 1 },
+                    };
+                }
+                const data = edge.data as {
+                    tone: string;
+                    taskId?: number;
+                    dependencyId?: number;
+                };
+                const isDependency = data.tone === "dependency";
+                return {
+                    ...edge,
+                    data: {
+                        ...data,
+                        isOnSelectedPath: !isDependency && selectedPathEdgeIds.has(edge.id),
+                        removeLabel: isDependency
+                            ? "Удалить последовательность задач"
+                            : "Убрать задачу из раздела",
+                        onRemove: () =>
+                            isDependency
+                                ? handlers.onRemoveDependency(data.dependencyId as number)
+                                : detachTask(data.taskId as number),
+                    },
+                };
+            });
+    }, [decoratedNodes, flowEdges, selectedPathEdgeIds, detachTask, handlers]);
 
     /**
      * Раздел под курсором — цель сброса раздела (§26 ТЗ). Верхняя и нижняя
@@ -697,9 +742,14 @@ function CanvasInner({
                 // границу холста не выйдет, его там обрезает.
                 const overPool = drop?.kind === "pool";
                 handlers.onPoolHover(overPool);
+                // Двойник появляется с первого же касания панели: карточка не
+                // должна нырять под неё даже краем — она лежит сверху, как на
+                // столе. Подсветка цели включается позже, по заметному заходу.
                 const dragged = tasks.find((item) => item.id === parsed.taskId);
                 setPoolGhost(
-                    overPool && dragged !== undefined ? { rect: cardRect, task: dragged } : null,
+                    poolOverlap(cardRect) > 0 && dragged !== undefined
+                        ? { rect: cardRect, task: dragged, isTarget: overPool }
+                        : null,
                 );
                 return;
             }
@@ -788,18 +838,24 @@ function CanvasInner({
         [nodes, sectionDrop, taskDrop, handlers, resolveTaskDrop, restorePosition, nodeScreenRect],
     );
 
-    /** Стрелка от раздела к задаче и есть её привязка к структуре. */
+    /**
+     * Смысл новой стрелки задаёт её начало: от раздела — привязка задачи к
+     * структуре, от задачи — последовательность работ.
+     */
     const handleConnect = useCallback(
         (connection: Connection) => {
             const source = parseGraphNodeId(connection.source);
             const target = parseGraphNodeId(connection.target);
-            if (source?.kind !== "section" || target?.kind !== "task") {
+            if (target?.kind !== "task") {
                 return;
             }
-            if (isDraftNodeId(source.nodeId)) {
+            if (source?.kind === "section" && !isDraftNodeId(source.nodeId)) {
+                handlers.onPlaceTask(target.taskId, { wbsNodeId: source.nodeId });
                 return;
             }
-            handlers.onPlaceTask(target.taskId, { wbsNodeId: source.nodeId });
+            if (source?.kind === "task" && source.taskId !== target.taskId) {
+                handlers.onCreateDependency(source.taskId, target.taskId);
+            }
         },
         [handlers],
     );
@@ -807,21 +863,22 @@ function CanvasInner({
     const isValidConnection = useCallback((connection: Connection | Edge) => {
         const source = parseGraphNodeId(connection.source);
         const target = parseGraphNodeId(connection.target);
-        return (
-            source?.kind === "section" && !isDraftNodeId(source.nodeId) && target?.kind === "task"
-        );
+        if (target?.kind !== "task") {
+            return false;
+        }
+        if (source?.kind === "section") {
+            return !isDraftNodeId(source.nodeId);
+        }
+        return source?.kind === "task" && source.taskId !== target.taskId;
     }, []);
 
     const handleEdgesDelete = useCallback(
         (edges: Edge[]) => {
             for (const edge of edges) {
-                const target = parseGraphNodeId(edge.target);
-                if (edge.type === "attachment" && target?.kind === "task") {
-                    detachTask(target.taskId);
-                }
+                (edge.data as { onRemove?: () => void } | undefined)?.onRemove?.();
             }
         },
-        [detachTask],
+        [],
     );
 
     const handleNodeClick: NodeMouseHandler = useCallback(
@@ -1056,7 +1113,13 @@ function CanvasInner({
                         width: poolGhost.rect.width,
                         minHeight: poolGhost.rect.height,
                     }}
-                    className="pointer-events-none fixed z-50 flex flex-col justify-center rounded-[var(--radius-control)] border border-dashed border-accent/70 bg-elevated px-2.5 py-2 shadow-panel"
+                    className={cn(
+                        "pointer-events-none fixed z-50 flex flex-col justify-center gap-1",
+                        "rounded-[var(--radius-control)] border bg-elevated px-2.5 py-2 shadow-panel",
+                        poolGhost.isTarget
+                            ? "border-dashed border-accent/70"
+                            : "border-line-strong",
+                    )}
                 >
                     <span className="font-mono text-[10px] text-muted">{poolGhost.task.key}</span>
                     <p className="line-clamp-2 text-[12px] leading-snug text-secondary">

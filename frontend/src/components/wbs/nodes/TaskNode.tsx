@@ -75,6 +75,23 @@ export function TaskNode({ data, selected }: NodeProps) {
              * иначе React Flow пометил бы карточку как nodrag и её нельзя было
              * бы таскать; связь притягивается к нему геометрически.
              */}
+            {/*
+             * Из этой точки тянут последовательность: стрелка «задача → задача»
+             * означает, что вторая работа начинается после первой. Структура и
+             * очерёдность — разные вещи, поэтому и точки разные.
+             */}
+            <Handle
+                type="source"
+                id="right"
+                position={Position.Right}
+                isConnectableEnd={false}
+                title="Потяните к следующей задаче, чтобы задать очерёдность"
+                className={cn(
+                    "!size-3 !cursor-crosshair !border-2 !border-surface-2 !bg-[var(--color-warning)]",
+                    "transition-[opacity,transform] duration-[var(--duration-fast)]",
+                    isDraft ? "!opacity-0" : "!opacity-60 hover:!scale-125 hover:!opacity-100",
+                )}
+            />
             <Handle
                 type="target"
                 id="card"

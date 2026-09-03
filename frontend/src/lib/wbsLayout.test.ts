@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { TaskCompact, WbsNode } from "@/lib/types";
+import type { TaskCompact, TaskDependency, WbsNode } from "@/lib/types";
 import {
     buildWbsGraph,
     layoutWbsGraph,
@@ -43,14 +43,32 @@ function task(
     };
 }
 
-function buildGraph(nodes: WbsNode[], tasks: TaskCompact[], showTasks = true) {
+function buildGraph(
+    nodes: WbsNode[],
+    tasks: TaskCompact[],
+    showTasks = true,
+    dependencies: TaskDependency[] = [],
+) {
     const tree = buildWbsTree(nodes, tasks);
     return buildWbsGraph({
         roots: tree.roots,
         collapsed: new Set<number>(),
         showTasks,
         floatingTasks: tree.floating,
+        dependencies,
     });
+}
+
+function dependency(id: number, predecessor: number, successor: number): TaskDependency {
+    return {
+        id,
+        project_id: 1,
+        predecessor_task_id: predecessor,
+        successor_task_id: successor,
+        dependency_type: "FINISH_TO_START",
+        lag_days: 0,
+        created_at: "2026-09-03T10:00:00Z",
+    };
 }
 
 describe("layoutWbsGraph", () => {
@@ -90,6 +108,27 @@ describe("buildWbsGraph", () => {
 
         const tasks = graph.nodes.filter((item) => item.kind === "task");
         expect(tasks.map((item) => item.task?.id)).toEqual([12, 11]);
+    });
+
+    it("рисует зависимость только между видимыми задачами", () => {
+        const withBoth = buildGraph(
+            [node(1)],
+            [task(11, 1, 1000), task(12, 1, 2000)],
+            true,
+            [dependency(7, 11, 12)],
+        );
+        const withHidden = buildGraph([node(1)], [task(11, 1, 1000)], true, [
+            dependency(7, 11, 12),
+        ]);
+
+        const link = withBoth.edges.find((edge) => edge.kind === "dependency");
+        expect(link).toMatchObject({
+            source: "task-11",
+            target: "task-12",
+            dependencyId: 7,
+        });
+        // Задачи-конца нет на холсте — стрелке не на что опереться.
+        expect(withHidden.edges.some((edge) => edge.kind === "dependency")).toBe(false);
     });
 
     it("отличает связь разделов от привязки задачи", () => {

@@ -3,6 +3,8 @@ import { api, endpoints, queryKeys } from "@/lib/api";
 import { useToast } from "@/lib/toast";
 import type {
     TaskCompact,
+    TaskDependency,
+    TaskDependencyInput,
     WbsNode,
     WbsNodeDeleteResult,
     WbsStructure,
@@ -196,7 +198,46 @@ export function useWbsMutations(projectId: number) {
         onSettled: invalidateAll,
     });
 
-    return { createNode, renameNode, moveNode, deleteNode, placeTask, suggest, applySuggestion };
+    /** Последовательность работ живёт отдельно от структуры — в зависимостях задач. */
+    const createDependency = useMutation({
+        mutationFn: (variables: { predecessorTaskId: number; successorTaskId: number }) =>
+            api.post<TaskDependency>(endpoints.projectTaskDependencies(projectId), {
+                predecessor_task_id: variables.predecessorTaskId,
+                successor_task_id: variables.successorTaskId,
+                dependency_type: "FINISH_TO_START",
+                lag_days: 0,
+            } satisfies TaskDependencyInput),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.taskDependencies(projectId) });
+            toast.success("Последовательность задана");
+        },
+        onError: (error) =>
+            toast.error(`Не удалось связать задачи: ${(error as Error).message}`),
+        onSettled: invalidateAll,
+    });
+
+    const deleteDependency = useMutation({
+        mutationFn: (dependencyId: number) =>
+            api.delete<void>(endpoints.projectTaskDependency(projectId, dependencyId)),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.taskDependencies(projectId) });
+            toast.success("Последовательность убрана");
+        },
+        onError: (error) => toast.error(`Не удалось убрать связь: ${(error as Error).message}`),
+        onSettled: invalidateAll,
+    });
+
+    return {
+        createNode,
+        renameNode,
+        moveNode,
+        deleteNode,
+        placeTask,
+        suggest,
+        applySuggestion,
+        createDependency,
+        deleteDependency,
+    };
 }
 
 /**

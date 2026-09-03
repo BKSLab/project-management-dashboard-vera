@@ -1,5 +1,5 @@
 import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js";
-import type { TaskCompact } from "@/lib/types";
+import type { TaskCompact, TaskDependency } from "@/lib/types";
 import type { WbsTreeNode } from "@/lib/wbsTree";
 
 export type WbsLayoutMode = "vertical" | "horizontal";
@@ -26,8 +26,13 @@ export interface WbsGraphEdge {
     id: string;
     source: string;
     target: string;
-    /** Связь разделов держит раскладка, привязку задачи рисует пользователь. */
-    kind: "structure" | "attachment";
+    /**
+     * Связь разделов держит раскладку, привязку задачи рисует пользователь,
+     * зависимость — это последовательность работ и на раскладку не влияет.
+     */
+    kind: "structure" | "attachment" | "dependency";
+    /** Идентификатор зависимости в БД: по нему связь и удаляют. */
+    dependencyId?: number;
 }
 
 export interface WbsGraph {
@@ -83,6 +88,8 @@ interface BuildGraphOptions {
     showTasks: boolean;
     /** Задачи, выложенные на холст вне структуры. */
     floatingTasks: TaskCompact[];
+    /** Зависимости задач проекта: показываем те, чьи концы видны на холсте. */
+    dependencies: TaskDependency[];
 }
 
 /**
@@ -97,6 +104,7 @@ export function buildWbsGraph({
     collapsed,
     showTasks,
     floatingTasks,
+    dependencies,
 }: BuildGraphOptions): WbsGraph {
     const nodes: WbsGraphNode[] = [{ id: PROJECT_NODE_ID, kind: "project", ...PROJECT_NODE_SIZE }];
     const edges: WbsGraphEdge[] = [];
@@ -171,6 +179,27 @@ export function buildWbsGraph({
         });
     }
 
+    // Зависимость рисуется, только когда обе задачи видны: иначе стрелка
+    // повисает в пустоте и вводит в заблуждение.
+    const visibleTaskIds = new Set(
+        nodes.filter((node) => node.kind === "task").map((node) => node.task?.id),
+    );
+    for (const dependency of dependencies) {
+        if (
+            !visibleTaskIds.has(dependency.predecessor_task_id) ||
+            !visibleTaskIds.has(dependency.successor_task_id)
+        ) {
+            continue;
+        }
+        edges.push({
+            id: `dependency-${dependency.id}`,
+            source: taskNodeId(dependency.predecessor_task_id),
+            target: taskNodeId(dependency.successor_task_id),
+            kind: "dependency",
+            dependencyId: dependency.id,
+        });
+    }
+
     return { nodes, edges };
 }
 
@@ -225,6 +254,8 @@ export async function layoutWbsGraph(
             height: node.height,
         })),
         edges: graph.edges
+            // Последовательность работ не должна перестраивать саму структуру.
+            .filter((edge) => edge.kind !== "dependency")
             .filter((edge) => present.has(edge.source) && present.has(edge.target))
             .map((edge) => ({ id: edge.id, sources: [edge.source], targets: [edge.target] })),
     };
