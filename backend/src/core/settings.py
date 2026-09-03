@@ -64,6 +64,8 @@ class LlmSettings(SettingsBase):
     agent_model: str = "google/gemini-3.7-flash"
     llm_timeout: int = 300
     llm_retries: int = 3
+    vision_model: str = "google/gemini-3.7-flash"
+    vision_max_tokens: int = 4000
 
     @property
     def headers(self) -> dict[str, str]:
@@ -99,6 +101,8 @@ class KnowledgeSettings(SettingsBase):
     knowledge_chunk_target_chars: int = 2200
     knowledge_chunk_overlap_chars: int = 300
     knowledge_agent_semantic_limit: int = 10
+    knowledge_vision_enabled: bool = True
+    knowledge_extract_max_chars: int = 350_000
 
 
 class DBSettings(SettingsBase):

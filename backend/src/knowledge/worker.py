@@ -236,6 +236,7 @@ def _build_index_service(*, session: AsyncSession, settings: Settings) -> Knowle
         embedding_batch_size=settings.knowledge.knowledge_embedding_batch_size,
         chunk_target_chars=settings.knowledge.knowledge_chunk_target_chars,
         chunk_overlap_chars=settings.knowledge.knowledge_chunk_overlap_chars,
+        extract_max_chars=settings.knowledge.knowledge_extract_max_chars,
         milestones_repository=MilestonesRepository(session),
         runtime=get_knowledge_runtime(),
     )

@@ -5,6 +5,7 @@ import httpx
 from src.clients.embedding import EmbeddingClient
 from src.clients.llm import LlmClient
 from src.clients.qdrant import ProjectQdrantClient
+from src.clients.vision import VisionClient
 from src.core.settings import get_settings
 
 
@@ -16,6 +17,7 @@ class KnowledgeRuntime:
     embedding_client: EmbeddingClient
     llm_client: LlmClient
     qdrant_client: ProjectQdrantClient
+    vision_client: VisionClient | None = None
     payload_indexes_backfill_pending: bool = False
 
 
@@ -51,6 +53,17 @@ def get_knowledge_runtime() -> KnowledgeRuntime:
                 collection_prefix=settings.knowledge.qdrant_collection_prefix,
                 vector_dim=settings.embedding.embedding_dim,
             ),
+            vision_client=VisionClient(
+                http_client=http_client,
+                url=settings.llm.llm_api_url,
+                headers=settings.llm.headers,
+                model=settings.llm.vision_model,
+                timeout=settings.llm.llm_timeout,
+                retries=settings.llm.llm_retries,
+                max_tokens=settings.llm.vision_max_tokens,
+            )
+            if settings.knowledge.knowledge_vision_enabled
+            else None,
         )
     return _runtime
 
