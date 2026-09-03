@@ -1,10 +1,8 @@
 from datetime import UTC, datetime
-from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
 
 import pytest
-from PIL import Image
 
 from src.db.models.documents import Document
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType, KnowledgeIndexOperation
@@ -259,9 +257,7 @@ async def test_unavailable_vision_model_fails_job_instead_of_skipping_image(tmp_
         size=10,
         created_at=datetime.now(UTC),
     )
-    stream = BytesIO()
-    Image.new("RGB", (8, 8), "white").save(stream, format="PNG")
-    (tmp_path / storage_name).write_bytes(stream.getvalue())
+    (tmp_path / storage_name).write_bytes(b"\x89PNG\r\n\x1a\nvision-fixture")
     runtime.vision_client.extract_text.side_effect = KnowledgeProviderError("vision API недоступен")
 
     with pytest.raises(KnowledgeProviderError):

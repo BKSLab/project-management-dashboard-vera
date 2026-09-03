@@ -1,38 +1,36 @@
 from __future__ import annotations
 
 import base64
-from io import BytesIO
+from pathlib import Path
 
-from PIL import Image, UnidentifiedImageError
+IMAGE_MEDIA_TYPES = {
+    ".bmp": "image/bmp",
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
-MAX_IMAGE_SIDE = 2048
-JPEG_QUALITY = 90
 
-
-def prepare_image_base64(content: bytes) -> str:
-    """Готовит изображение к отправке в vision-модель.
-
-    Кадр приводится к RGB и уменьшается до MAX_IMAGE_SIDE по большей стороне:
-    модели всё равно масштабируют вход, а трафик и стоимость запроса растут
-    линейно по числу пикселей.
+def build_image_data_url(filename: str, content: bytes) -> str:
+    """Кодирует исходное изображение для прямой отправки в vision-модель.
 
     Args:
+        filename: Имя файла, определяющее MIME-тип изображения.
         content: Бинарное содержимое файла изображения.
 
     Returns:
-        JPEG-изображение в base64 без префикса data URL.
+        Data URL с исходными байтами без локального декодирования или обработки.
 
     Raises:
-        ValueError: Если файл не является поддерживаемым изображением.
+        ValueError: Если расширение не поддерживается или файл пуст.
     """
-    try:
-        with Image.open(BytesIO(content)) as image:
-            image.load()
-            prepared = image.convert("RGB")
-    except (UnidentifiedImageError, OSError) as error:
-        raise ValueError(f"Не удалось открыть изображение: {error}") from error
-
-    prepared.thumbnail((MAX_IMAGE_SIDE, MAX_IMAGE_SIDE))
-    buffer = BytesIO()
-    prepared.save(buffer, format="JPEG", quality=JPEG_QUALITY)
-    return base64.b64encode(buffer.getvalue()).decode("ascii")
+    suffix = Path(filename).suffix.lower()
+    media_type = IMAGE_MEDIA_TYPES.get(suffix)
+    if media_type is None:
+        raise ValueError(f"Неподдерживаемое расширение изображения: {suffix or 'отсутствует'}.")
+    if not content:
+        raise ValueError("Изображение не содержит данных.")
+    encoded = base64.b64encode(content).decode("ascii")
+    return f"data:{media_type};base64,{encoded}"

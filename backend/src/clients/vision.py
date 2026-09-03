@@ -41,11 +41,11 @@ class VisionClient:
         self.max_tokens = max_tokens
         self.prompt = prompt
 
-    async def extract_text(self, *, image_base64: str) -> str:
+    async def extract_text(self, *, image_data_url: str) -> str:
         """Возвращает распознанный моделью текст изображения.
 
         Args:
-            image_base64: JPEG-изображение в base64 без префикса data URL.
+            image_data_url: Исходное изображение как data URL с корректным MIME-типом.
 
         Returns:
             Извлечённый текст; пустая строка, если модель ничего не нашла.
@@ -62,7 +62,7 @@ class VisionClient:
                         {"type": "text", "text": self.prompt},
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
+                            "image_url": {"url": image_data_url},
                         },
                     ],
                 }

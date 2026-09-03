@@ -7,17 +7,18 @@ from pathlib import Path
 
 import chardet
 import docx
-import pdfplumber
+from pdfminer.high_level import extract_text as extract_pdf_text
+from pdfminer.pdfpage import PDFPage
 
 from src.clients.vision import VisionClient
 from src.knowledge.excel import extract_excel_text
-from src.knowledge.images import prepare_image_base64
+from src.knowledge.images import IMAGE_MEDIA_TYPES, build_image_data_url
 
 logger = logging.getLogger(__name__)
 
 PLAIN_TEXT_EXTENSIONS = frozenset({".csv", ".log", ".md", ".txt"})
 EXCEL_EXTENSIONS = frozenset({".xls", ".xlsm", ".xlsx"})
-IMAGE_EXTENSIONS = frozenset({".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"})
+IMAGE_EXTENSIONS = frozenset(IMAGE_MEDIA_TYPES)
 INDEXABLE_EXTENSIONS = (
     PLAIN_TEXT_EXTENSIONS | EXCEL_EXTENSIONS | IMAGE_EXTENSIONS | {".docx", ".pdf"}
 )
@@ -85,8 +86,8 @@ async def _extract_image(
     if vision_client is None:
         logger.info("ℹ️ Vision-модель отключена, изображение %s не индексируется.", filename)
         return None
-    image_base64 = await asyncio.to_thread(prepare_image_base64, content)
-    return await vision_client.extract_text(image_base64=image_base64)
+    image_data_url = build_image_data_url(filename, content)
+    return await vision_client.extract_text(image_data_url=image_data_url)
 
 
 def _decode_text(content: bytes) -> str:
@@ -119,10 +120,20 @@ def _candidate_encodings(content: bytes) -> list[str]:
 
 def _extract_pdf(content: bytes) -> str:
     """Извлекает текстовый слой PDF постранично."""
-    with pdfplumber.open(BytesIO(content)) as pdf:
-        if len(pdf.pages) > MAX_PDF_PAGES:
-            raise ValueError(f"PDF содержит больше {MAX_PDF_PAGES} страниц.")
-        return "\n\n".join(page.extract_text() or "" for page in pdf.pages)
+    stream = BytesIO(content)
+    page_count = sum(
+        1
+        for _ in PDFPage.get_pages(
+            stream,
+            maxpages=MAX_PDF_PAGES + 1,
+            check_extractable=False,
+        )
+    )
+    if page_count > MAX_PDF_PAGES:
+        raise ValueError(f"PDF содержит больше {MAX_PDF_PAGES} страниц.")
+    stream.seek(0)
+    # pdfminer разделяет страницы form-feed; наружу отдаём обычные текстовые блоки.
+    return extract_pdf_text(stream).replace("\x0c", "\n\n")
 
 
 def _extract_docx(content: bytes) -> str:

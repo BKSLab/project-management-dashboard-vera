@@ -31,19 +31,26 @@ async def test_sends_image_as_data_url_and_returns_text() -> None:
         captured.update(json.loads(request.content))
         return build_response("  Схема узла  ")
 
-    text = await build_client(handler).extract_text(image_base64="QUJD")
+    text = await build_client(handler).extract_text(
+        image_data_url="data:image/png;base64,QUJD"
+    )
 
     assert text == "Схема узла"
     assert captured["model"] == "vision-model"
     image_part = captured["messages"][0]["content"][1]
-    assert image_part["image_url"]["url"] == "data:image/jpeg;base64,QUJD"
+    assert image_part["image_url"]["url"] == "data:image/png;base64,QUJD"
 
 
 async def test_joins_multipart_content() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return build_response([{"type": "text", "text": "Первая. "}, {"text": "Вторая."}])
 
-    assert await build_client(handler).extract_text(image_base64="QUJD") == "Первая. Вторая."
+    assert (
+        await build_client(handler).extract_text(
+            image_data_url="data:image/webp;base64,QUJD"
+        )
+        == "Первая. Вторая."
+    )
 
 
 async def test_retries_then_succeeds() -> None:
@@ -55,7 +62,12 @@ async def test_retries_then_succeeds() -> None:
             return httpx.Response(503, json={"error": "overloaded"})
         return build_response("Готово")
 
-    assert await build_client(handler).extract_text(image_base64="QUJD") == "Готово"
+    assert (
+        await build_client(handler).extract_text(
+            image_data_url="data:image/jpeg;base64,QUJD"
+        )
+        == "Готово"
+    )
     assert attempts["count"] == 2
 
 
@@ -64,4 +76,6 @@ async def test_raises_provider_error_after_all_attempts() -> None:
         return httpx.Response(500, json={"error": "boom"})
 
     with pytest.raises(KnowledgeProviderError):
-        await build_client(handler).extract_text(image_base64="QUJD")
+        await build_client(handler).extract_text(
+            image_data_url="data:image/jpeg;base64,QUJD"
+        )

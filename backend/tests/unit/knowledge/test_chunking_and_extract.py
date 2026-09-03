@@ -1,3 +1,4 @@
+import base64
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -6,7 +7,6 @@ import docx
 import pytest
 import xlwt
 from openpyxl import Workbook
-from PIL import Image
 
 from src.knowledge.chunking import chunk_markdown, chunk_text
 from src.knowledge.extract import extract_indexable_text
@@ -34,11 +34,42 @@ def build_legacy_workbook_bytes(rows: list[list], title: str = "Смета") -> 
     return stream.getvalue()
 
 
-def build_image_bytes(color: str = "white", size: tuple[int, int] = (64, 32)) -> bytes:
-    """Собирает минимальный PNG для проверок распознавания."""
-    stream = BytesIO()
-    Image.new("RGB", size, color).save(stream, format="PNG")
-    return stream.getvalue()
+def build_image_bytes() -> bytes:
+    """Возвращает минимальную PNG-подобную фикстуру без графических библиотек."""
+    return b"\x89PNG\r\n\x1a\nvision-fixture"
+
+
+def build_pdf_bytes(text: str = "Project plan") -> bytes:
+    """Собирает минимальный одностраничный PDF только средствами stdlib."""
+    stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("ascii")
+    objects = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        (
+            b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        ),
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        (
+            f"5 0 obj\n<< /Length {len(stream)} >>\nstream\n".encode("ascii")
+            + stream
+            + b"\nendstream\nendobj\n"
+        ),
+    ]
+    content = b"%PDF-1.4\n"
+    offsets: list[int] = []
+    for item in objects:
+        offsets.append(len(content))
+        content += item
+    xref_offset = len(content)
+    content += f"xref\n0 {len(objects) + 1}\n".encode("ascii")
+    content += b"0000000000 65535 f \n"
+    content += b"".join(f"{offset:010} 00000 n \n".encode("ascii") for offset in offsets)
+    content += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{xref_offset}\n%%EOF\n"
+    ).encode("ascii")
+    return content
 
 
 def test_chunk_markdown_keeps_section_headings() -> None:
@@ -76,6 +107,12 @@ async def test_extracts_docx_paragraphs_and_table() -> None:
     assert extracted is not None
     assert "Описание проекта" in extracted
     assert "Риск | Срок" in extracted
+
+
+async def test_extracts_pdf_text_without_image_dependencies() -> None:
+    extracted = await extract_indexable_text("plan.pdf", build_pdf_bytes())
+
+    assert extracted == "Project plan"
 
 
 async def test_skips_unsupported_attachment() -> None:
@@ -129,15 +166,19 @@ async def test_xlsx_without_data_rows_yields_empty_text() -> None:
 
 async def test_recognises_image_through_vision_model() -> None:
     vision = SimpleNamespace(extract_text=AsyncMock(return_value="Схема электрощита"))
+    image = build_image_bytes()
 
     extracted = await extract_indexable_text(
         "схема.png",
-        build_image_bytes(),
+        image,
         vision_client=vision,
     )
 
     assert extracted == "Схема электрощита"
-    assert vision.extract_text.await_args.kwargs["image_base64"]
+    encoded = base64.b64encode(image).decode("ascii")
+    assert vision.extract_text.await_args.kwargs["image_data_url"] == (
+        f"data:image/png;base64,{encoded}"
+    )
 
 
 async def test_skips_image_when_vision_disabled() -> None:
