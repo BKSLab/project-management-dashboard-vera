@@ -1,9 +1,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { Unlink } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { ProjectStage, TaskCompact } from "@/lib/types";
-import { DueDate } from "@/components/ui/DueDate";
-import { PriorityBadge, StatusDot } from "@/components/ui/Badge";
+import { TaskCard } from "@/components/wbs/nodes/TaskCard";
 
 export interface TaskNodeData {
     task: TaskCompact;
@@ -19,39 +17,25 @@ export interface TaskNodeData {
 }
 
 /**
- * Задача внутри ИСР (§22 ТЗ): компактный узел, а не карточка канбана — так на
- * экране помещается заметно больше работ.
+ * Узел графа для задачи: сама карточка плюс точки связи.
  *
- * Карточку можно таскать по холсту: пока от раздела к ней не идёт стрелка,
- * она лежит вне структуры и в проекте ничего не занимает. Клик открывает
- * панель задачи — его обрабатывает canvas, чтобы отличить клик от перетаскивания.
+ * Клик открывает панель задачи — его обрабатывает canvas, чтобы отличить клик
+ * от перетаскивания.
  */
 export function TaskNode({ data, selected }: NodeProps) {
     const { task, stage, detail, isFloating, isDraft, isConnecting, onContextMenu } =
         data as unknown as TaskNodeData;
 
     return (
-        <div
-            onContextMenu={(event) => {
-                event.preventDefault();
-                onContextMenu(task.id, { x: event.clientX, y: event.clientY });
-            }}
-            className={cn(
-                "flex h-full w-full cursor-grab flex-col justify-center gap-1 rounded-[var(--radius-control)] border px-2.5 py-2 text-left",
-                "transition-[background-color,border-color,box-shadow] duration-[var(--duration-normal)]",
-                "ease-[var(--ease-standard)] shadow-card active:cursor-grabbing",
-                // Холст тёмный, поэтому карточка всегда светлее фона: иначе
-                // она с ним сливается.
-                isDraft ? "bg-accent/[0.06]" : isFloating ? "bg-elevated" : "bg-surface-2",
-                isConnecting && "border-accent/70 bg-accent/[0.07] shadow-selected",
-                selected
-                    ? "border-accent/60 bg-elevated shadow-selected"
-                    : isDraft
-                      ? "border-dashed border-accent/55"
-                      : isFloating
-                        ? "border-dashed border-line-strong"
-                        : "border-line hover:border-line-strong hover:bg-elevated",
-            )}
+        <TaskCard
+            task={task}
+            stage={stage}
+            detail={detail}
+            isFloating={isFloating}
+            isDraft={isDraft}
+            isConnecting={isConnecting}
+            isSelected={selected === true}
+            onContextMenu={onContextMenu}
         >
             {/* Концы стрелки: сверху в вертикальной раскладке, слева в горизонтальной. */}
             <Handle
@@ -69,13 +53,6 @@ export function TaskNode({ data, selected }: NodeProps) {
                 className="!size-1.5 !border-0 !bg-accent !opacity-0"
             />
             {/*
-             * Поймать связь должна вся карточка, а не точка на её краю: попасть
-             * мышью в шестипиксельный кружок невозможно, и промах выглядит так,
-             * будто стрелка исчезла. Указатель этот handle не перехватывает —
-             * иначе React Flow пометил бы карточку как nodrag и её нельзя было
-             * бы таскать; связь притягивается к нему геометрически.
-             */}
-            {/*
              * Из этой точки тянут последовательность: стрелка «задача → задача»
              * означает, что вторая работа начинается после первой. Структура и
              * очерёдность — разные вещи, поэтому и точки разные.
@@ -89,9 +66,16 @@ export function TaskNode({ data, selected }: NodeProps) {
                 className={cn(
                     "!size-3 !cursor-crosshair !border-2 !border-surface-2 !bg-[var(--color-warning)]",
                     "transition-[opacity,transform] duration-[var(--duration-fast)]",
-                    isDraft ? "!opacity-0" : "!opacity-60 hover:!scale-125 hover:!opacity-100",
+                    isDraft ? "!opacity-0" : "!opacity-85 hover:!scale-125 hover:!opacity-100",
                 )}
             />
+            {/*
+             * Поймать связь должна вся карточка, а не точка на её краю: попасть
+             * мышью в шестипиксельный кружок невозможно, и промах выглядит так,
+             * будто стрелка исчезла. Указатель этот handle не перехватывает —
+             * иначе React Flow пометил бы карточку как nodrag и её нельзя было
+             * бы таскать; связь притягивается к нему геометрически.
+             */}
             <Handle
                 type="target"
                 id="card"
@@ -111,41 +95,6 @@ export function TaskNode({ data, selected }: NodeProps) {
                     pointerEvents: "none",
                 }}
             />
-
-            <div className="flex shrink-0 items-center justify-between gap-2">
-                <span className="font-mono text-[10px] text-muted">{task.key}</span>
-                <div className="flex items-center gap-1">
-                    {isFloating && (
-                        <Unlink
-                            size={10}
-                            aria-label="Задача вне структуры"
-                            className="text-disabled"
-                        />
-                    )}
-                    <PriorityBadge priority={task.priority} />
-                </div>
-            </div>
-
-            <p
-                className={cn(
-                    "line-clamp-1 shrink-0 text-[12px] leading-snug",
-                    task.is_done ? "text-muted line-through" : "text-secondary",
-                )}
-            >
-                {task.title}
-            </p>
-
-            {detail === "full" && (
-                <div className="flex shrink-0 items-center justify-between gap-2 text-[10px] text-muted">
-                    {stage && (
-                        <span className="inline-flex min-w-0 items-center gap-1">
-                            <StatusDot color={stage.color} />
-                            <span className="truncate">{stage.name}</span>
-                        </span>
-                    )}
-                    <DueDate value={task.due_date} isDone={task.is_done} />
-                </div>
-            )}
-        </div>
+        </TaskCard>
     );
 }

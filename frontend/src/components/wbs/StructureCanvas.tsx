@@ -58,6 +58,7 @@ import {
 } from "@/components/wbs/edges/edgeStyle";
 import { ProjectNode } from "@/components/wbs/nodes/ProjectNode";
 import { SectionNode } from "@/components/wbs/nodes/SectionNode";
+import { TaskCard } from "@/components/wbs/nodes/TaskCard";
 import { TaskNode } from "@/components/wbs/nodes/TaskNode";
 
 /** Пороги semantic zoom (§34 ТЗ): подобраны так, чтобы текст оставался читаемым. */
@@ -206,6 +207,7 @@ function CanvasInner({
      */
     const [poolGhost, setPoolGhost] = useState<{
         rect: ScreenRect;
+        zoom: number;
         task: TaskCompact;
         isTarget: boolean;
     } | null>(null);
@@ -748,7 +750,7 @@ function CanvasInner({
                 const dragged = tasks.find((item) => item.id === parsed.taskId);
                 setPoolGhost(
                     poolOverlap(cardRect) > 0 && dragged !== undefined
-                        ? { rect: cardRect, task: dragged, isTarget: overPool }
+                        ? { rect: cardRect, zoom: getZoom(), task: dragged, isTarget: overPool }
                         : null,
                 );
                 return;
@@ -765,7 +767,7 @@ function CanvasInner({
                     : { movedId: parsed.nodeId, targetId: hit.section.node.id, zone: hit.zone },
             );
         },
-        [nodes, tasks, findSectionAt, resolveTaskDrop, handlers, nodeScreenRect],
+        [nodes, tasks, findSectionAt, resolveTaskDrop, handlers, nodeScreenRect, getZoom],
     );
 
     const handleNodeDragStop: OnNodeDrag = useCallback(
@@ -1104,27 +1106,29 @@ function CanvasInner({
                 </div>
             </div>
 
-            {poolGhost !== null && poolGhost.task !== undefined && (
+            {poolGhost !== null && (
+                // Это та же самая карточка, просто нарисованная поверх страницы:
+                // узел React Flow за границу холста не выйдет, его там обрезает.
                 <div
                     aria-hidden="true"
                     style={{
                         left: poolGhost.rect.x,
                         top: poolGhost.rect.y,
-                        width: poolGhost.rect.width,
-                        minHeight: poolGhost.rect.height,
+                        width: TASK_NODE_SIZE.width,
+                        height: TASK_NODE_SIZE.height,
+                        transform: `scale(${poolGhost.zoom})`,
+                        transformOrigin: "top left",
                     }}
-                    className={cn(
-                        "pointer-events-none fixed z-50 flex flex-col justify-center gap-1",
-                        "rounded-[var(--radius-control)] border bg-elevated px-2.5 py-2 shadow-panel",
-                        poolGhost.isTarget
-                            ? "border-dashed border-accent/70"
-                            : "border-line-strong",
-                    )}
+                    className="pointer-events-none fixed z-50"
                 >
-                    <span className="font-mono text-[10px] text-muted">{poolGhost.task.key}</span>
-                    <p className="line-clamp-2 text-[12px] leading-snug text-secondary">
-                        {poolGhost.task.title}
-                    </p>
+                    <TaskCard
+                        task={poolGhost.task}
+                        stage={stagesById.get(poolGhost.task.stage_id)}
+                        detail={detail}
+                        isFloating={isFloatingTask(poolGhost.task)}
+                        isDraft={false}
+                        isSelected={poolGhost.isTarget}
+                    />
                 </div>
             )}
 
@@ -1187,7 +1191,7 @@ function CanvasHint({
         // Подсказка живёт ровно до тех пор, пока на холсте есть
         // непривязанные карточки: дальше она только мешает.
         message =
-            "Чтобы привязать задачу, потяните синюю точку снизу раздела на её карточку";
+            "Синяя точка снизу раздела — привязать задачу; жёлтая справа у карточки — задать очерёдность";
     }
 
     if (message === null) {
