@@ -95,11 +95,19 @@ export function TaskPool({
             aria-label="Задачи проекта"
             {...{ [POOL_DROP_ATTRIBUTE]: "" }}
             className={cn(
-                "flex w-full shrink-0 flex-col border-r border-line bg-sidebar lg:w-72",
-                "transition-[background-color] duration-[var(--duration-fast)]",
-                isDropTarget && "bg-accent/[0.06]",
+                "relative flex w-full shrink-0 flex-col border-r bg-sidebar lg:w-72",
+                "transition-[background-color,border-color] duration-[var(--duration-fast)]",
+                // Карточку, поднесённую к списку, обрезает граница холста,
+                // поэтому готовность принять её показывает сам список.
+                isDropTarget ? "border-accent/60 bg-accent/[0.08]" : "border-line",
             )}
         >
+            {isDropTarget && (
+                <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-1 rounded-[var(--radius-card)] border-2 border-dashed border-accent/50"
+                />
+            )}
             <div className="flex shrink-0 flex-col gap-2 border-b border-line px-3 py-2.5">
                 <div className="flex items-center justify-between gap-2">
                     <h2 className="text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">

@@ -99,16 +99,22 @@ export function SectionNode({ data, selected }: NodeProps) {
                 className="!opacity-0"
                 isConnectable={false}
             />
-            {/* Из этой точки тянут стрелку к задаче: связь и означает привязку. */}
+            {/*
+             * Из этой точки тянут стрелку к задаче: связь и означает привязку.
+             * Точка видна всегда — иначе про неё невозможно догадаться.
+             */}
             <Handle
                 type="source"
                 id="bottom"
                 position={Position.Bottom}
-                title="Связать с задачей"
+                isConnectableEnd={false}
+                title="Потяните к задаче, чтобы привязать её к разделу"
                 className={cn(
-                    "!size-2.5 !border-2 !border-surface-2 !bg-accent",
-                    "!opacity-0 transition-opacity duration-[var(--duration-fast)]",
-                    !isDraft && "group-hover/section:!opacity-100",
+                    "!size-3 !cursor-crosshair !border-2 !border-surface-2 !bg-accent",
+                    "transition-[opacity,transform] duration-[var(--duration-fast)]",
+                    isDraft
+                        ? "!opacity-0"
+                        : "!opacity-70 group-hover/section:!scale-125 group-hover/section:!opacity-100",
                 )}
             />
 

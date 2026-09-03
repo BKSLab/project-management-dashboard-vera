@@ -8,6 +8,7 @@ import {
     MiniMap,
     ReactFlow,
     ReactFlowProvider,
+    useConnection,
     useReactFlow,
     type Connection,
     type Edge,
@@ -109,6 +110,8 @@ export interface CanvasHandlers {
     onOpenTaskMenu: (taskId: number, anchor: { x: number; y: number }) => void;
     onOpenTask: (taskId: number) => void;
     onPlaceTask: (taskId: number, placement: TaskPlacement) => void;
+    /** Указатель с карточкой над списком задач: пул подсвечивается как цель. */
+    onPoolHover: (isOver: boolean) => void;
     onMoveSection: (nodeId: number, parentId: number | null, beforeId: number | null) => void;
     onAddRootSection: () => void;
 }
@@ -148,6 +151,8 @@ function CanvasInner({
     handlers,
 }: StructureCanvasProps) {
     const { fitView, setCenter, getZoom, screenToFlowPosition } = useReactFlow();
+    // Пока от раздела тянут стрелку, карточки задач подсвечиваются как цели.
+    const isConnecting = useConnection((connection) => connection.inProgress);
     const [flowNodes, setFlowNodes] = useState<Node[]>([]);
     const [flowEdges, setFlowEdges] = useState<Edge[]>([]);
     const [zoom, setZoom] = useState(1);
@@ -360,6 +365,7 @@ function CanvasInner({
                                 stage: stagesById.get(task.stage_id),
                                 detail,
                                 isFloating: isFloatingTask(task),
+                                isConnecting,
                                 isDraft:
                                     task.wbs_node_id !== null && isDraftNodeId(task.wbs_node_id),
                                 onContextMenu: handlers.onOpenTaskMenu,
@@ -383,6 +389,7 @@ function CanvasInner({
             editingNodeId,
             selectedTaskId,
             detail,
+            isConnecting,
             handlers,
         ],
     );
@@ -624,11 +631,12 @@ function CanvasInner({
             }
             const parsed = parseGraphNodeId(node.id);
             if (parsed?.kind === "task") {
-                setTaskDrop(
-                    pointer === null
-                        ? null
-                        : resolveTaskDrop(parsed.taskId, pointer.x, pointer.y),
-                );
+                const drop =
+                    pointer === null ? null : resolveTaskDrop(parsed.taskId, pointer.x, pointer.y);
+                setTaskDrop(drop);
+                // Карточку у списка задач обрезает граница холста, поэтому о
+                // готовности принять её сообщает подсветка самого списка.
+                handlers.onPoolHover(drop?.kind === "pool");
                 return;
             }
             if (parsed?.kind !== "section") {
@@ -643,7 +651,7 @@ function CanvasInner({
                     : { movedId: parsed.nodeId, targetId: hit.section.node.id, zone: hit.zone },
             );
         },
-        [nodes, findSectionAt, resolveTaskDrop],
+        [nodes, findSectionAt, resolveTaskDrop, handlers],
     );
 
     const handleNodeDragStop: OnNodeDrag = useCallback(
@@ -653,6 +661,7 @@ function CanvasInner({
             const pendingSection = sectionDrop;
             setTaskDrop(null);
             setSectionDrop(null);
+            handlers.onPoolHover(false);
 
             if (parsed?.kind === "task") {
                 if (!dragMovedRef.current) {
@@ -859,7 +868,10 @@ function CanvasInner({
                 onEdgesDelete={handleEdgesDelete}
                 onMove={(_event, viewport) => setZoom(viewport.zoom)}
                 nodesConnectable
-                connectionRadius={28}
+                // Пул стоит у левого края: авто-панорамирование при
+                // подтаскивании карточки к нему уводило бы структуру вправо.
+                autoPanOnNodeDrag={false}
+                connectionRadius={130}
                 minZoom={0.25}
                 maxZoom={1.8}
                 fitView
@@ -966,6 +978,7 @@ function CanvasInner({
             </div>
 
             <CanvasHint
+                isConnecting={isConnecting}
                 sectionDrop={sectionDrop}
                 taskDrop={taskDrop}
                 draggingTask={draggingTask}
@@ -977,6 +990,7 @@ function CanvasInner({
 }
 
 interface CanvasHintProps {
+    isConnecting: boolean;
     sectionDrop: SectionDropState | null;
     taskDrop: TaskDropState | null;
     draggingTask: TaskCompact | null;
@@ -986,6 +1000,7 @@ interface CanvasHintProps {
 
 /** Подсказка внизу холста: что произойдёт, если отпустить сейчас. */
 function CanvasHint({
+    isConnecting,
     sectionDrop,
     taskDrop,
     draggingTask,
@@ -995,7 +1010,9 @@ function CanvasHint({
     const title = (nodeId: number) => tree.byId.get(nodeId)?.node.title ?? "";
     let message: string | null = null;
 
-    if (sectionDrop !== null) {
+    if (isConnecting) {
+        message = "Отпустите на карточке задачи — она привяжется к разделу";
+    } else if (sectionDrop !== null) {
         const target = title(sectionDrop.targetId);
         message =
             sectionDrop.zone === "inside"
@@ -1015,6 +1032,11 @@ function CanvasHint({
             dropTargetId === null
                 ? `${draggingTask.key}: на раздел — в структуру, на холст — просто положить`
                 : `Поместить в: ${title(dropTargetId)}`;
+    } else if (tree.floating.length > 0) {
+        // Подсказка живёт ровно до тех пор, пока на холсте есть
+        // непривязанные карточки: дальше она только мешает.
+        message =
+            "Чтобы привязать задачу, потяните синюю точку снизу раздела на её карточку";
     }
 
     if (message === null) {

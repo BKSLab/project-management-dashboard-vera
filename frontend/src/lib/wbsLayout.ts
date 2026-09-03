@@ -46,7 +46,9 @@ export interface WbsLayoutResult {
 export const PROJECT_NODE_SIZE = { width: 240, height: 96 };
 export const SECTION_NODE_SIZE = { width: 220, height: 86 };
 export const NESTED_SECTION_NODE_SIZE = { width: 200, height: 78 };
-export const TASK_NODE_SIZE = { width: 232, height: 62 };
+// Высота считается по содержимому карточки: ключ с бейджем, заголовок и
+// строка стадии со сроком. Если её занизить, заголовок схлопывается в ноль.
+export const TASK_NODE_SIZE = { width: 232, height: 78 };
 
 /** Отступ стопки задач от левого края раздела — место для вертикальной связки. */
 const TASK_STACK_INDENT = 26;

@@ -13,6 +13,8 @@ export interface TaskNodeData {
     isFloating: boolean;
     /** Карточка входит в предложенную ИИ структуру и пока не сохранена. */
     isDraft: boolean;
+    /** От раздела сейчас тянут стрелку: карточка ждёт, что связь бросят в неё. */
+    isConnecting: boolean;
     onContextMenu: (taskId: number, anchor: { x: number; y: number }) => void;
 }
 
@@ -25,7 +27,7 @@ export interface TaskNodeData {
  * панель задачи — его обрабатывает canvas, чтобы отличить клик от перетаскивания.
  */
 export function TaskNode({ data, selected }: NodeProps) {
-    const { task, stage, detail, isFloating, isDraft, onContextMenu } =
+    const { task, stage, detail, isFloating, isDraft, isConnecting, onContextMenu } =
         data as unknown as TaskNodeData;
 
     return (
@@ -38,31 +40,55 @@ export function TaskNode({ data, selected }: NodeProps) {
                 "flex h-full w-full cursor-grab flex-col justify-center gap-1 rounded-[var(--radius-control)] border px-2.5 py-2 text-left",
                 "transition-[background-color,border-color,box-shadow] duration-[var(--duration-normal)]",
                 "ease-[var(--ease-standard)] shadow-card active:cursor-grabbing",
-                isDraft ? "bg-accent/[0.06]" : "bg-surface",
+                // Холст тёмный, поэтому карточка всегда светлее фона: иначе
+                // она с ним сливается.
+                isDraft ? "bg-accent/[0.06]" : isFloating ? "bg-elevated" : "bg-surface-2",
+                isConnecting && "border-accent/70 bg-accent/[0.07] shadow-selected",
                 selected
                     ? "border-accent/60 bg-elevated shadow-selected"
                     : isDraft
                       ? "border-dashed border-accent/55"
                       : isFloating
-                        ? "border-dashed border-line"
-                        : "border-line-subtle hover:border-line hover:bg-surface-2",
+                        ? "border-dashed border-line-strong"
+                        : "border-line hover:border-line-strong hover:bg-elevated",
             )}
         >
+            {/* Видимый конец стрелки: к нему привязана отрисовка связи. */}
             <Handle
                 type="target"
                 id="left"
                 position={Position.Left}
-                className="!size-2 !border-0 !bg-accent !opacity-0 hover:!opacity-100"
+                isConnectableStart={false}
+                className="!size-1.5 !border-0 !bg-accent !opacity-0"
             />
+            {/*
+             * Поймать связь должна вся карточка, а не точка на её краю: попасть
+             * мышью в шестипиксельный кружок невозможно, и промах выглядит так,
+             * будто стрелка исчезла. Указатель этот handle не перехватывает —
+             * иначе React Flow пометил бы карточку как nodrag и её нельзя было
+             * бы таскать; связь притягивается к нему геометрически.
+             */}
             <Handle
                 type="target"
-                id="top"
-                position={Position.Top}
-                className="!opacity-0"
-                isConnectable={false}
+                id="card"
+                position={Position.Left}
+                isConnectableStart={false}
+                style={{
+                    position: "absolute",
+                    inset: 0,
+                    width: "100%",
+                    height: "100%",
+                    transform: "none",
+                    minWidth: 0,
+                    minHeight: 0,
+                    border: 0,
+                    borderRadius: "var(--radius-control)",
+                    background: "transparent",
+                    pointerEvents: "none",
+                }}
             />
 
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex shrink-0 items-center justify-between gap-2">
                 <span className="font-mono text-[10px] text-muted">{task.key}</span>
                 <div className="flex items-center gap-1">
                     {isFloating && (
@@ -78,7 +104,7 @@ export function TaskNode({ data, selected }: NodeProps) {
 
             <p
                 className={cn(
-                    "line-clamp-1 text-[12px] leading-snug",
+                    "line-clamp-1 shrink-0 text-[12px] leading-snug",
                     task.is_done ? "text-muted line-through" : "text-secondary",
                 )}
             >
@@ -86,7 +112,7 @@ export function TaskNode({ data, selected }: NodeProps) {
             </p>
 
             {detail === "full" && (
-                <div className="flex items-center justify-between gap-2 text-[10px] text-muted">
+                <div className="flex shrink-0 items-center justify-between gap-2 text-[10px] text-muted">
                     {stage && (
                         <span className="inline-flex min-w-0 items-center gap-1">
                             <StatusDot color={stage.color} />

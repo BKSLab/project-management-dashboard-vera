@@ -121,6 +121,7 @@ export function StructurePage() {
             onOpenTaskMenu: (taskId, anchor) => setMenu({ kind: "task", taskId, anchor }),
             onOpenTask: setSelectedTaskId,
             onPlaceTask: handlePlaceTask,
+            onPoolHover: setPoolDropTarget,
             onMoveSection: (nodeId, parentId, beforeId) =>
                 mutations.moveNode.mutate({ nodeId, parentId, beforeId }),
             onAddRootSection: () => setCreateParentId(null),
