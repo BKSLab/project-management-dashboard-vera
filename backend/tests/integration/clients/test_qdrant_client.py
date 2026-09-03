@@ -192,9 +192,11 @@ async def test_task_upsert_preserves_comment_and_attachment_points(qdrant_url: s
         embedding_batch_size=32,
         chunk_target_chars=2200,
         chunk_overlap_chars=300,
+        extract_max_chars=350_000,
         runtime=SimpleNamespace(
             embedding_client=embedding_client,
             qdrant_client=client,
+            vision_client=None,
         ),
     )
     try:

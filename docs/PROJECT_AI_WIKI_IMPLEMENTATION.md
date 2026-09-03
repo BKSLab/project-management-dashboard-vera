@@ -12,6 +12,7 @@
 | [FASTAPI_PATTERNS.md](../FASTAPI_PATTERNS.md) | слои endpoint → service → repository, DI, lifespan внешних клиентов, исключения, Alembic и пирамида тестов | Да, это архитектурный стандарт репозитория |
 | `C:\work\biocard\projects\biocard-wiki` | референс разделения PostgreSQL/Qdrant, Markdown chunking и общего RAG-контура | Нет; код и данные проекта не импортируются |
 | `C:\work\BKS.Lab\python\my_projects\vera_rag_service` | референс извлечения PDF/DOCX/Markdown/TXT, ограничения PDF и проверки ответов AI API | Нет; реализация адаптирована внутри этого репозитория |
+| `C:\work\biocard\projects\FileTextParser` | референс разбора Excel (скрытые строки, объединённые ячейки, плоские записи) и распознавания изображений vision-моделью | Нет; логика перенесена и адаптирована под async-контур и настройки этого репозитория |
 
 Внешние проекты использовались только как локальные референсы. Для сборки и запуска AI-вики они не требуются.
 
@@ -227,10 +228,16 @@ Builders находятся в [`knowledge/documents.py`](../backend/src/knowled
 |---|---|
 | `.pdf` | `pdfplumber`, текст страниц по порядку, максимум 2000 страниц |
 | `.docx` | `python-docx`, параграфы и строки таблиц в порядке XML-блоков |
-| `.md`, `.txt` | UTF-8 с безопасной заменой некорректных байтов |
+| `.md`, `.txt`, `.csv`, `.log` | подбор кодировки: utf-8, затем уверенная догадка `chardet`, затем cp1251 |
+| `.xlsx`, `.xlsm`, `.xls` | `openpyxl`/`xlrd`, все видимые листы, см. ниже |
+| `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.gif` | распознавание vision-моделью через [`clients/vision.py`](../backend/src/clients/vision.py) |
 | остальные | не индексируются, но остаются обычными Task Attachment |
 
-Разбор выполняется через `asyncio.to_thread`, поэтому синхронные PDF/DOCX-библиотеки не блокируют event loop. Ошибка или пустой текст отдельного вложения логируется, вложение пропускается, а остальная индексация проекта продолжается. OCR, старый `.doc`, RTF, Excel, PowerPoint и распознавание текста на изображениях не входят в текущую реализацию.
+Разбор Excel ([`knowledge/excel.py`](../backend/src/knowledge/excel.py)) идёт по реальному формату книги, а не по расширению: сначала пробуется `openpyxl`, затем `xlrd`. Скрытые листы и скрытые (в том числе свёрнутые группировкой) строки пропускаются, объединённые ячейки разворачиваются в каждую ячейку диапазона, первая видимая строка листа считается шапкой. Каждая строка данных превращается в запись `колонка: значение, колонка: значение`, а лист предваряется строкой `Лист: <название>` — плоский формат, который эмбеддинг понимает лучше, чем реконструированную таблицу.
+
+Изображения ([`knowledge/images.py`](../backend/src/knowledge/images.py)) приводятся к RGB, ужимаются до 2048 px по большей стороне и уходят в vision-модель одним JPEG в base64. Локального OCR нет намеренно: модель читает и рукописные пометки, и схемы, и таблицы на скриншотах, чего Tesseract не даёт. Формат `.avif` разрешён к загрузке, но не индексируется — Pillow собран без его поддержки.
+
+Разбор файлов выполняется через `asyncio.to_thread`, поэтому синхронные библиотеки не блокируют event loop; сетевой вызов vision-модели асинхронный. Ошибка разбора или пустой текст отдельного вложения логируется, вложение пропускается, а остальная индексация проекта продолжается — но недоступность vision-модели (`KnowledgeProviderError`) сознательно пробрасывается наверх, чтобы job ушла на повторную попытку, а не потеряла содержимое навсегда. Текст длиннее `KNOWLEDGE_EXTRACT_MAX_CHARS` обрезается. Старый `.doc`, RTF, ODF и PowerPoint не входят в текущую реализацию.
 
 ## 7. Матрица событий индексации
 
@@ -386,6 +393,10 @@ API следует [Depends-архитектуре](../FASTAPI_PATTERNS.md#6-dep
 | `LLM_MODEL` | общая модель для последующих AI-сценариев | `google/gemini-3.7-flash` |
 | `LLM_TIMEOUT` | таймаут запроса, секунды | `300` |
 | `LLM_RETRIES` | число попыток клиента | `3` |
+| `VISION_MODEL` | модель распознавания изображений | `google/gemini-3.7-flash` |
+| `VISION_MAX_TOKENS` | лимит ответа vision-модели | `4000` |
+
+Vision-клиент переиспользует `LLM_API_URL`, `LLM_API_KEY`, `LLM_TIMEOUT` и `LLM_RETRIES`: это тот же OpenAI-совместимый Chat Completions endpoint, отличается только модель.
 
 ### 12.2. Embeddings
 
@@ -412,6 +423,10 @@ API следует [Depends-архитектуре](../FASTAPI_PATTERNS.md#6-dep
 | `KNOWLEDGE_CHUNK_TARGET_CHARS` | целевой размер chunk | `2200` |
 | `KNOWLEDGE_CHUNK_OVERLAP_CHARS` | overlap соседних chunks | `300` |
 | `KNOWLEDGE_AGENT_SEMANTIC_LIMIT` | максимум retrieval hits | `10` |
+| `KNOWLEDGE_VISION_ENABLED` | распознавание изображений vision-моделью | `true` |
+| `KNOWLEDGE_EXTRACT_MAX_CHARS` | предел текста одного вложения | `350000` |
+
+При `KNOWLEDGE_VISION_ENABLED=false` изображения загружаются как обычно, но в индекс не попадают: остальные форматы не затрагиваются.
 
 Размерность модели и `EMBEDDING_DIM` обязаны совпадать. После смены embedding-модели или размерности нужен полный reindex всех проектов.
 
@@ -464,6 +479,8 @@ docker compose logs -f backend
 - access control: все knowledge endpoints закрыты authentication/project access;
 - repository integration: дедупликация, claim и successful state постоянной очереди;
 - unit: Markdown chunking, детерминированность, DOCX paragraphs/tables, пропуск неподдерживаемых файлов;
+- unit извлечения: CSV в cp1251, книги `.xlsx`/`.xls` со скрытыми строками и объединёнными ячейками, выравнивание нумерации строк для таблицы не с первой строки, повреждённая книга, распознавание изображения и его пропуск при выключенной vision-модели, обрезка по лимиту;
+- unit vision-клиента: формирование data URL, склейка multipart-ответа, retry и переход в `KnowledgeProviderError`; отдельно — что недоступность vision-модели роняет job, а не пропускает вложение;
 - unit: отказ очереди не ломает доменную операцию, `KNOWLEDGE_ENABLED=false` отключает события;
 - unit: Agent объединяет SQL и semantic context и продолжает работать без semantic provider;
 - unit: создание/semantic update Task ставят upsert, operational update и Kanban move не запускают embedding.

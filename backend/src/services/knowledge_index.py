@@ -10,6 +10,7 @@ from src.db.models.knowledge_index_jobs import (
     KnowledgeIndexJob,
     KnowledgeIndexOperation,
 )
+from src.exceptions.knowledge import KnowledgeProviderError
 from src.knowledge.documents import (
     KnowledgeDocument,
     build_attachment_chunks,
@@ -62,6 +63,7 @@ class KnowledgeIndexService:
         embedding_batch_size: int,
         chunk_target_chars: int,
         chunk_overlap_chars: int,
+        extract_max_chars: int,
         runtime: KnowledgeRuntime | None = None,
     ) -> None:
         self.projects_repository = projects_repository
@@ -74,6 +76,7 @@ class KnowledgeIndexService:
         self.embedding_batch_size = embedding_batch_size
         self.chunk_target_chars = chunk_target_chars
         self.chunk_overlap_chars = chunk_overlap_chars
+        self.extract_max_chars = extract_max_chars
         self.milestones_repository = milestones_repository
         self.runtime = runtime or get_knowledge_runtime()
 
@@ -375,11 +378,17 @@ class KnowledgeIndexService:
         try:
             path = self.attachment_storage.resolve(attachment.storage_key)
             content = await asyncio.to_thread(path.read_bytes)
-            extracted = await asyncio.to_thread(
-                extract_indexable_text,
+            extracted = await extract_indexable_text(
                 attachment.original_name,
                 content,
+                vision_client=self.runtime.vision_client,
+                max_chars=self.extract_max_chars,
             )
+        except KnowledgeProviderError:
+            # Недоступность vision-модели — временная: файл разобрать можно,
+            # просто не сейчас. Пропустить его здесь значило бы навсегда
+            # потерять содержимое, поэтому job уходит на повторную попытку.
+            raise
         except Exception:
             logger.warning(
                 "⚠️ Вложение id=%s не удалось извлечь, оно пропущено при индексации.",

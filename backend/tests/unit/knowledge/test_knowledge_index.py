@@ -1,8 +1,10 @@
 from datetime import UTC, datetime
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
 
 import pytest
+from PIL import Image
 
 from src.db.models.documents import Document
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType, KnowledgeIndexOperation
@@ -11,6 +13,7 @@ from src.db.models.projects import Project
 from src.db.models.task_attachments import TaskAttachment
 from src.db.models.task_comments import TaskComment
 from src.db.models.tasks import Task
+from src.exceptions.knowledge import KnowledgeProviderError
 from src.knowledge.documents import build_attachment_chunks, build_comment_document
 from src.repositories.documents import DocumentsRepository
 from src.repositories.milestones import MilestonesRepository
@@ -58,7 +61,12 @@ def build_service(tmp_path):
         delete_entity=AsyncMock(),
         upsert_documents=AsyncMock(),
     )
-    runtime = SimpleNamespace(embedding_client=embedding, qdrant_client=qdrant)
+    vision = SimpleNamespace(extract_text=AsyncMock(return_value="текст с картинки"))
+    runtime = SimpleNamespace(
+        embedding_client=embedding,
+        qdrant_client=qdrant,
+        vision_client=vision,
+    )
     service = KnowledgeIndexService(
         projects_repository=projects,
         tasks_repository=tasks,
@@ -71,6 +79,7 @@ def build_service(tmp_path):
         embedding_batch_size=32,
         chunk_target_chars=2200,
         chunk_overlap_chars=300,
+        extract_max_chars=350_000,
         runtime=runtime,
     )
     return service, project, task, runtime, documents, attachments
@@ -234,6 +243,33 @@ async def test_upsert_multichunk_entity_deletes_old_chunks_before_writing(
     )
     assert manager.mock_calls[1].args == ()
     assert manager.mock_calls[1].kwargs["project_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_unavailable_vision_model_fails_job_instead_of_skipping_image(tmp_path) -> None:
+    service, project, task, runtime, _, attachments = build_service(tmp_path)
+    storage_name = "schema.png"
+    service.attachment_storage.resolve.return_value = tmp_path / storage_name
+    attachments.get_by_id.return_value = TaskAttachment(
+        id=11,
+        task_id=task.id,
+        original_name=storage_name,
+        storage_key=f"tasks/7/{storage_name}",
+        content_type="image/png",
+        size=10,
+        created_at=datetime.now(UTC),
+    )
+    stream = BytesIO()
+    Image.new("RGB", (8, 8), "white").save(stream, format="PNG")
+    (tmp_path / storage_name).write_bytes(stream.getvalue())
+    runtime.vision_client.extract_text.side_effect = KnowledgeProviderError("vision API недоступен")
+
+    with pytest.raises(KnowledgeProviderError):
+        await service.process(
+            make_job(KnowledgeIndexOperation.UPSERT, KnowledgeEntityType.ATTACHMENT, 11)
+        )
+
+    runtime.qdrant_client.upsert_documents.assert_not_awaited()
 
 
 def test_comment_document_does_not_depend_on_mutable_task_title(tmp_path) -> None:
