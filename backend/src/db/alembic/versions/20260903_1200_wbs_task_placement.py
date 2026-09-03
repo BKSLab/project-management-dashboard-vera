@@ -1,7 +1,7 @@
 """wbs task placement
 
 Revision ID: b7d41f0ac9e2
-Revises: a38d5b72c104
+Revises: b61c8d3f4a72
 Create Date: 2026-09-03 12:00:00.000000
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b7d41f0ac9e2"
-down_revision: Union[str, Sequence[str], None] = "a38d5b72c104"
+down_revision: Union[str, Sequence[str], None] = "b61c8d3f4a72"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
