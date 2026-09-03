@@ -1,5 +1,11 @@
 import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath, type EdgeProps } from "@xyflow/react";
 import { X } from "lucide-react";
+import {
+    EDGE_ACCENT_COLOR,
+    EDGE_ACCENT_WIDTH,
+    EDGE_COLOR,
+    EDGE_WIDTH,
+} from "@/components/wbs/edges/edgeStyle";
 
 export interface AttachmentEdgeData {
     taskId: number;
@@ -17,6 +23,7 @@ export interface AttachmentEdgeData {
  */
 export function AttachmentEdge({
     id,
+    markerEnd,
     sourceX,
     sourceY,
     targetX,
@@ -44,11 +51,12 @@ export function AttachmentEdge({
                 id={id}
                 path={path}
                 style={{
-                    stroke: isAccented ? "var(--color-accent)" : "var(--color-border-strong)",
-                    strokeWidth: isAccented ? 1.6 : 1,
-                    strokeDasharray: isDraft ? "4 3" : undefined,
-                    opacity: isAccented ? 0.85 : 0.5,
+                    stroke: isAccented ? EDGE_ACCENT_COLOR : EDGE_COLOR,
+                    strokeWidth: isAccented ? EDGE_ACCENT_WIDTH : EDGE_WIDTH,
+                    strokeDasharray: isDraft ? "5 4" : undefined,
+                    opacity: 1,
                 }}
+                markerEnd={markerEnd}
             />
             {selected === true && !isDraft && (
                 <EdgeLabelRenderer>

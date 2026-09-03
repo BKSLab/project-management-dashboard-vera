@@ -5,6 +5,7 @@ import {
     Background,
     BackgroundVariant,
     Controls,
+    MarkerType,
     MiniMap,
     ReactFlow,
     ReactFlowProvider,
@@ -47,6 +48,12 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Field";
 import { EmptyState } from "@/components/ui/States";
 import { AttachmentEdge } from "@/components/wbs/edges/AttachmentEdge";
+import {
+    EDGE_ACCENT_COLOR,
+    EDGE_ACCENT_WIDTH,
+    EDGE_COLOR,
+    EDGE_WIDTH,
+} from "@/components/wbs/edges/edgeStyle";
 import { ProjectNode } from "@/components/wbs/nodes/ProjectNode";
 import { SectionNode } from "@/components/wbs/nodes/SectionNode";
 import { TaskNode } from "@/components/wbs/nodes/TaskNode";
@@ -159,6 +166,13 @@ function CanvasInner({
     const [dropTargetId, setDropTargetId] = useState<number | null>(null);
     const [sectionDrop, setSectionDrop] = useState<SectionDropState | null>(null);
     const [taskDrop, setTaskDrop] = useState<TaskDropState | null>(null);
+    /**
+     * Карточку у края холста обрезает область React Flow, поэтому над
+     * списком задач за курсором едет её двойник поверх всей страницы.
+     */
+    const [poolGhost, setPoolGhost] = useState<{ x: number; y: number; task: TaskCompact } | null>(
+        null,
+    );
     const [search, setSearch] = useState("");
     const [isSearchOpen, setSearchOpen] = useState(false);
     const layoutRequestRef = useRef(0);
@@ -252,6 +266,14 @@ function CanvasInner({
                             sourceHandle: layoutMode === "vertical" ? "bottom" : "right",
                             targetHandle: layoutMode === "vertical" ? "top" : "left",
                             type: isAttachment ? "attachment" : "smoothstep",
+                            markerEnd: isAttachment
+                                ? {
+                                      type: MarkerType.ArrowClosed,
+                                      width: 14,
+                                      height: 14,
+                                      color: EDGE_COLOR,
+                                  }
+                                : undefined,
                             selectable: isAttachment && !isDraft,
                             deletable: isAttachment && !isDraft,
                             data:
@@ -421,12 +443,8 @@ function CanvasInner({
                     : {
                           ...edge,
                           style: selectedPathEdgeIds.has(edge.id)
-                              ? { stroke: "var(--color-accent)", strokeWidth: 1.5, opacity: 0.78 }
-                              : {
-                                    stroke: "var(--color-border-strong)",
-                                    strokeWidth: 1,
-                                    opacity: 0.52,
-                                },
+                              ? { stroke: EDGE_ACCENT_COLOR, strokeWidth: EDGE_ACCENT_WIDTH, opacity: 1 }
+                              : { stroke: EDGE_COLOR, strokeWidth: EDGE_WIDTH, opacity: 1 },
                       },
             );
     }, [decoratedNodes, flowEdges, selectedPathEdgeIds, detachTask]);
@@ -628,9 +646,19 @@ function CanvasInner({
                 const drop =
                     pointer === null ? null : resolveTaskDrop(parsed.taskId, pointer.x, pointer.y);
                 setTaskDrop(drop);
-                // Карточку у списка задач обрезает граница холста, поэтому о
-                // готовности принять её сообщает подсветка самого списка.
-                handlers.onPoolHover(drop?.kind === "pool");
+                // Список задач подсвечивается как цель, а сама карточка
+                // показывается двойником: настоящий узел за границу не выйдет.
+                const overPool = drop?.kind === "pool";
+                handlers.onPoolHover(overPool);
+                setPoolGhost(
+                    overPool && pointer !== null
+                        ? {
+                              x: pointer.x,
+                              y: pointer.y,
+                              task: tasks.find((item) => item.id === parsed.taskId) as TaskCompact,
+                          }
+                        : null,
+                );
                 return;
             }
             if (parsed?.kind !== "section") {
@@ -645,7 +673,7 @@ function CanvasInner({
                     : { movedId: parsed.nodeId, targetId: hit.section.node.id, zone: hit.zone },
             );
         },
-        [nodes, findSectionAt, resolveTaskDrop, handlers],
+        [nodes, tasks, findSectionAt, resolveTaskDrop, handlers],
     );
 
     const handleNodeDragStop: OnNodeDrag = useCallback(
@@ -656,6 +684,7 @@ function CanvasInner({
             setTaskDrop(null);
             setSectionDrop(null);
             handlers.onPoolHover(false);
+            setPoolGhost(null);
 
             if (parsed?.kind === "task") {
                 if (!dragMovedRef.current) {
@@ -970,6 +999,20 @@ function CanvasInner({
                     </Button>
                 </div>
             </div>
+
+            {poolGhost !== null && poolGhost.task !== undefined && (
+                <div
+                    aria-hidden="true"
+                    style={{ left: poolGhost.x, top: poolGhost.y }}
+                    className="pointer-events-none fixed z-50 w-56 -translate-x-1/2 -translate-y-1/2 rounded-[var(--radius-control)] border border-dashed border-accent/70 bg-elevated px-2.5 py-2 shadow-panel"
+                >
+                    <span className="font-mono text-[10px] text-muted">{poolGhost.task.key}</span>
+                    <p className="line-clamp-1 text-[12px] leading-snug text-secondary">
+                        {poolGhost.task.title}
+                    </p>
+                    <p className="mt-0.5 text-[10px] text-accent">Вернуть в список задач</p>
+                </div>
+            )}
 
             <CanvasHint
                 isConnecting={isConnecting}
