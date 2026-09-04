@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .project_members import ProjectMember
     from .project_milestones import ProjectMilestone
     from .project_stages import ProjectStage
+    from .project_stickers import ProjectSticker
     from .task_dependencies import TaskDependency
     from .tasks import Task
     from .users import User
@@ -158,6 +159,12 @@ class Project(Base, TimestampMixin):
     )
     documents: Mapped[list[Document]] = relationship(
         "Document",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    stickers: Mapped[list[ProjectSticker]] = relationship(
+        "ProjectSticker",
         back_populates="project",
         cascade="all, delete-orphan",
         passive_deletes=True,
