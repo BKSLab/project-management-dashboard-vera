@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, HTTPException, Path, Response, status
 
 from src.api.v1.responses import (
     CONFLICT_RESPONSE,
@@ -12,6 +12,7 @@ from src.api.v1.responses import (
 from src.dependencies.access import AccessibleProjectDep, OwnedProjectDep
 from src.dependencies.services import ProjectMembersServiceDep
 from src.exceptions.projects import ProjectsServiceError
+from src.exceptions.users import UsersServiceError
 from src.schemas.project_members import ProjectMemberCreateSchema, ProjectMemberSchema
 
 router = APIRouter(tags=["project-members"])
@@ -37,6 +38,47 @@ async def get_project_members(
         return await service.get_member_list(project_id=project.id)
     except ProjectsServiceError as error:
         logger.exception("❌ Ошибка GET /projects/%s/members.", project.id)
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+@router.get(
+    path="/projects/{project_id}/members/{user_id}/avatar",
+    status_code=status.HTTP_200_OK,
+    summary="Получить фотографию участника проекта",
+    description="Отдаёт фотографию только текущего участника доступного проекта.",
+    operation_id="getProjectMemberAvatar",
+    responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
+    response_class=Response,
+)
+async def get_project_member_avatar(
+    project: AccessibleProjectDep,
+    user_id: Annotated[int, Path(gt=0, description="Идентификатор участника.")],
+    service: ProjectMembersServiceDep,
+) -> Response:
+    """Не раскрывает фотографии и существование пользователей вне команды."""
+    logger.info("🚀 Запрос GET /projects/%s/members/%s/avatar.", project.id, user_id)
+    try:
+        content, content_type = await service.get_member_avatar(
+            project_id=project.id,
+            user_id=user_id,
+        )
+        logger.info(
+            "✅ Фотография участника id=%s проекта id=%s получена.",
+            user_id,
+            project.id,
+        )
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers={"Cache-Control": "private, max-age=300", "Vary": "Cookie"},
+        )
+    except (ProjectsServiceError, UsersServiceError) as error:
+        logger.info(
+            "ℹ️ Фотография участника id=%s проекта id=%s недоступна: %s",
+            user_id,
+            project.id,
+            error,
+        )
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 

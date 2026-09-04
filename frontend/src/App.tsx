@@ -33,6 +33,11 @@ const ProjectCalendarPage = lazy(() =>
         default: module.ProjectCalendarPage,
     })),
 );
+const ProjectBoardPage = lazy(() =>
+    import("@/routes/ProjectBoardPage").then((module) => ({
+        default: module.ProjectBoardPage,
+    })),
+);
 
 function StructureFallback() {
     return (
@@ -48,6 +53,19 @@ function CalendarFallback() {
         <div role="status" aria-label="Загрузка календаря" className="flex h-full gap-3 p-4">
             <Skeleton className="h-full w-72 shrink-0" />
             <Skeleton className="h-full flex-1" />
+        </div>
+    );
+}
+
+function ProjectBoardFallback() {
+    return (
+        <div role="status" aria-label="Загрузка доски" className="p-4 sm:p-5">
+            <Skeleton className="mb-5 h-10 w-56" />
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                <Skeleton className="h-56" />
+                <Skeleton className="h-56" />
+                <Skeleton className="h-56" />
+            </div>
         </div>
     );
 }
@@ -81,6 +99,14 @@ function ProtectedApp() {
                             element={
                                 <Suspense fallback={<StructureFallback />}>
                                     <StructurePage />
+                                </Suspense>
+                            }
+                        />
+                        <Route
+                            path="whiteboard"
+                            element={
+                                <Suspense fallback={<ProjectBoardFallback />}>
+                                    <ProjectBoardPage />
                                 </Suspense>
                             }
                         />

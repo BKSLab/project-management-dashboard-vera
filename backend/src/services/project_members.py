@@ -21,6 +21,7 @@ from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.users import UsersRepository
 from src.schemas.project_members import ProjectMemberSchema
 from src.services.auth import to_user_summary
+from src.services.users import UsersService
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +43,14 @@ class ProjectMembersService:
         participants_repository: TaskParticipantsRepository,
         tasks_repository: TasksRepository,
         unit_of_work: UnitOfWork,
+        users_service: UsersService,
     ):
         self.members_repository = members_repository
         self.users_repository = users_repository
         self.participants_repository = participants_repository
         self.tasks_repository = tasks_repository
         self.unit_of_work = unit_of_work
+        self.users_service = users_service
 
     async def get_member_list(self, project_id: int) -> list[ProjectMemberSchema]:
         """Возвращает только участников указанного доступного проекта."""
@@ -88,6 +91,24 @@ class ProjectMembersService:
         except RepositoryErrors as error:
             logger.error(
                 "❌ Ошибка добавления пользователя в проект id=%s.",
+                project_id,
+                exc_info=True,
+            )
+            raise ProjectsServiceError(str(error)) from error
+
+    async def get_member_avatar(self, project_id: int, user_id: int) -> tuple[bytes, str]:
+        """Отдаёт фотографию, только пока пользователь состоит в проекте."""
+        try:
+            member = await self.members_repository.get(project_id=project_id, user_id=user_id)
+            if member is None:
+                raise ProjectMemberNotFoundError(user_id=user_id)
+            return await self.users_service.get_avatar(user_id=user_id)
+        except ProjectMemberNotFoundError:
+            raise
+        except ProjectsRepositoryError as error:
+            logger.error(
+                "❌ Ошибка получения фотографии участника id=%s проекта id=%s.",
+                user_id,
                 project_id,
                 exc_info=True,
             )

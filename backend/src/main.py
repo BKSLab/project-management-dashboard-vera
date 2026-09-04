@@ -21,6 +21,7 @@ from src.api.v1.endpoints.knowledge import router as knowledge_router
 from src.api.v1.endpoints.milestones import router as milestones_router
 from src.api.v1.endpoints.project_members import router as project_members_router
 from src.api.v1.endpoints.project_stages import router as project_stages_router
+from src.api.v1.endpoints.project_stickers import router as project_stickers_router
 from src.api.v1.endpoints.projects import router as projects_router
 from src.api.v1.endpoints.task_activity import router as task_activity_router
 from src.api.v1.endpoints.task_attachments import router as task_attachments_router
@@ -144,6 +145,7 @@ for api_router in (
     calendar_scenarios_router,
     milestones_router,
     projects_router,
+    project_stickers_router,
     project_members_router,
     project_stages_router,
     tasks_router,

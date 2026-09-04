@@ -93,6 +93,13 @@ export const endpoints = {
     projectMembers: (projectId: number) => `${V1}/projects/${projectId}/members`,
     projectMember: (projectId: number, userId: number) =>
         `${V1}/projects/${projectId}/members/${userId}`,
+    projectMemberAvatar: (projectId: number, userId: number) =>
+        `${V1}/projects/${projectId}/members/${userId}/avatar`,
+    projectStickers: (projectId: number) => `${V1}/projects/${projectId}/board/stickers`,
+    projectSticker: (projectId: number, stickerId: number) =>
+        `${V1}/projects/${projectId}/board/stickers/${stickerId}`,
+    projectStickerPosition: (projectId: number, stickerId: number) =>
+        `${V1}/projects/${projectId}/board/stickers/${stickerId}/position`,
     projectKnowledgeStatus: (projectId: number) =>
         `${V1}/projects/${projectId}/knowledge/status`,
     projectKnowledgeAsk: (projectId: number) => `${V1}/projects/${projectId}/knowledge/ask`,
@@ -156,6 +163,7 @@ export const queryKeys = {
     project: (projectId: number) => ["projects", projectId] as const,
     projectStats: (projectId: number) => ["projects", projectId, "stats"] as const,
     projectMembers: (projectId: number) => ["projects", projectId, "members"] as const,
+    projectStickers: (projectId: number) => ["projects", projectId, "board-stickers"] as const,
     projectKnowledgeStatus: (projectId: number) =>
         ["projects", projectId, "knowledge", "status"] as const,
     stages: (projectId: number) => ["projects", projectId, "stages"] as const,

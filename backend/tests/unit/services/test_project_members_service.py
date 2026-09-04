@@ -8,6 +8,7 @@ from src.db.models.project_members import ProjectRole
 from src.db.models.task_participants import TaskParticipantRole
 from src.exceptions.projects import (
     ProjectMemberAlreadyExistsError,
+    ProjectMemberNotFoundError,
     ProjectMemberUserNotFoundError,
     ProjectOwnerRemovalError,
 )
@@ -17,6 +18,7 @@ from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.users import UsersRepository
 from src.services.project_members import ProjectMembersService
+from src.services.users import UsersService
 
 
 def user(user_id: int, username: str = "member", *, active: bool = True) -> SimpleNamespace:
@@ -53,6 +55,7 @@ def build_service(
     participants: AsyncMock | None = None,
     tasks: AsyncMock | None = None,
     unit_of_work: AsyncMock | None = None,
+    users_service: AsyncMock | None = None,
 ) -> ProjectMembersService:
     return ProjectMembersService(
         members_repository=members or AsyncMock(spec=ProjectMembersRepository),
@@ -60,6 +63,7 @@ def build_service(
         participants_repository=participants or AsyncMock(spec=TaskParticipantsRepository),
         tasks_repository=tasks or AsyncMock(spec=TasksRepository),
         unit_of_work=unit_of_work or AsyncMock(spec=UnitOfWork),
+        users_service=users_service or AsyncMock(spec=UsersService),
     )
 
 
@@ -159,3 +163,35 @@ async def test_owner_cannot_be_removed() -> None:
         await build_service(members=members).remove_member(project_id=1, user_id=1)
 
     members.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_member_avatar_is_read_only_for_current_project_member() -> None:
+    members = AsyncMock(spec=ProjectMembersRepository)
+    members.get.return_value = member(2)
+    users_service = AsyncMock(spec=UsersService)
+    users_service.get_avatar.return_value = (b"image", "image/webp")
+
+    result = await build_service(
+        members=members,
+        users_service=users_service,
+    ).get_member_avatar(project_id=1, user_id=2)
+
+    assert result == (b"image", "image/webp")
+    users_service.get_avatar.assert_awaited_once_with(user_id=2)
+
+
+@pytest.mark.asyncio
+async def test_removed_member_avatar_is_not_requested_from_user_service() -> None:
+    members = AsyncMock(spec=ProjectMembersRepository)
+    members.get.return_value = None
+    users_service = AsyncMock(spec=UsersService)
+
+    with pytest.raises(ProjectMemberNotFoundError) as error:
+        await build_service(
+            members=members,
+            users_service=users_service,
+        ).get_member_avatar(project_id=1, user_id=2)
+
+    assert getattr(error.value, "status_code", None) == 404
+    users_service.get_avatar.assert_not_awaited()

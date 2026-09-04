@@ -12,6 +12,7 @@ from src.dependencies.repositories import (
     ProjectMembersRepositoryDep,
     ProjectsRepositoryDep,
     ProjectStagesRepositoryDep,
+    ProjectStickersRepositoryDep,
     TaskActivityRepositoryDep,
     TaskAttachmentsRepositoryDep,
     TaskCommentsRepositoryDep,
@@ -35,6 +36,7 @@ from src.services.milestones import MilestonesService
 from src.services.project_agent import ProjectAgentService
 from src.services.project_members import ProjectMembersService
 from src.services.project_stages import ProjectStagesService
+from src.services.project_stickers import ProjectStickersService
 from src.services.projects import ProjectsService
 from src.services.task_activity import TaskActivityService
 from src.services.task_attachments import TaskAttachmentsService
@@ -106,12 +108,27 @@ def get_project_members_service(
     participants_repository: TaskParticipantsRepositoryDep,
     tasks_repository: TasksRepositoryDep,
     unit_of_work: UnitOfWorkDep,
+    users_service: Annotated[UsersService, Depends(get_users_service)],
 ) -> ProjectMembersService:
     """Создаёт сервис управления проектной командой."""
     return ProjectMembersService(
         members_repository=members_repository,
         users_repository=users_repository,
         participants_repository=participants_repository,
+        tasks_repository=tasks_repository,
+        unit_of_work=unit_of_work,
+        users_service=users_service,
+    )
+
+
+def get_project_stickers_service(
+    stickers_repository: ProjectStickersRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    unit_of_work: UnitOfWorkDep,
+) -> ProjectStickersService:
+    """Создаёт сервис стикеров Project Board."""
+    return ProjectStickersService(
+        stickers_repository=stickers_repository,
         tasks_repository=tasks_repository,
         unit_of_work=unit_of_work,
     )
@@ -437,6 +454,10 @@ ProjectsServiceDep = Annotated[ProjectsService, Depends(get_projects_service)]
 ProjectMembersServiceDep = Annotated[
     ProjectMembersService,
     Depends(get_project_members_service),
+]
+ProjectStickersServiceDep = Annotated[
+    ProjectStickersService,
+    Depends(get_project_stickers_service),
 ]
 ProjectStagesServiceDep = Annotated[
     ProjectStagesService,

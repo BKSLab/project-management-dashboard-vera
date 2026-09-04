@@ -18,6 +18,7 @@ const TABS = [
     { path: "tasks", label: "Задачи", end: false },
     { path: "calendar", label: "Календарь", end: false },
     { path: "structure", label: "Структура", end: false },
+    { path: "whiteboard", label: "Доска", end: false },
     { path: "docs", label: "Документы", end: false },
     { path: "knowledge", label: "AI-вики", end: false },
 ];

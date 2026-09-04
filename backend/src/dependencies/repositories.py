@@ -10,6 +10,7 @@ from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
+from src.repositories.project_stickers import ProjectStickersRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
@@ -35,6 +36,11 @@ def get_users_repository(session: DbSessionDep) -> UsersRepository:
 def get_project_members_repository(session: DbSessionDep) -> ProjectMembersRepository:
     """Создаёт репозиторий участников проекта в рамках сессии запроса."""
     return ProjectMembersRepository(session)
+
+
+def get_project_stickers_repository(session: DbSessionDep) -> ProjectStickersRepository:
+    """Создаёт репозиторий стикеров Project Board в рамках сессии запроса."""
+    return ProjectStickersRepository(session)
 
 
 def get_projects_repository(session: DbSessionDep) -> ProjectsRepository:
@@ -122,6 +128,10 @@ TasksRepositoryDep = Annotated[TasksRepository, Depends(get_tasks_repository)]
 TaskParticipantsRepositoryDep = Annotated[
     TaskParticipantsRepository,
     Depends(get_task_participants_repository),
+]
+ProjectStickersRepositoryDep = Annotated[
+    ProjectStickersRepository,
+    Depends(get_project_stickers_repository),
 ]
 WbsNodesRepositoryDep = Annotated[WbsNodesRepository, Depends(get_wbs_nodes_repository)]
 DocumentsRepositoryDep = Annotated[DocumentsRepository, Depends(get_documents_repository)]

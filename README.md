@@ -19,6 +19,7 @@
 - документы проекта с Markdown-редактором, полнотекстовым поиском и связями с задачами;
 - AI-вики проекта: отдельная Qdrant collection, фоновая индексация задач, документов, комментариев и текстовых вложений, grounded-ответы Project Agent с источниками;
 - интерактивный конструктор ИСР: canvas с автоматической раскладкой, пул нераспределённых задач, drag & drop, semantic zoom, minimap и поиск;
+- проектная «Доска»: свободно перемещаемые стикеры с авторством, цветами и связями с задачами;
 - миграции Alembic и подробное логирование backend-запросов;
 - API v1 с OpenAPI/Swagger по адресу `/docs`.
 
@@ -38,6 +39,7 @@ Project
 │   ├── TaskActivity
 │   └── TaskAttachment
 ├── WbsNode           структурный контейнер ИСР
+├── ProjectSticker ── ProjectStickerTaskLink ── Task
 └── Document ── DocumentLink ── Task
 ```
 
@@ -135,6 +137,7 @@ nginx/nginx.conf                    # единая точка входа в Dock
 | `/projects/:key/board` | канбан проекта |
 | `/projects/:key/tasks` | список задач таблицей |
 | `/projects/:key/structure` | конструктор ИСР |
+| `/projects/:key/whiteboard` | доска общих стикеров проекта |
 | `/projects/:key/docs` | документы проекта |
 | `/projects/:key/knowledge` | Project Agent и состояние AI-базы проекта |
 | `/projects/:key/settings` | настройки проекта и стадий |
