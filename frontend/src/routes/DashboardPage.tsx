@@ -2,12 +2,14 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, FolderKanban, ListTodo, Plus } from "lucide-react";
 import { api, endpoints, queryKeys } from "@/lib/api";
+import { formatFullDate } from "@/lib/dates";
 import type { Dashboard } from "@/lib/types";
 import { Page } from "@/components/layout/AppShell";
 import { LinkButton } from "@/components/ui/Button";
 import { Section } from "@/components/ui/Card";
 import { StatStrip, StatTile } from "@/components/ui/Progress";
 import { EmptyState, ErrorMessage, Skeleton } from "@/components/ui/States";
+import { AnalyticsPanel } from "@/components/dashboard/AnalyticsPanel";
 import { ProjectCard } from "@/components/dashboard/ProjectCard";
 import { TaskRow } from "@/components/dashboard/TaskRow";
 import { TaskDrawer } from "@/components/tasks/TaskDrawer";
@@ -17,6 +19,7 @@ function DashboardSkeleton() {
     return (
         <div role="status" aria-label="Загрузка сводки" className="flex flex-col gap-6">
             <Skeleton className="h-[88px] w-full" />
+            <Skeleton className="h-56 w-full" />
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {[0, 1, 2].map((index) => (
                     <Skeleton key={index} className="h-40" />
@@ -24,6 +27,11 @@ function DashboardSkeleton() {
             </div>
         </div>
     );
+}
+
+/** Счётчик в заголовке секции: сколько строк, видно до чтения списка. */
+function SectionCount({ value }: { value: number }) {
+    return <span className="font-mono text-[12px] text-muted">{value}</span>;
 }
 
 export function DashboardPage() {
@@ -41,7 +49,10 @@ export function DashboardPage() {
                     <h1 className="text-[22px] font-semibold tracking-[-0.03em] text-primary">
                         Дашборд
                     </h1>
-                    <p className="text-[13px] text-muted">Что происходит со всеми проектами сейчас</p>
+                    <p className="text-[13px] text-muted">
+                        Что происходит со всеми проектами сейчас ·{" "}
+                        {formatFullDate(new Date().toISOString())}
+                    </p>
                 </div>
                 <LinkButton to="/projects/new" variant="primary" icon={<Plus size={15} />}>
                     Новый проект
@@ -90,6 +101,13 @@ export function DashboardPage() {
                         />
                     </StatStrip>
 
+                    {dashboardQuery.data.projects.length > 0 && (
+                        <AnalyticsPanel
+                            projects={dashboardQuery.data.projects}
+                            onOpenTask={setSelectedTaskId}
+                        />
+                    )}
+
                     <Section
                         title="Проекты"
                         action={
@@ -126,7 +144,14 @@ export function DashboardPage() {
                     </Section>
 
                     <div className="grid gap-6 xl:grid-cols-2">
-                        <Section title="Требуют внимания">
+                        <Section
+                            title="Требуют внимания"
+                            action={
+                                <SectionCount
+                                    value={dashboardQuery.data.attention_tasks.length}
+                                />
+                            }
+                        >
                             <div className="overflow-hidden rounded-[var(--radius-card)] bg-surface/55 p-1.5">
                                 {dashboardQuery.data.attention_tasks.length === 0 ? (
                                     <p className="px-2.5 py-6 text-center text-[13px] text-muted">
@@ -144,7 +169,12 @@ export function DashboardPage() {
                             </div>
                         </Section>
 
-                        <Section title="Недавно изменённые">
+                        <Section
+                            title="Недавно изменённые"
+                            action={
+                                <SectionCount value={dashboardQuery.data.recent_tasks.length} />
+                            }
+                        >
                             <div className="overflow-hidden rounded-[var(--radius-card)] bg-surface/55 p-1.5">
                                 {dashboardQuery.data.recent_tasks.length === 0 ? (
                                     <p className="px-2.5 py-6 text-center text-[13px] text-muted">

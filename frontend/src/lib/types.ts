@@ -708,3 +708,113 @@ export interface ApiTokenCreated {
     token: ApiToken;
     secret: string;
 }
+
+export type AnalyticsScope = "PORTFOLIO" | "PROJECT";
+export type AnalyticsHealth = "STABLE" | "WATCH" | "RISK" | "CRITICAL";
+export type AnalyticsSeverity = "HIGH" | "MEDIUM" | "LOW";
+export type AnalyticsFindingKind = "OVERDUE" | "RISK" | "BLOCKER" | "PROCESS" | "DATA_GAP";
+export type AnalyticsHorizon = "TODAY" | "WEEK" | "LATER";
+
+export interface AnalyticsTaskRef {
+    id: number;
+    key: string;
+    title: string;
+    project_key: string;
+    due_date: string | null;
+    is_overdue: boolean;
+}
+
+export interface AnalyticsFinding {
+    kind: AnalyticsFindingKind;
+    severity: AnalyticsSeverity;
+    title: string;
+    detail: string;
+    project_key: string | null;
+    project_name: string | null;
+    tasks: AnalyticsTaskRef[];
+}
+
+export interface AnalyticsProgress {
+    title: string;
+    detail: string;
+    project_key: string | null;
+    project_name: string | null;
+    tasks: AnalyticsTaskRef[];
+}
+
+export interface AnalyticsRecommendation {
+    horizon: AnalyticsHorizon;
+    title: string;
+    detail: string;
+    project_key: string | null;
+    project_name: string | null;
+    tasks: AnalyticsTaskRef[];
+}
+
+export interface AnalyticsSignals {
+    total_tasks: number;
+    done_tasks: number;
+    overdue_tasks: number;
+    due_soon_tasks: number;
+    no_due_date_tasks: number;
+    unassigned_tasks: number;
+    stale_tasks: number;
+    blocked_tasks: number;
+    unplaced_tasks: number;
+    milestones_at_risk: number;
+}
+
+export interface AnalyticsContext {
+    projects: number;
+    tasks_total: number;
+    tasks_included: number;
+    comments_included: number;
+    documents_included: number;
+    stickers_included: number;
+    wbs_nodes_included: number;
+    milestones_included: number;
+    activity_included: number;
+    truncated: boolean;
+    omitted: string[];
+}
+
+export interface AnalyticsReport {
+    id: number;
+    scope: AnalyticsScope;
+    project_id: number | null;
+    project_key: string | null;
+    project_name: string | null;
+    created_at: string;
+    created_by: string;
+    llm_model: string;
+    duration_ms: number;
+    headline: string;
+    health: AnalyticsHealth;
+    health_note: string;
+    findings: AnalyticsFinding[];
+    progress: AnalyticsProgress[];
+    recommendations: AnalyticsRecommendation[];
+    signals: AnalyticsSignals;
+    context: AnalyticsContext;
+}
+
+export const ANALYTICS_HEALTH_LABELS: Record<AnalyticsHealth, string> = {
+    STABLE: "Стабильно",
+    WATCH: "Под наблюдением",
+    RISK: "Есть риск",
+    CRITICAL: "Критично",
+};
+
+export const ANALYTICS_FINDING_LABELS: Record<AnalyticsFindingKind, string> = {
+    OVERDUE: "Просрочка",
+    RISK: "Риск",
+    BLOCKER: "Блокер",
+    PROCESS: "Процесс",
+    DATA_GAP: "Пробел в данных",
+};
+
+export const ANALYTICS_HORIZON_LABELS: Record<AnalyticsHorizon, string> = {
+    TODAY: "Сегодня",
+    WEEK: "На неделе",
+    LATER: "Позже",
+};
