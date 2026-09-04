@@ -40,6 +40,7 @@ from src.exceptions.tasks import TasksRepositoryError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.exceptions.wbs_nodes import WbsNodesRepositoryError
 from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
+from src.prompts.analytics import ANALYTICS_SYSTEM_PROMPT
 from src.repositories.analytics_reports import AnalyticsReportsRepository
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
@@ -66,7 +67,6 @@ from src.schemas.analytics import (
     AnalyticsSignalsSchema,
     AnalyticsTaskRefSchema,
 )
-from src.services.prompts.analytics import ANALYTICS_SYSTEM_PROMPT
 from src.services.tasks import build_task_key
 from src.utils.deadlines import DUE_SOON_DAYS, is_task_due_soon, is_task_overdue
 

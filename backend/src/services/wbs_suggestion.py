@@ -22,6 +22,7 @@ from src.exceptions.wbs_nodes import (
 )
 from src.knowledge.documents import build_wbs_paths
 from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
+from src.prompts.wbs_suggestion import WBS_SUGGESTION_SYSTEM_PROMPT
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
@@ -37,7 +38,6 @@ from src.schemas.wbs_suggestion import (
     WbsSuggestionSchema,
 )
 from src.services.knowledge_events import KnowledgeEvents
-from src.services.prompts.wbs_suggestion import WBS_SUGGESTION_SYSTEM_PROMPT
 from src.services.tasks import build_task_key
 from src.services.wbs_nodes import POSITION_STEP
 

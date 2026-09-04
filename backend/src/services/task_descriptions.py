@@ -17,11 +17,11 @@ from src.exceptions.tasks import (
 )
 from src.knowledge.extract import INDEXABLE_EXTENSIONS, extract_indexable_text
 from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
+from src.prompts.task_description import TASK_DESCRIPTION_REPHRASE_PROMPT
 from src.repositories.documents import DocumentsRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
 from src.schemas.tasks import TaskRephraseRequestSchema, TaskRephraseResultSchema
-from src.services.prompts.task_description import TASK_DESCRIPTION_REPHRASE_PROMPT
 from src.services.tasks import build_task_key
 
 logger = logging.getLogger(__name__)

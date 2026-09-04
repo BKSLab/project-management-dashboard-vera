@@ -6,15 +6,9 @@ import random
 import httpx
 
 from src.exceptions.knowledge import KnowledgeProviderError
+from src.prompts.vision import VISION_EXTRACTION_PROMPT
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_VISION_PROMPT = (
-    "Извлеки из изображения весь читаемый текст и данные таблиц. "
-    "Сохраняй исходный язык и порядок блоков. "
-    "Если текста нет, кратко опиши, что изображено, одной строкой. "
-    "Отвечай только извлечённым содержимым, без пояснений и обрамления."
-)
 
 
 class VisionClient:
@@ -30,7 +24,7 @@ class VisionClient:
         timeout: int,
         retries: int,
         max_tokens: int,
-        prompt: str = DEFAULT_VISION_PROMPT,
+        prompt: str = VISION_EXTRACTION_PROMPT,
     ) -> None:
         self.http_client = http_client
         self.url = url

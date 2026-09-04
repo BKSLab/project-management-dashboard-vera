@@ -31,6 +31,10 @@ from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.knowledge.documents import build_wbs_paths
 from src.knowledge.retrieval import reciprocal_rank_fusion
 from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
+from src.prompts.project_agent import (
+    PROJECT_AGENT_SYSTEM_PROMPT,
+    PROJECT_AGENT_TOOL_SELECTION_PROMPT,
+)
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
@@ -47,10 +51,6 @@ from src.schemas.knowledge import (
 )
 from src.services.calendar import MAX_CALENDAR_RANGE_DAYS, CalendarService
 from src.services.calendar_scenarios import CalendarScenarioService
-from src.services.prompts.project_agent import (
-    PROJECT_AGENT_SYSTEM_PROMPT,
-    PROJECT_AGENT_TOOL_SELECTION_PROMPT,
-)
 from src.services.tasks import build_task_key
 
 logger = logging.getLogger(__name__)

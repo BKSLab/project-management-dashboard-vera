@@ -71,6 +71,7 @@ HTTP endpoint → service → repository → PostgreSQL
 - `repositories` — SQLAlchemy-запросы, транзакции и преобразование ошибок БД;
 - `db/models` — одна SQLAlchemy-модель на файл;
 - `schemas` — Pydantic-схемы запросов и ответов;
+- `prompts` — системные prompts всех LLM-операций: роль, контекст трекера и сквозные правила один раз в `base.py`, операция добавляет только свою инструкцию;
 - `dependencies` — трёхуровневый граф FastAPI Depends;
 - `exceptions` — отдельная иерархия ошибок для каждого домена;
 - `src/main.py` — FastAPI-приложение, lifespan, CORS и системные обработчики ошибок;
@@ -98,6 +99,7 @@ backend/
 │   ├── dependencies/
 │   ├── exceptions/
 │   ├── knowledge/                    # chunking, extraction и background worker
+│   ├── prompts/                      # системные prompts: общая роль в base.py
 │   ├── repositories/
 │   ├── schemas/
 │   ├── services/
