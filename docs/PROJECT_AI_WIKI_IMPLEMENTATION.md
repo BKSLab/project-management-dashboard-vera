@@ -283,7 +283,7 @@ Publisher: [`KnowledgeEvents`](../backend/src/services/knowledge_events.py).
 
 ## 9. Project Agent
 
-Сервис: [`ProjectAgentService`](../backend/src/services/project_agent.py). Prompt: [`services/prompts/project_agent.py`](../backend/src/services/prompts/project_agent.py). Клиенты: [`embedding.py`](../backend/src/clients/embedding.py), [`llm.py`](../backend/src/clients/llm.py), [`qdrant.py`](../backend/src/clients/qdrant.py).
+Сервис: [`ProjectAgentService`](../backend/src/services/project_agent.py). Prompt: [`prompts/project_agent.py`](../backend/src/prompts/project_agent.py). Клиенты: [`embedding.py`](../backend/src/clients/embedding.py), [`llm.py`](../backend/src/clients/llm.py), [`qdrant.py`](../backend/src/clients/qdrant.py).
 
 ### 9.1. Актуальный SQL-контекст
 
@@ -466,7 +466,7 @@ docker compose logs -f backend
 | Индексация | `backend/src/services/knowledge_events.py`, `knowledge_index.py`, `backend/src/knowledge/worker.py` |
 | Представление знаний | `backend/src/knowledge/documents.py`, `chunking.py`, `extract.py` |
 | Runtime | `backend/src/knowledge/runtime.py`, FastAPI lifespan в `backend/src/main.py` |
-| Agent | `backend/src/services/project_agent.py`, `backend/src/services/prompts/project_agent.py` |
+| Agent | `backend/src/services/project_agent.py`, `backend/src/prompts/project_agent.py` |
 | CRUD-интеграция | services Projects, Tasks, Documents, Comments, Attachments и WBS |
 | UI | `frontend/src/routes/ProjectKnowledgePage.tsx` и связанные route/API/type-файлы |
 | Инфраструктура | `docker-compose.yml`, `backend/requirements.txt`, `backend/entrypoint.sh`, `.gitattributes` |
