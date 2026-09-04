@@ -68,6 +68,31 @@ class DocumentLinksRepository:
                 error_details=f"Ошибка при получении связей документа id={document_id}."
             ) from error
 
+    async def get_for_documents(self, document_ids: set[int]) -> list[DocumentLink]:
+        """Возвращает связи сразу нескольких документов.
+
+        Args:
+            document_ids: Идентификаторы документов.
+
+        Returns:
+            Связи перечисленных документов с задачами.
+
+        Raises:
+            DocumentLinksRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        if not document_ids:
+            return []
+        try:
+            stmt = select(DocumentLink).where(DocumentLink.document_id.in_(document_ids))
+            result: Result = await self.db_session.execute(stmt)
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить связи набора документов.", exc_info=True)
+            raise DocumentLinksRepositoryError(
+                error_details="Ошибка при получении связей набора документов."
+            ) from error
+
     async def get_for_task(self, task_id: int) -> list[DocumentLink]:
         """Возвращает связи документов с указанной задачей.
 

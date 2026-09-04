@@ -1,3 +1,4 @@
+from .analytics_reports import AnalyticsReport
 from .api_tokens import ApiToken, ApiTokenScope
 from .base import Base
 from .document_links import DocumentLink
@@ -23,6 +24,7 @@ from .users import User
 from .wbs_nodes import WbsNode
 
 __all__ = [
+    "AnalyticsReport",
     "ApiToken",
     "ApiTokenScope",
     "Base",

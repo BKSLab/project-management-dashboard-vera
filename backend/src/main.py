@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.v1.endpoints.analytics import router as analytics_router
 from src.api.v1.endpoints.api_tokens import router as api_tokens_router
 from src.api.v1.endpoints.auth import router as auth_router
 from src.api.v1.endpoints.calendar import router as calendar_router
@@ -140,6 +141,7 @@ for api_router in (
     users_router,
     api_tokens_router,
     dashboard_router,
+    analytics_router,
     calendar_router,
     calendar_scenarios_router,
     milestones_router,

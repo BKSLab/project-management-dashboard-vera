@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from src.dependencies.db_session import DbSessionDep
+from src.repositories.analytics_reports import AnalyticsReportsRepository
 from src.repositories.api_tokens import ApiTokensRepository
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
@@ -21,6 +22,11 @@ from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.users import UsersRepository
 from src.repositories.wbs_nodes import WbsNodesRepository
+
+
+def get_analytics_reports_repository(session: DbSessionDep) -> AnalyticsReportsRepository:
+    """Создаёт репозиторий аналитических сводов в рамках сессии запроса."""
+    return AnalyticsReportsRepository(session)
 
 
 def get_api_tokens_repository(session: DbSessionDep) -> ApiTokensRepository:
@@ -159,5 +165,9 @@ TaskActivityRepositoryDep = Annotated[
 TaskAttachmentsRepositoryDep = Annotated[
     TaskAttachmentsRepository,
     Depends(get_task_attachments_repository),
+]
+AnalyticsReportsRepositoryDep = Annotated[
+    AnalyticsReportsRepository,
+    Depends(get_analytics_reports_repository),
 ]
 UnitOfWorkDep = Annotated[UnitOfWork, Depends(get_unit_of_work)]
