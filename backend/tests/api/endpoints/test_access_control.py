@@ -9,6 +9,8 @@ PUBLIC_PATHS = {"/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/log
 PROTECTED_REQUESTS = [
     ("get", "/api/v1/auth/me"),
     ("get", "/api/v1/dashboard"),
+    ("get", "/api/v1/dashboard/analytics"),
+    ("post", "/api/v1/dashboard/analytics"),
     ("get", "/api/v1/projects"),
     ("post", "/api/v1/projects"),
     ("get", "/api/v1/projects/1"),

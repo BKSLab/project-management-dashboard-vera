@@ -4,6 +4,7 @@ from fastapi import Depends
 
 from src.core.settings import get_settings
 from src.dependencies.repositories import (
+    AnalyticsReportsRepositoryDep,
     ApiTokensRepositoryDep,
     DocumentLinksRepositoryDep,
     DocumentsRepositoryDep,
@@ -24,6 +25,7 @@ from src.dependencies.repositories import (
     WbsNodesRepositoryDep,
 )
 from src.dependencies.storage import AvatarStorageDep, TaskAttachmentStorageDep
+from src.services.analytics import AnalyticsService
 from src.services.api_tokens import ApiTokensService
 from src.services.auth import AuthService
 from src.services.calendar import CalendarService
@@ -216,6 +218,41 @@ def get_wbs_suggestion_service(
         tasks_repository=tasks_repository,
         activity_repository=activity_repository,
         knowledge_events=knowledge_events,
+        unit_of_work=unit_of_work,
+    )
+
+
+def get_analytics_service(
+    reports_repository: AnalyticsReportsRepositoryDep,
+    projects_repository: ProjectsRepositoryDep,
+    members_repository: ProjectMembersRepositoryDep,
+    stages_repository: ProjectStagesRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    comments_repository: TaskCommentsRepositoryDep,
+    activity_repository: TaskActivityRepositoryDep,
+    dependencies_repository: TaskDependenciesRepositoryDep,
+    wbs_nodes_repository: WbsNodesRepositoryDep,
+    milestones_repository: MilestonesRepositoryDep,
+    stickers_repository: ProjectStickersRepositoryDep,
+    documents_repository: DocumentsRepositoryDep,
+    document_links_repository: DocumentLinksRepositoryDep,
+    unit_of_work: UnitOfWorkDep,
+) -> AnalyticsService:
+    """Создаёт сервис аналитического свода дашборда."""
+    return AnalyticsService(
+        reports_repository=reports_repository,
+        projects_repository=projects_repository,
+        members_repository=members_repository,
+        stages_repository=stages_repository,
+        tasks_repository=tasks_repository,
+        comments_repository=comments_repository,
+        activity_repository=activity_repository,
+        dependencies_repository=dependencies_repository,
+        wbs_nodes_repository=wbs_nodes_repository,
+        milestones_repository=milestones_repository,
+        stickers_repository=stickers_repository,
+        documents_repository=documents_repository,
+        document_links_repository=document_links_repository,
         unit_of_work=unit_of_work,
     )
 
@@ -466,6 +503,7 @@ ProjectStagesServiceDep = Annotated[
 TasksServiceDep = Annotated[TasksService, Depends(get_tasks_service)]
 WbsNodesServiceDep = Annotated[WbsNodesService, Depends(get_wbs_nodes_service)]
 WbsSuggestionServiceDep = Annotated[WbsSuggestionService, Depends(get_wbs_suggestion_service)]
+AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)]
 DashboardServiceDep = Annotated[DashboardService, Depends(get_dashboard_service)]
 CalendarServiceDep = Annotated[CalendarService, Depends(get_calendar_service)]
 CalendarScenarioServiceDep = Annotated[

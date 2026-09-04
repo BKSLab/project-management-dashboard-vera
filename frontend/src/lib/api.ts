@@ -87,6 +87,8 @@ export const authEndpoints = {
 /** Единый источник правды по адресам API — маршруты не разъезжаются по экранам. */
 export const endpoints = {
     dashboard: () => `${V1}/dashboard`,
+    dashboardAnalytics: (projectId?: number | null) =>
+        `${V1}/dashboard/analytics${projectId ? `?project_id=${projectId}` : ""}`,
     projects: () => `${V1}/projects`,
     project: (projectId: number) => `${V1}/projects/${projectId}`,
     projectStats: (projectId: number) => `${V1}/projects/${projectId}/stats`,
@@ -159,6 +161,8 @@ export const queryKeys = {
     currentUser: ["auth", "me"] as const,
     apiTokens: ["auth", "me", "tokens"] as const,
     dashboard: ["dashboard"] as const,
+    dashboardAnalytics: (projectId: number | null) =>
+        ["dashboard", "analytics", projectId ?? "portfolio"] as const,
     projects: ["projects"] as const,
     project: (projectId: number) => ["projects", projectId] as const,
     projectStats: (projectId: number) => ["projects", projectId, "stats"] as const,
