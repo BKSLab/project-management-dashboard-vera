@@ -22,18 +22,21 @@ SETTINGS_ALLOWLIST = {
     SRC / "main.py",
     SRC / "dependencies" / "settings.py",
     SRC / "dependencies" / "storage.py",
+    # Имя cookie входит в сигнатуру маршрута и должно быть известно в
+    # момент сборки приложения, а не при обработке запроса.
+    SRC / "dependencies" / "auth.py",
     SRC / "core" / "config_logger.py",
     SRC / "db" / "alembic" / "env.py",
     SRC / "utils" / "tokens.py",
     SRC / "utils" / "check_db.py",
 }
 
-# Временно разрешённые точки чтения настроек: они убираются вместе с
-# переносом соответствующей границы и должны исчезнуть из этого списка.
-PENDING_SETTINGS_READERS = {
-    # Этап 2: auth-зависимость становится тонким transport-адаптером.
-    SRC / "dependencies" / "auth.py",
-}
+# Отложенных исключений не осталось: каждая точка чтения настроек либо
+# перечислена в allowlist выше, либо переведена на конструкторную
+# передачу значения.
+PENDING_SETTINGS_READERS: set[Path] = set()
+
+DEPENDENCIES = SRC / "dependencies"
 
 
 def iter_python_files(*relative: str) -> list[Path]:
@@ -482,4 +485,86 @@ def test_service_with_external_call_does_not_import_sqlalchemy(file_name: str) -
     assert "sqlalchemy" not in source, (
         f"{file_name} импортирует SQLAlchemy: реализация короткой области "
         "принадлежит слою сборки зависимостей."
+    )
+
+
+def dependency_modules() -> list[Path]:
+    """Возвращает модули слоя зависимостей."""
+    return [path for path in sorted(DEPENDENCIES.glob("*.py")) if path.name != "__init__.py"]
+
+
+def factories_wrapped_in_aliases(tree: ast.AST) -> set[str]:
+    """Возвращает функции, обёрнутые в `Depends` внутри `...Dep`-алиаса."""
+    wrapped: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        target = node.targets[0]
+        if not (isinstance(target, ast.Name) and target.id.endswith("Dep")):
+            continue
+        wrapped.update(
+            sub.args[0].id
+            for sub in ast.walk(node.value)
+            if isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Name)
+            and sub.func.id == "Depends"
+            and sub.args
+            and isinstance(sub.args[0], ast.Name)
+        )
+    return wrapped
+
+
+@pytest.mark.parametrize("path", dependency_modules(), ids=lambda path: path.name)
+def test_every_dependency_factory_has_a_dep_alias(path: Path) -> None:
+    """У каждой публичной фабрики зависимости есть свой `...Dep`-алиас.
+
+    Алиас — единственная форма, которую видят потребители: без него
+    каждый вызывающий пишет `Annotated[..., Depends(...)]` заново, и
+    подмена в тестах перестаёт быть однозначной.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    factories = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.name.startswith(("get_", "require_"))
+    }
+
+    missing = sorted(factories - factories_wrapped_in_aliases(tree))
+
+    assert not missing, f"{path.name}: фабрики без `...Dep`-алиаса: {missing}"
+
+
+@pytest.mark.parametrize(
+    "path",
+    iter_python_files("dependencies", "api"),
+    ids=lambda path: path.name,
+)
+def test_dependencies_are_declared_through_aliases(path: Path) -> None:
+    """Потребитель объявляет зависимость алиасом, а не `Depends` в сигнатуре.
+
+    Повторённый вручную `Annotated[..., Depends(...)]` расходится с
+    алиасом молча: тип и фабрика начинают жить отдельно друг от друга.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+        offenders.extend(
+            f"{node.name}({argument.arg}):{argument.lineno}"
+            for argument in arguments
+            if argument.annotation is not None
+            and any(
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Name)
+                and sub.func.id == "Depends"
+                for sub in ast.walk(argument.annotation)
+            )
+        )
+
+    assert not offenders, (
+        f"{path.relative_to(SRC.parent)} объявляет зависимость в сигнатуре "
+        f"вместо `...Dep`-алиаса: {offenders}"
     )

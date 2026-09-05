@@ -9,7 +9,7 @@
 каждом из них должно быть принято человеком, а не выведено из метода.
 """
 
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, APIWebSocketRoute
 
 from main import app
 
@@ -279,4 +279,19 @@ def test_streaming_routes_do_not_depend_on_request_scoped_services() -> None:
 
     assert not offenders, (
         "Долгоживущий ответ зависит от сервисов сессии запроса: " + ", ".join(offenders)
+    )
+
+
+def test_application_has_no_unclassified_websocket_routes() -> None:
+    """WebSocket-маршрутов нет, и новый не появится незамеченным.
+
+    Классификация выше построена на `APIRoute` и парах метод-путь;
+    WebSocket в неё не попадает, поэтому его появление должно потребовать
+    отдельного решения о правах, а не пройти мимо всех проверок.
+    """
+    sockets = [route.path for route in app.routes if isinstance(route, APIWebSocketRoute)]
+
+    assert not sockets, (
+        f"Появились WebSocket-маршруты без классификации прав: {sockets}. "
+        "Добавь для них проверку scope и удержания ресурсов."
     )

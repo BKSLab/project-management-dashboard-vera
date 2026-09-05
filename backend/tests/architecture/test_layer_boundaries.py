@@ -205,12 +205,13 @@ def test_mcp_tool_context_does_not_expose_a_session() -> None:
     ids=lambda path: path.name,
 )
 def test_service_does_not_import_transport(path: Path) -> None:
-    """Сервис не знает ни FastAPI, ни слоя зависимостей, ни сессии.
+    """Сервис не знает ни FastAPI, ни слоя зависимостей, ни SQL.
 
     Импорт FastAPI в сервисе означает, что бизнес-правило описано в
-    терминах HTTP и не может быть вызвано из MCP или worker-а.
+    терминах HTTP и не может быть вызвано из MCP или worker-а. Импорт
+    SQLAlchemy означал бы, что запрос строится мимо репозитория.
     """
-    forbidden = ("fastapi", "src.dependencies", "src.db.session")
+    forbidden = ("fastapi", "src.dependencies", "src.db.session", "sqlalchemy")
     offenders = [
         f"{module}:{lineno}"
         for module, lineno in imported_modules(path)
@@ -246,6 +247,36 @@ def test_repository_constructors_live_only_in_composition_modules() -> None:
 
     assert not offenders, (
         "Репозитории создаются вне модулей сборки графа:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_service_and_client_constructors_live_only_in_composition_modules() -> None:
+    """Сервисы и клиентов создаёт только сборка графа.
+
+    Сервис, собранный внутри обработчика, невозможно подменить в тесте, а
+    клиент, созданный на лету, заводит собственное соединение мимо
+    владельца ресурса.
+    """
+    allowed_dirs = (SRC / "services", SRC / "clients", SRC / "storage")
+    offenders: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        if "__pycache__" in path.parts or "alembic" in path.parts:
+            continue
+        if path in COMPOSITION_MODULES or path in PENDING_REPOSITORY_BUILDERS:
+            continue
+        if any(path.is_relative_to(item) for item in allowed_dirs):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        offenders.extend(
+            f"{path.relative_to(SRC.parent)}:{node.lineno} {node.func.id}"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id.endswith(("Service", "Client"))
+        )
+
+    assert not offenders, (
+        "Сервисы или клиенты создаются вне модулей сборки графа:\n  " + "\n  ".join(offenders)
     )
 
 
