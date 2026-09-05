@@ -16,6 +16,8 @@ from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.app_state import RUNTIME_STATE_KEY, SETTINGS_STATE_KEY
+from src.core.settings import Settings
 from src.db.models.api_tokens import ApiTokenScope
 from src.db.models.project_members import ProjectMember
 from src.db.models.projects import Project
@@ -24,6 +26,7 @@ from src.db.models.users import User
 from src.db.session import async_session_factory
 from src.dependencies.auth import AuthenticatedPrincipal, get_principal
 from src.exceptions.base import ApplicationError
+from src.knowledge.runtime import KnowledgeRuntime
 from src.repositories.api_tokens import ApiTokensRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.projects import ProjectsRepository
@@ -36,14 +39,21 @@ NOT_AUTHENTICATED = "Требуется действующий токен дос
 PROJECT_NOT_AVAILABLE = "Проект недоступен."
 TASK_NOT_AVAILABLE = "Задача недоступна."
 READ_ONLY_TOKEN = "Токен выдан только на чтение."
+RESOURCES_MISSING = "Сервер запущен без ресурсов приложения."
 
 
 @dataclass(slots=True)
 class ToolContext:
-    """Всё, что нужно инструменту: кто спрашивает и через какую сессию."""
+    """Всё, что нужно инструменту: кто спрашивает, через какую сессию и чем.
+
+    Клиенты и настройки приходят из состояния приложения, созданного
+    lifespan: у MCP и HTTP один набор ресурсов, а инструмент не ищет их сам.
+    """
 
     principal: AuthenticatedPrincipal
     session: AsyncSession
+    runtime: KnowledgeRuntime
+    settings: Settings
 
     @property
     def user(self) -> User:
@@ -68,6 +78,7 @@ async def tool_context(
         ToolError: Если токен не предъявлен, недействителен или недостаточен.
     """
     authorization = _authorization_header(context)
+    runtime, settings = _app_resources(context)
     async with async_session_factory() as session:
         try:
             principal = await get_principal(
@@ -84,7 +95,12 @@ async def tool_context(
 
         if require_write and principal.scope is not ApiTokenScope.WRITE:
             raise ToolError(READ_ONLY_TOKEN)
-        yield ToolContext(principal=principal, session=session)
+        yield ToolContext(
+            principal=principal,
+            session=session,
+            runtime=runtime,
+            settings=settings,
+        )
 
 
 async def resolve_project(tools: ToolContext, project_key: str) -> Project:
@@ -157,6 +173,31 @@ async def _ensure_member(tools: ToolContext, project_id: int) -> ProjectMember:
         # выяснялось бы существование чужих проектов.
         raise ToolError(PROJECT_NOT_AVAILABLE)
     return membership
+
+
+def _app_resources(context: Context) -> tuple[KnowledgeRuntime, Settings]:
+    """Достаёт клиентов и настройки из состояния запущенного приложения.
+
+    Смонтированный ASGI-транспорт видит то же состояние, что и основное
+    приложение, поэтому отдельный набор клиентов для MCP не создаётся.
+
+    Args:
+        context: Контекст вызова MCP.
+
+    Returns:
+        Контейнер клиентов и настройки приложения.
+
+    Raises:
+        ToolError: Если приложение запущено без lifespan.
+    """
+    request = getattr(context.request_context, "request", None)
+    state = getattr(request, "state", None)
+    runtime = getattr(state, RUNTIME_STATE_KEY, None)
+    settings = getattr(state, SETTINGS_STATE_KEY, None)
+    if runtime is None or settings is None:
+        logger.error("❌ MCP-вызов без ресурсов приложения: lifespan не отработал.")
+        raise ToolError(RESOURCES_MISSING)
+    return runtime, settings
 
 
 def _authorization_header(context: Context) -> str | None:

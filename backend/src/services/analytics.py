@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 from time import perf_counter
 from typing import Any
 
-from src.core.settings import get_settings
+from src.clients.llm import LlmClient
 from src.db.models.analytics_reports import AnalyticsReport
 from src.db.models.documents import Document
 from src.db.models.project_milestones import ProjectMilestone, ProjectMilestoneStatus
@@ -39,7 +39,6 @@ from src.exceptions.task_dependencies import TaskDependenciesRepositoryError
 from src.exceptions.tasks import TasksRepositoryError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.exceptions.wbs_nodes import WbsNodesRepositoryError
-from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
 from src.prompts.analytics import ANALYTICS_SYSTEM_PROMPT
 from src.repositories.analytics_reports import AnalyticsReportsRepository
 from src.repositories.document_links import DocumentLinksRepository
@@ -181,7 +180,7 @@ class AnalyticsService:
         documents_repository: DocumentsRepository,
         document_links_repository: DocumentLinksRepository,
         unit_of_work: UnitOfWork,
-        runtime: KnowledgeRuntime | None = None,
+        llm_client: LlmClient,
     ):
         self.reports_repository = reports_repository
         self.projects_repository = projects_repository
@@ -197,7 +196,7 @@ class AnalyticsService:
         self.documents_repository = documents_repository
         self.document_links_repository = document_links_repository
         self.unit_of_work = unit_of_work
-        self.runtime = runtime or get_knowledge_runtime()
+        self.llm_client = llm_client
 
     async def get_latest(
         self,
@@ -273,7 +272,7 @@ class AnalyticsService:
         content, context = _build_content(slices=slices, scope=scope, signals=signals, today=today)
 
         try:
-            draft = await self.runtime.llm_client.get_structured_response(
+            draft = await self.llm_client.get_structured_response(
                 system_prompt=ANALYTICS_SYSTEM_PROMPT,
                 content=content,
                 schema=AnalyticsDraftSchema,
@@ -294,7 +293,7 @@ class AnalyticsService:
                     "project_id": project_id,
                     "created_by_user_id": user.id,
                     "created_by_display_name_snapshot": _display_name(user),
-                    "llm_model": get_settings().llm.agent_model,
+                    "llm_model": self.llm_client.model,
                     "duration_ms": duration_ms,
                     "payload": payload | {"signals": signals.model_dump(mode="json")},
                     "context_summary": context.model_dump(mode="json"),

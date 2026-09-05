@@ -53,7 +53,7 @@ def make_user(user_id: int = 1, password: str = "pa$$word123", is_active: bool =
 @pytest.mark.asyncio
 async def test_register_rejects_wrong_invite_code() -> None:
     repository = AsyncMock(spec=UsersRepository)
-    service = AuthService(users_repository=repository)
+    service = AuthService(users_repository=repository, invite_code=VALID_INVITE)
 
     with pytest.raises(InvalidInviteCodeError) as exc_info:
         await service.register(data={**REGISTRATION, "invite_code": "не тот код"})
@@ -66,7 +66,7 @@ async def test_register_rejects_wrong_invite_code() -> None:
 async def test_register_hashes_password_and_drops_confirmation() -> None:
     repository = AsyncMock(spec=UsersRepository)
     repository.save.return_value = make_user()
-    service = AuthService(users_repository=repository)
+    service = AuthService(users_repository=repository, invite_code=VALID_INVITE)
 
     await service.register(data=dict(REGISTRATION))
 
@@ -85,7 +85,7 @@ async def test_register_hashes_password_and_drops_confirmation() -> None:
 async def test_register_maps_busy_username_to_conflict() -> None:
     repository = AsyncMock(spec=UsersRepository)
     repository.save.side_effect = UsernameAlreadyExistsRepositoryError(username="boris")
-    service = AuthService(users_repository=repository)
+    service = AuthService(users_repository=repository, invite_code=VALID_INVITE)
 
     with pytest.raises(UsernameConflictError) as exc_info:
         await service.register(data=dict(REGISTRATION))
@@ -97,7 +97,7 @@ async def test_register_maps_busy_username_to_conflict() -> None:
 async def test_login_returns_token_with_user_id() -> None:
     repository = AsyncMock(spec=UsersRepository)
     repository.get_by_username.return_value = make_user(user_id=42)
-    service = AuthService(users_repository=repository)
+    service = AuthService(users_repository=repository, invite_code=VALID_INVITE)
 
     user, token = await service.login(username="boris", password="pa$$word123")
 
@@ -113,12 +113,18 @@ async def test_login_with_unknown_username_and_wrong_password_look_identical() -
     wrong_repository.get_by_username.return_value = make_user()
 
     with pytest.raises(InvalidCredentialsError) as missing:
-        await AuthService(users_repository=missing_repository).login(
+        await AuthService(
+            users_repository=missing_repository,
+            invite_code=VALID_INVITE,
+        ).login(
             username="нет-такого",
             password="pa$$word123",
         )
     with pytest.raises(InvalidCredentialsError) as wrong:
-        await AuthService(users_repository=wrong_repository).login(
+        await AuthService(
+            users_repository=wrong_repository,
+            invite_code=VALID_INVITE,
+        ).login(
             username="boris",
             password="неверный",
         )
@@ -132,7 +138,7 @@ async def test_login_with_unknown_username_and_wrong_password_look_identical() -
 async def test_login_rejects_inactive_user() -> None:
     repository = AsyncMock(spec=UsersRepository)
     repository.get_by_username.return_value = make_user(is_active=False)
-    service = AuthService(users_repository=repository)
+    service = AuthService(users_repository=repository, invite_code=VALID_INVITE)
 
     with pytest.raises(InactiveUserError) as exc_info:
         await service.login(username="boris", password="pa$$word123")

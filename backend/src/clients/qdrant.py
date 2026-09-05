@@ -20,17 +20,21 @@ class KnowledgeSearchHit:
 
 
 class ProjectQdrantClient:
-    """Qdrant client с отдельной collection на каждый проект."""
+    """Qdrant client с отдельной collection на каждый проект.
+
+    Transport передаётся готовым: создание и закрытие SDK принадлежат
+    lifespan приложения, поэтому у сетевого ресурса один видимый владелец,
+    а в тестах его можно подменить без обращения к сети.
+    """
 
     def __init__(
         self,
         *,
-        url: str,
-        api_key: str | None,
+        client: AsyncQdrantClient,
         collection_prefix: str,
         vector_dim: int,
     ) -> None:
-        self.client = AsyncQdrantClient(url=url, api_key=api_key or None)
+        self.client = client
         self.collection_prefix = collection_prefix.strip().lower().replace("-", "_")
         self.vector_dim = vector_dim
         self._indexed_collections: set[str] = set()

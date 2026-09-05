@@ -5,6 +5,9 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from src.clients.embedding import EmbeddingClient
+from src.clients.qdrant import ProjectQdrantClient
+from src.clients.vision import VisionCapability
 from src.db.models.knowledge_index_jobs import (
     KnowledgeEntityType,
     KnowledgeIndexJob,
@@ -22,7 +25,6 @@ from src.knowledge.documents import (
     build_wbs_paths,
 )
 from src.knowledge.extract import extract_indexable_text
-from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
 from src.repositories.documents import DocumentsRepository
 from src.repositories.milestones import MilestonesRepository
 from src.repositories.projects import ProjectsRepository
@@ -64,7 +66,9 @@ class KnowledgeIndexService:
         chunk_target_chars: int,
         chunk_overlap_chars: int,
         extract_max_chars: int,
-        runtime: KnowledgeRuntime | None = None,
+        embedding_client: EmbeddingClient,
+        qdrant_client: ProjectQdrantClient,
+        vision: VisionCapability,
     ) -> None:
         self.projects_repository = projects_repository
         self.tasks_repository = tasks_repository
@@ -78,7 +82,9 @@ class KnowledgeIndexService:
         self.chunk_overlap_chars = chunk_overlap_chars
         self.extract_max_chars = extract_max_chars
         self.milestones_repository = milestones_repository
-        self.runtime = runtime or get_knowledge_runtime()
+        self.embedding_client = embedding_client
+        self.qdrant_client = qdrant_client
+        self.vision = vision
 
     async def process(self, job: KnowledgeIndexJob) -> int:
         """Готовит и выполняет одно идемпотентное задание очереди."""
@@ -129,15 +135,15 @@ class KnowledgeIndexService:
     async def execute_prepared(self, action: PreparedIndexAction) -> int:
         """Выполняет embeddings/Qdrant без обращения к PostgreSQL."""
         if action.operation is KnowledgeIndexOperation.DELETE_COLLECTION:
-            await self.runtime.qdrant_client.delete_collection(action.project_id)
+            await self.qdrant_client.delete_collection(action.project_id)
             return 0
         if action.operation is KnowledgeIndexOperation.REINDEX_PROJECT:
             if not action.documents:
-                await self.runtime.qdrant_client.delete_collection(action.project_id)
+                await self.qdrant_client.delete_collection(action.project_id)
                 return 0
             documents = list(action.documents)
             vectors = await self._embed(documents)
-            await self.runtime.qdrant_client.recreate_collection(action.project_id)
+            await self.qdrant_client.recreate_collection(action.project_id)
             await self._write_batches(action.project_id, documents, vectors)
             logger.info(
                 "✅ Индекс проекта id=%s пересобран: %s chunks.",
@@ -273,7 +279,7 @@ class KnowledgeIndexService:
             raise ValueError("TASK-пачка содержит несовместимые действия.")
         for action in actions:
             if not action.documents:
-                await self.runtime.qdrant_client.delete_task_context(
+                await self.qdrant_client.delete_task_context(
                     project_id=project_id,
                     task_id=action.entity_id,
                 )
@@ -294,12 +300,12 @@ class KnowledgeIndexService:
         entity_id: int,
     ) -> None:
         if entity_type is KnowledgeEntityType.TASK:
-            await self.runtime.qdrant_client.delete_task_context(
+            await self.qdrant_client.delete_task_context(
                 project_id=project_id,
                 task_id=entity_id,
             )
             return
-        await self.runtime.qdrant_client.delete_entity(
+        await self.qdrant_client.delete_entity(
             project_id=project_id,
             entity_type=entity_type.value.lower(),
             entity_id=entity_id,
@@ -381,7 +387,7 @@ class KnowledgeIndexService:
             extracted = await extract_indexable_text(
                 attachment.original_name,
                 content,
-                vision_client=self.runtime.vision_client,
+                vision=self.vision,
                 max_chars=self.extract_max_chars,
             )
         except KnowledgeProviderError:
@@ -412,14 +418,14 @@ class KnowledgeIndexService:
         for index in range(0, len(documents), self.embedding_batch_size):
             batch = documents[index : index + self.embedding_batch_size]
             vectors.extend(
-                await self.runtime.embedding_client.get_embeddings(
+                await self.embedding_client.get_embeddings(
                     [document.text for document in batch]
                 )
             )
-        if any(len(vector) != self.runtime.qdrant_client.vector_dim for vector in vectors):
+        if any(len(vector) != self.qdrant_client.vector_dim for vector in vectors):
             raise ValueError(
                 "Размерность embedding API не совпадает с EMBEDDING_DIM: "
-                f"ожидается {self.runtime.qdrant_client.vector_dim}."
+                f"ожидается {self.qdrant_client.vector_dim}."
             )
         return vectors
 
@@ -430,7 +436,7 @@ class KnowledgeIndexService:
         vectors: list[list[float]],
     ) -> None:
         for index in range(0, len(documents), self.embedding_batch_size):
-            await self.runtime.qdrant_client.upsert_documents(
+            await self.qdrant_client.upsert_documents(
                 project_id=project_id,
                 documents=documents[index : index + self.embedding_batch_size],
                 vectors=vectors[index : index + self.embedding_batch_size],

@@ -16,11 +16,10 @@ from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import Field
 from starlette.applications import Starlette
 
-from src.core.settings import get_settings
+from src.core.settings import Settings
 from src.exceptions.base import ApplicationError
 from src.exceptions.knowledge import KnowledgeProviderError
 from src.knowledge.documents import build_wbs_paths
-from src.knowledge.runtime import get_knowledge_runtime
 from src.mcp_server.context import resolve_project, resolve_task, tool_context
 from src.mcp_server.presenters import (
     comment_item,
@@ -284,20 +283,17 @@ async def search_project_knowledge(
     ] = 10,
 ) -> list[dict]:
     """Возвращает смысловые фрагменты базы знаний проекта."""
-    settings = get_settings()
-    if not settings.knowledge.knowledge_enabled:
-        raise ToolError("Семантический поиск отключён в конфигурации сервера.")
-
     async with tool_context(context) as tools:
+        if not tools.settings.knowledge.knowledge_enabled:
+            raise ToolError("Семантический поиск отключён в конфигурации сервера.")
         project = await resolve_project(tools, project_key)
-        runtime = get_knowledge_runtime()
         try:
-            vector = await runtime.embedding_client.get_embedding(query.strip())
-            hits = await runtime.qdrant_client.search(
+            vector = await tools.runtime.embedding_client.get_embedding(query.strip())
+            hits = await tools.runtime.qdrant_client.search(
                 project_id=project.id,
                 vector=vector,
                 limit=limit,
-                score_threshold=settings.knowledge.qdrant_score_threshold,
+                score_threshold=tools.settings.knowledge.qdrant_score_threshold,
             )
         except KnowledgeProviderError as error:
             raise ToolError("Семантический поиск временно недоступен.") from error
@@ -512,19 +508,25 @@ def _application_message(error: ApplicationError, fallback: str) -> str:
     return str(detail) if detail else fallback
 
 
-def build_mcp_app() -> Starlette:
+def build_mcp_app(*, settings: Settings) -> Starlette:
     """Собирает ASGI-приложение MCP для монтирования в основное приложение.
+
+    Настройки приходят из composition root: транспортный модуль не читает
+    конфигурацию приложения сам.
+
+    Args:
+        settings: Настройки приложения.
 
     Returns:
         Starlette-приложение транспорта Streamable HTTP.
     """
-    settings = get_settings().app
+    app_settings = settings.app
     # Настройки передаются явно: иначе SDK сам включает защиту с allowlist
     # только под localhost, и доступ по адресу сервера отвечает 421.
     security = TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=list(settings.mcp_allowed_hosts),
-        allowed_origins=list(settings.mcp_allowed_origins),
+        allowed_hosts=list(app_settings.mcp_allowed_hosts),
+        allowed_origins=list(app_settings.mcp_allowed_origins),
     )
     return mcp_server.streamable_http_app(
         streamable_http_path="/",

@@ -1,14 +1,36 @@
-import asyncio
 import json
 import logging
-import random
+from typing import Protocol, runtime_checkable
 
 import httpx
 
+from src.clients.retry import (
+    RetryDecision,
+    classify,
+    log_attempt,
+    sleep_before_retry,
+    worst_case_seconds,
+)
 from src.exceptions.knowledge import KnowledgeProviderError
+from src.knowledge.images import build_image_data_url
 from src.prompts.vision import VISION_EXTRACTION_PROMPT
 
 logger = logging.getLogger(__name__)
+API_NAME = "vision API"
+
+
+@runtime_checkable
+class VisionCapability(Protocol):
+    """Способность извлечь текст из изображения.
+
+    Отдельный protocol нужен, чтобы выключенное распознавание было явным
+    объектом, а не `None`: сервис получает обязательную зависимость и не
+    содержит ветки `if client is not None`.
+    """
+
+    async def extract_image_text(self, *, filename: str, content: bytes) -> str | None:
+        """Возвращает текст изображения либо ``None``, если распознавание недоступно."""
+        ...
 
 
 class VisionClient:
@@ -35,8 +57,33 @@ class VisionClient:
         self.max_tokens = max_tokens
         self.prompt = prompt
 
+    @property
+    def worst_case_seconds(self) -> float:
+        """Верхняя оценка длительности одного вызова с учётом повторов."""
+        return worst_case_seconds(timeout=self.timeout, attempts=self.retries)
+
+    async def extract_image_text(self, *, filename: str, content: bytes) -> str | None:
+        """Кодирует изображение и возвращает распознанный моделью текст.
+
+        Args:
+            filename: Имя файла, определяющее MIME-тип изображения.
+            content: Бинарное содержимое изображения.
+
+        Returns:
+            Извлечённый текст; пустая строка, если модель ничего не нашла.
+
+        Raises:
+            ValueError: Если расширение не поддерживается или файл пуст.
+            KnowledgeProviderError: Если API недоступен или ответ не разобран.
+        """
+        image_data_url = build_image_data_url(filename, content)
+        return await self.extract_text(image_data_url=image_data_url)
+
     async def extract_text(self, *, image_data_url: str) -> str:
         """Возвращает распознанный моделью текст изображения.
+
+        Повторяются сеть, таймаут, 429 и 5xx, а также неразобранный ответ.
+        Обычные 4xx завершаются сразу.
 
         Args:
             image_data_url: Исходное изображение как data URL с корректным MIME-типом.
@@ -79,15 +126,33 @@ class VisionClient:
                 return text
             except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
                 last_error = error
-                logger.warning(
-                    "⚠️ Ошибка vision API, попытка %s/%s: %s",
-                    attempt,
-                    self.retries,
-                    error,
+                decision = classify(error)
+                log_attempt(
+                    api_name=API_NAME,
+                    decision=decision,
+                    attempt=attempt,
+                    attempts=self.retries,
+                    error=error,
                 )
+                if decision is RetryDecision.FAIL_FAST:
+                    break
                 if attempt < self.retries:
-                    await asyncio.sleep((2 ** (attempt - 1)) + random.random() * 0.2)
+                    await sleep_before_retry(attempt)
         raise KnowledgeProviderError(str(last_error))
+
+
+class DisabledVisionCapability:
+    """Распознавание изображений выключено настройкой.
+
+    Явный объект вместо ``None``: зависимость остаётся обязательной, а
+    решение «изображения не индексируются» видно в месте сборки графа, а не
+    внутри условия в сервисе.
+    """
+
+    async def extract_image_text(self, *, filename: str, content: bytes) -> str | None:
+        """Сообщает вызывающему, что текст изображения недоступен."""
+        logger.info("ℹ️ Vision-модель отключена, изображение %s не индексируется.", filename)
+        return None
 
 
 def _parse_content(content: object) -> str:

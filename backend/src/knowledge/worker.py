@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.settings import Settings, get_settings
+from src.core.settings import Settings
 from src.db.models.knowledge_index_jobs import (
     KnowledgeEntityType,
     KnowledgeIndexJob,
@@ -13,7 +13,7 @@ from src.db.models.knowledge_index_jobs import (
 )
 from src.db.session import async_session_factory
 from src.exceptions.knowledge import KnowledgeProviderError
-from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
+from src.knowledge.runtime import KnowledgeRuntime
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
@@ -39,10 +39,22 @@ class JobExecutionResult:
     error: Exception | None = None
 
 
-async def run_knowledge_worker(stop_event: asyncio.Event) -> None:
-    """Последовательно обрабатывает постоянную очередь до остановки приложения."""
-    settings = get_settings()
-    runtime = get_knowledge_runtime()
+async def run_knowledge_worker(
+    *,
+    stop_event: asyncio.Event,
+    settings: Settings,
+    runtime: KnowledgeRuntime,
+) -> None:
+    """Последовательно обрабатывает постоянную очередь до остановки приложения.
+
+    Настройки и клиенты приходят снаружи: цикл не ищет их сам, поэтому в
+    тестах его зависимости подменяются без monkeypatch модульных globals.
+
+    Args:
+        stop_event: Признак остановки приложения.
+        settings: Настройки приложения.
+        runtime: Клиенты AI-контура, созданные lifespan.
+    """
     await _maintain_queue(settings=settings, reset_processing=True)
     loop = asyncio.get_running_loop()
     next_cleanup_at = loop.time() + RETENTION_CLEANUP_INTERVAL_SECONDS
@@ -50,7 +62,7 @@ async def run_knowledge_worker(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
             await _backfill_payload_indexes_if_pending(runtime)
-            processed = await _process_next()
+            processed = await _process_next(settings=settings, runtime=runtime)
             if loop.time() >= next_cleanup_at:
                 await _maintain_queue(settings=settings, reset_processing=False)
                 next_cleanup_at = loop.time() + RETENTION_CLEANUP_INTERVAL_SECONDS
@@ -99,9 +111,8 @@ async def _maintain_queue(*, settings: Settings, reset_processing: bool) -> None
             logger.info("ℹ️ Удалено старых успешных AI-заданий: %s.", deleted)
 
 
-async def _process_next() -> bool:
+async def _process_next(*, settings: Settings, runtime: KnowledgeRuntime) -> bool:
     """Обрабатывает следующую job или совместимую TASK-пачку короткими сессиями."""
-    settings = get_settings()
     async with async_session_factory() as session:
         jobs = await KnowledgeIndexJobsRepository(session).claim_next_batch(
             limit=settings.knowledge.knowledge_embedding_batch_size
@@ -114,9 +125,15 @@ async def _process_next() -> bool:
         first.entity_type is KnowledgeEntityType.TASK
         and first.operation is KnowledgeIndexOperation.UPSERT
     ):
-        results = await _prepare_and_execute_task_jobs(jobs=jobs, settings=settings)
+        results = await _prepare_and_execute_task_jobs(
+            jobs=jobs,
+            settings=settings,
+            runtime=runtime,
+        )
     else:
-        results = [await _prepare_and_execute_job(job=first, settings=settings)]
+        results = [
+            await _prepare_and_execute_job(job=first, settings=settings, runtime=runtime)
+        ]
     await _persist_results(
         results=results,
         max_attempts=settings.knowledge.knowledge_index_max_attempts,
@@ -128,11 +145,16 @@ async def _prepare_and_execute_job(
     *,
     job: KnowledgeIndexJob,
     settings: Settings,
+    runtime: KnowledgeRuntime,
 ) -> JobExecutionResult:
     """Готовит job в DB-сессии, затем выполняет её после закрытия сессии."""
     try:
         async with async_session_factory() as session:
-            service = _build_index_service(session=session, settings=settings)
+            service = _build_index_service(
+                session=session,
+                settings=settings,
+                runtime=runtime,
+            )
             action = await service.prepare(job)
         chunks_count = await service.execute_prepared(action)
         return JobExecutionResult(job=job, chunks_count=chunks_count)
@@ -146,11 +168,16 @@ async def _prepare_and_execute_task_jobs(
     *,
     jobs: list[KnowledgeIndexJob],
     settings: Settings,
+    runtime: KnowledgeRuntime,
 ) -> list[JobExecutionResult]:
     """Готовит TASK-пачку одним DB-срезом и выполняет её без открытой сессии."""
     try:
         async with async_session_factory() as session:
-            service = _build_index_service(session=session, settings=settings)
+            service = _build_index_service(
+                session=session,
+                settings=settings,
+                runtime=runtime,
+            )
             actions = await service.prepare_task_upserts(
                 project_id=jobs[0].project_id,
                 entity_ids=[int(job.entity_id) for job in jobs if job.entity_id is not None],
@@ -223,7 +250,12 @@ async def _persist_results(*, results: list[JobExecutionResult], max_attempts: i
             )
 
 
-def _build_index_service(*, session: AsyncSession, settings: Settings) -> KnowledgeIndexService:
+def _build_index_service(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    runtime: KnowledgeRuntime,
+) -> KnowledgeIndexService:
     """Собирает индексатор на короткоживущей DB-сессии."""
     return KnowledgeIndexService(
         projects_repository=ProjectsRepository(session),
@@ -238,5 +270,7 @@ def _build_index_service(*, session: AsyncSession, settings: Settings) -> Knowle
         chunk_overlap_chars=settings.knowledge.knowledge_chunk_overlap_chars,
         extract_max_chars=settings.knowledge.knowledge_extract_max_chars,
         milestones_repository=MilestonesRepository(session),
-        runtime=get_knowledge_runtime(),
+        embedding_client=runtime.embedding_client,
+        qdrant_client=runtime.qdrant_client,
+        vision=runtime.vision,
     )

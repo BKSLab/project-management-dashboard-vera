@@ -6,11 +6,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 from docker.errors import DockerException
-from qdrant_client import models
+from qdrant_client import AsyncQdrantClient, models
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import HttpWaitStrategy
 
 from src.clients.qdrant import PAYLOAD_INDEX_FIELDS, ProjectQdrantClient
+from src.clients.vision import DisabledVisionCapability
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType, KnowledgeIndexOperation
 from src.db.models.projects import Project
 from src.db.models.tasks import Task
@@ -39,8 +40,7 @@ def qdrant_url() -> Generator[str, None, None]:
 def build_client(qdrant_url: str) -> ProjectQdrantClient:
     """Создаёт тестовый клиент с малой размерностью векторов."""
     return ProjectQdrantClient(
-        url=qdrant_url,
-        api_key=None,
+        client=AsyncQdrantClient(url=qdrant_url, api_key=None),
         collection_prefix="project",
         vector_dim=3,
     )
@@ -193,11 +193,9 @@ async def test_task_upsert_preserves_comment_and_attachment_points(qdrant_url: s
         chunk_target_chars=2200,
         chunk_overlap_chars=300,
         extract_max_chars=350_000,
-        runtime=SimpleNamespace(
-            embedding_client=embedding_client,
-            qdrant_client=client,
-            vision_client=None,
-        ),
+        embedding_client=embedding_client,
+        qdrant_client=client,
+        vision=DisabledVisionCapability(),
     )
     try:
         await client.upsert_documents(

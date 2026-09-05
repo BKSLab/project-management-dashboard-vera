@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.clients.llm import LlmClient
 from src.db.models.analytics_reports import AnalyticsReport
 from src.db.models.project_milestones import ProjectMilestoneStatus
 from src.db.models.projects import ProjectStatus
@@ -185,9 +186,10 @@ def build_service(
     reports_repository = AsyncMock()
     reports_repository.save.side_effect = lambda data: _stored(report, data)
 
-    llm_client = AsyncMock()
+    llm_client = AsyncMock(spec=LlmClient)
     llm_client.get_structured_response.return_value = llm_response or draft([])
-    runtime = SimpleNamespace(llm_client=llm_client)
+    # Имя модели сервис берёт у клиента, а не у глобальных настроек.
+    llm_client.model = "test-model"
 
     service = AnalyticsService(
         reports_repository=reports_repository,
@@ -204,7 +206,7 @@ def build_service(
         documents_repository=documents_repository,
         document_links_repository=document_links_repository,
         unit_of_work=AsyncMock(),
-        runtime=runtime,
+        llm_client=llm_client,
     )
     return service, reports_repository
 
@@ -312,7 +314,7 @@ async def test_generate_puts_overdue_tasks_first_in_model_context() -> None:
 
     await service.generate(user=user(), project_id=PROJECT_ID)
 
-    llm_client = service.runtime.llm_client
+    llm_client = service.llm_client
     content = json.loads(llm_client.get_structured_response.call_args.kwargs["content"])
     assert [item["key"] for item in content["projects"][0]["tasks"]] == [
         "PROJ-12",

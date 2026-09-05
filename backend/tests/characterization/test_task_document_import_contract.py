@@ -14,6 +14,7 @@ import pytest
 from httpx import AsyncClient
 
 from main import app
+from src.clients.vision import DisabledVisionCapability
 from src.dependencies.services import get_task_document_import_service
 from src.exceptions.documents import DocumentsServiceError
 from src.exceptions.task_attachments import (
@@ -163,7 +164,8 @@ def _build_service(*, link_error: Exception | None = None):
         attachments_service=attachments,
         documents_service=documents,
         links_service=links,
-        runtime=SimpleNamespace(vision_client=None),
+        vision=DisabledVisionCapability(),
+        extract_max_chars=350_000,
     )
     return service, attachments, documents, links
 

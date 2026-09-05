@@ -2,6 +2,7 @@ import json
 import logging
 from time import perf_counter
 
+from src.clients.llm import LlmClient
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.projects import Project
 from src.db.models.task_activity import TaskActivityEventType
@@ -21,7 +22,6 @@ from src.exceptions.wbs_nodes import (
     WbsSuggestionInvalidError,
 )
 from src.knowledge.documents import build_wbs_paths
-from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
 from src.prompts.wbs_suggestion import WBS_SUGGESTION_SYSTEM_PROMPT
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
@@ -75,8 +75,8 @@ class WbsSuggestionService:
         tasks_repository: TasksRepository,
         activity_repository: TaskActivityRepository,
         unit_of_work: UnitOfWork,
+        llm_client: LlmClient,
         knowledge_events: KnowledgeEvents | None = None,
-        runtime: KnowledgeRuntime | None = None,
     ):
         self.wbs_nodes_repository = wbs_nodes_repository
         self.projects_repository = projects_repository
@@ -85,7 +85,7 @@ class WbsSuggestionService:
         self.activity_repository = activity_repository
         self.unit_of_work = unit_of_work
         self.knowledge_events = knowledge_events
-        self.runtime = runtime or get_knowledge_runtime()
+        self.llm_client = llm_client
 
     async def suggest(self, project_id: int) -> WbsSuggestionSchema:
         """Просит модель разложить задачи проекта по разделам ИСР.
@@ -130,7 +130,7 @@ class WbsSuggestionService:
             stage_names={stage.id: stage.name for stage in stages},
         )
         try:
-            output = await self.runtime.llm_client.get_structured_response(
+            output = await self.llm_client.get_structured_response(
                 system_prompt=WBS_SUGGESTION_SYSTEM_PROMPT,
                 content=content,
                 schema=WbsSuggestionSchema,

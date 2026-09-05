@@ -11,8 +11,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from src.clients.qdrant import KnowledgeSearchHit
-from src.core.settings import get_settings
+from src.clients.embedding import EmbeddingClient
+from src.clients.llm import LlmClient
+from src.clients.qdrant import KnowledgeSearchHit, ProjectQdrantClient
 from src.db.models.knowledge_index_jobs import (
     KnowledgeEntityType,
     KnowledgeIndexOperation,
@@ -30,7 +31,6 @@ from src.exceptions.knowledge import (
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.knowledge.documents import build_wbs_paths
 from src.knowledge.retrieval import reciprocal_rank_fusion
-from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
 from src.prompts.project_agent import (
     PROJECT_AGENT_SYSTEM_PROMPT,
     PROJECT_AGENT_TOOL_SELECTION_PROMPT,
@@ -165,6 +165,19 @@ class _SourceRegistry:
         return self._handle_by_source_id.get(source_id)
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectAgentConfig:
+    """Настройки семантического поиска, нужные Project Agent.
+
+    Сервис получает только те значения, которые действительно использует,
+    а не весь объект настроек приложения.
+    """
+
+    knowledge_enabled: bool
+    semantic_limit: int
+    score_threshold: float
+
+
 class ProjectAgentService:
     """RAG-агент: semantic retrieval плюс обязательный актуальный SQL-срез."""
 
@@ -178,10 +191,13 @@ class ProjectAgentService:
         activity_repository: TaskActivityRepository,
         jobs_repository: KnowledgeIndexJobsRepository,
         unit_of_work: UnitOfWork,
-        milestones_repository: MilestonesRepository | None = None,
-        calendar_service: CalendarService | None = None,
-        scenario_service: CalendarScenarioService | None = None,
-        runtime: KnowledgeRuntime | None = None,
+        milestones_repository: MilestonesRepository,
+        calendar_service: CalendarService,
+        scenario_service: CalendarScenarioService,
+        llm_client: LlmClient,
+        embedding_client: EmbeddingClient,
+        qdrant_client: ProjectQdrantClient,
+        config: ProjectAgentConfig,
     ) -> None:
         self.stages_repository = stages_repository
         self.tasks_repository = tasks_repository
@@ -193,8 +209,10 @@ class ProjectAgentService:
         self.milestones_repository = milestones_repository
         self.calendar_service = calendar_service
         self.scenario_service = scenario_service
-        self.runtime = runtime or get_knowledge_runtime()
-        self.settings = get_settings()
+        self.llm_client = llm_client
+        self.embedding_client = embedding_client
+        self.qdrant_client = qdrant_client
+        self.config = config
 
     async def ask(
         self,
@@ -270,22 +288,22 @@ class ProjectAgentService:
             raise ProjectAgentError(str(error)) from error
 
         semantic_hits: list[KnowledgeSearchHit] = []
-        if self.settings.knowledge.knowledge_enabled:
+        if self.config.knowledge_enabled:
             try:
                 phase_started_at = perf_counter()
                 try:
-                    query_vector = await self.runtime.embedding_client.get_embedding(
+                    query_vector = await self.embedding_client.get_embedding(
                         retrieval_query
                     )
                 finally:
                     phases_ms["embedding"] = self._elapsed_ms(phase_started_at)
                 phase_started_at = perf_counter()
                 try:
-                    semantic_hits = await self.runtime.qdrant_client.search(
+                    semantic_hits = await self.qdrant_client.search(
                         project_id=project.id,
                         vector=query_vector,
-                        limit=self.settings.knowledge.knowledge_agent_semantic_limit,
-                        score_threshold=self.settings.knowledge.qdrant_score_threshold,
+                        limit=self.config.semantic_limit,
+                        score_threshold=self.config.score_threshold,
                         entity_type=entity_type,
                     )
                 finally:
@@ -331,7 +349,7 @@ class ProjectAgentService:
         phase_started_at = perf_counter()
         try:
             try:
-                output = await self.runtime.llm_client.get_structured_response(
+                output = await self.llm_client.get_structured_response(
                     system_prompt=PROJECT_AGENT_SYSTEM_PROMPT,
                     content=user_content,
                     schema=AgentOutput,
@@ -382,18 +400,18 @@ class ProjectAgentService:
 
         points_count: int | None = None
         provider_error: str | None = None
-        if self.settings.knowledge.knowledge_enabled:
+        if self.config.knowledge_enabled:
             try:
-                points_count = await self.runtime.qdrant_client.count(project_id)
+                points_count = await self.qdrant_client.count(project_id)
             except KnowledgeProviderError as error:
                 provider_error = error.error_details
         pending = counts.get(KnowledgeIndexStatus.PENDING, 0)
         processing = counts.get(KnowledgeIndexStatus.PROCESSING, 0)
         failed = counts.get(KnowledgeIndexStatus.FAILED, 0)
         return KnowledgeStatusSchema(
-            enabled=self.settings.knowledge.knowledge_enabled,
+            enabled=self.config.knowledge_enabled,
             ready=(
-                self.settings.knowledge.knowledge_enabled
+                self.config.knowledge_enabled
                 and points_count is not None
                 and pending == 0
                 and processing == 0
@@ -407,7 +425,7 @@ class ProjectAgentService:
 
     async def reindex(self, project_id: int) -> None:
         """Ставит ручную полную пересборку в постоянную очередь."""
-        if not self.settings.knowledge.knowledge_enabled:
+        if not self.config.knowledge_enabled:
             raise KnowledgeDisabledError("KNOWLEDGE_ENABLED=false")
         try:
             await self.jobs_repository.enqueue(
@@ -437,7 +455,7 @@ class ProjectAgentService:
             ensure_ascii=False,
         )
         try:
-            return await self.runtime.llm_client.get_structured_response(
+            return await self.llm_client.get_structured_response(
                 system_prompt=PROJECT_AGENT_TOOL_SELECTION_PROMPT,
                 content=content,
                 schema=AgentToolPlan,
@@ -528,7 +546,6 @@ class ProjectAgentService:
                     StructuredToolName.PROJECT_RISKS,
                     StructuredToolName.SCHEDULE_DRIFT,
                 }
-                and self.calendar_service is not None
             ):
                 date_from, date_to = _agent_calendar_range(
                     tool_call=tool_call,
@@ -541,17 +558,11 @@ class ProjectAgentService:
                     date_to=date_to,
                     today=current_date,
                 )
-            elif (
-                tool_call.name is StructuredToolName.MILESTONES
-                and self.milestones_repository is not None
-            ):
+            elif tool_call.name is StructuredToolName.MILESTONES:
                 context.milestones = (await self.milestones_repository.get_by_project(project_id))[
                     :MAX_TOOL_TASKS
                 ]
-            elif (
-                tool_call.name is StructuredToolName.PREVIEW_SCHEDULE_CHANGE
-                and self.scenario_service is not None
-            ):
+            elif tool_call.name is StructuredToolName.PREVIEW_SCHEDULE_CHANGE:
                 task_number = _task_number(tool_call.task_key, project.key)
                 if task_number is None:
                     context.scenario_preview = {

@@ -7,7 +7,7 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.settings import get_settings
+from src.core.settings import Settings
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_members import ProjectMembersRepository
@@ -28,18 +28,16 @@ from src.services.tasks import TasksService
 from src.storage.task_attachments import TaskAttachmentStorage
 
 
-def build_knowledge_events(session: AsyncSession) -> KnowledgeEvents:
+def build_knowledge_events(session: AsyncSession, settings: Settings) -> KnowledgeEvents:
     """Создаёт публикатор событий индексации знаний."""
-    settings = get_settings()
     return KnowledgeEvents(
         repository=KnowledgeIndexJobsRepository(session),
         enabled=settings.knowledge.knowledge_enabled,
     )
 
 
-def build_tasks_service(session: AsyncSession) -> TasksService:
+def build_tasks_service(session: AsyncSession, settings: Settings) -> TasksService:
     """Создаёт сервис задач со всеми доменными зависимостями."""
-    settings = get_settings()
     return TasksService(
         tasks_repository=TasksRepository(session),
         members_repository=ProjectMembersRepository(session),
@@ -51,18 +49,18 @@ def build_tasks_service(session: AsyncSession) -> TasksService:
         wbs_nodes_repository=WbsNodesRepository(session),
         unit_of_work=UnitOfWork(session),
         attachment_storage=TaskAttachmentStorage(settings.app.uploads_path),
-        knowledge_events=build_knowledge_events(session),
+        knowledge_events=build_knowledge_events(session, settings),
     )
 
 
-def build_comments_service(session: AsyncSession) -> TaskCommentsService:
+def build_comments_service(session: AsyncSession, settings: Settings) -> TaskCommentsService:
     """Создаёт сервис комментариев задач."""
     return TaskCommentsService(
         comments_repository=TaskCommentsRepository(session),
         tasks_repository=TasksRepository(session),
         activity_repository=TaskActivityRepository(session),
         unit_of_work=UnitOfWork(session),
-        knowledge_events=build_knowledge_events(session),
+        knowledge_events=build_knowledge_events(session, settings),
     )
 
 
@@ -79,12 +77,12 @@ def build_calendar_service(session: AsyncSession) -> CalendarService:
     )
 
 
-def build_milestones_service(session: AsyncSession) -> MilestonesService:
+def build_milestones_service(session: AsyncSession, settings: Settings) -> MilestonesService:
     """Создаёт сервис проектных вех с transactional outbox."""
     return MilestonesService(
         milestones_repository=MilestonesRepository(session),
         projects_repository=ProjectsRepository(session),
         wbs_nodes_repository=WbsNodesRepository(session),
         unit_of_work=UnitOfWork(session),
-        knowledge_events=build_knowledge_events(session),
+        knowledge_events=build_knowledge_events(session, settings),
     )

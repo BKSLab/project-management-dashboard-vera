@@ -9,15 +9,13 @@ from src.clients.qdrant import PAYLOAD_INDEX_FIELDS, ProjectQdrantClient
 
 def build_client(*, collection_exists: bool = True) -> tuple[ProjectQdrantClient, AsyncMock]:
     """Создаёт Qdrant-обёртку с сетевым клиентом-дублёром."""
+    qdrant = AsyncMock()
+    qdrant.collection_exists.return_value = collection_exists
     client = ProjectQdrantClient(
-        url="http://qdrant.test",
-        api_key=None,
+        client=qdrant,
         collection_prefix="project",
         vector_dim=3,
     )
-    qdrant = AsyncMock()
-    qdrant.collection_exists.return_value = collection_exists
-    client.client = qdrant
     return client, qdrant
 
 

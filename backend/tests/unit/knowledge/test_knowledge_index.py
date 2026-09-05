@@ -59,11 +59,11 @@ def build_service(tmp_path):
         delete_entity=AsyncMock(),
         upsert_documents=AsyncMock(),
     )
-    vision = SimpleNamespace(extract_text=AsyncMock(return_value="текст с картинки"))
+    vision = SimpleNamespace(extract_image_text=AsyncMock(return_value="текст с картинки"))
     runtime = SimpleNamespace(
         embedding_client=embedding,
         qdrant_client=qdrant,
-        vision_client=vision,
+        vision=vision,
     )
     service = KnowledgeIndexService(
         projects_repository=projects,
@@ -78,7 +78,9 @@ def build_service(tmp_path):
         chunk_target_chars=2200,
         chunk_overlap_chars=300,
         extract_max_chars=350_000,
-        runtime=runtime,
+        embedding_client=embedding,
+        qdrant_client=qdrant,
+        vision=vision,
     )
     return service, project, task, runtime, documents, attachments
 
@@ -258,7 +260,9 @@ async def test_unavailable_vision_model_fails_job_instead_of_skipping_image(tmp_
         created_at=datetime.now(UTC),
     )
     (tmp_path / storage_name).write_bytes(b"\x89PNG\r\n\x1a\nvision-fixture")
-    runtime.vision_client.extract_text.side_effect = KnowledgeProviderError("vision API недоступен")
+    runtime.vision.extract_image_text.side_effect = KnowledgeProviderError(
+        "vision API недоступен"
+    )
 
     with pytest.raises(KnowledgeProviderError):
         await service.process(

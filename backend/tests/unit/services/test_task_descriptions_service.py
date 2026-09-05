@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.clients.vision import DisabledVisionCapability
 from src.exceptions.tasks import TaskContextDocumentError, TaskDescriptionRewriteError
 from src.repositories.documents import DocumentsRepository
 from src.repositories.projects import ProjectsRepository
@@ -39,12 +40,12 @@ def build_service(*, file_context_limit: int = 5000):
     llm.get_structured_response.return_value = TaskRephraseResultSchema(
         description_md="Понятное описание задачи."
     )
-    runtime = SimpleNamespace(llm_client=llm, vision_client=None)
     service = TaskDescriptionService(
         projects_repository=projects,
         tasks_repository=tasks,
         documents_repository=documents,
-        runtime=runtime,
+        llm_client=llm,
+        vision=DisabledVisionCapability(),
         file_context_limit=file_context_limit,
     )
     return service, projects, tasks, documents, llm

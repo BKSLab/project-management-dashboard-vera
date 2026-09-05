@@ -1,7 +1,6 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from src.core.settings import get_settings
 from src.db.models.api_tokens import ApiToken, ApiTokenScope
 from src.exceptions.api_tokens import (
     ApiTokenLimitExceededError,
@@ -27,9 +26,16 @@ logger = logging.getLogger(__name__)
 class ApiTokensService:
     """Сервис токенов доступа внешних клиентов."""
 
-    def __init__(self, tokens_repository: ApiTokensRepository):
+    def __init__(self, tokens_repository: ApiTokensRepository, *, max_active_tokens: int):
+        """Создаёт сервис токенов доступа.
+
+        Args:
+            tokens_repository: Репозиторий токенов.
+            max_active_tokens: Предел одновременно действующих токенов
+                одного пользователя.
+        """
         self.tokens_repository = tokens_repository
-        self.settings = get_settings().auth
+        self.max_active_tokens = max_active_tokens
 
     async def list_tokens(self, user_id: int) -> list[ApiTokenSchema]:
         """Возвращает токены пользователя без секретов.
@@ -70,8 +76,8 @@ class ApiTokensService:
         """
         try:
             active = await self.tokens_repository.count_active_by_user(user_id)
-            if active >= self.settings.api_token_max_active:
-                raise ApiTokenLimitExceededError(self.settings.api_token_max_active)
+            if active >= self.max_active_tokens:
+                raise ApiTokenLimitExceededError(self.max_active_tokens)
 
             secret = generate_token_secret()
             ttl_days = data.ttl_days

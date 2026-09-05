@@ -1,4 +1,3 @@
-import base64
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -8,6 +7,7 @@ import pytest
 import xlwt
 from openpyxl import Workbook
 
+from src.clients.vision import DisabledVisionCapability
 from src.knowledge.chunking import chunk_markdown, chunk_text
 from src.knowledge.extract import extract_indexable_text
 
@@ -102,7 +102,11 @@ async def test_extracts_docx_paragraphs_and_table() -> None:
     stream = BytesIO()
     document.save(stream)
 
-    extracted = await extract_indexable_text("паспорт.docx", stream.getvalue())
+    extracted = await extract_indexable_text(
+        "паспорт.docx",
+        stream.getvalue(),
+        vision=DisabledVisionCapability(),
+    )
 
     assert extracted is not None
     assert "Описание проекта" in extracted
@@ -110,19 +114,27 @@ async def test_extracts_docx_paragraphs_and_table() -> None:
 
 
 async def test_extracts_pdf_text_without_image_dependencies() -> None:
-    extracted = await extract_indexable_text("plan.pdf", build_pdf_bytes())
+    extracted = await extract_indexable_text(
+        "plan.pdf",
+        build_pdf_bytes(),
+        vision=DisabledVisionCapability(),
+    )
 
     assert extracted == "Project plan"
 
 
 async def test_skips_unsupported_attachment() -> None:
-    assert await extract_indexable_text("архив.zip", b"binary") is None
+    assert await extract_indexable_text(
+        "архив.zip",
+        b"binary",
+        vision=DisabledVisionCapability(),
+    ) is None
 
 
 async def test_extracts_csv_in_legacy_encoding() -> None:
     content = "этап;срок\nпроектирование;март".encode("cp1251")
 
-    extracted = await extract_indexable_text("план.csv", content)
+    extracted = await extract_indexable_text("план.csv", content, vision=DisabledVisionCapability())
 
     assert extracted == "этап;срок\nпроектирование;март"
 
@@ -133,7 +145,11 @@ async def test_extracts_xlsx_rows_as_labelled_values() -> None:
         sheet.append(["Работа", "Стоимость"])
         sheet.append(["Монтаж", 1500])
 
-    extracted = await extract_indexable_text("смета.xlsx", build_workbook_bytes(build))
+    extracted = await extract_indexable_text(
+        "смета.xlsx",
+        build_workbook_bytes(build),
+        vision=DisabledVisionCapability(),
+    )
 
     assert extracted == "Лист: Смета\nРабота: Монтаж, Стоимость: 1500"
 
@@ -148,7 +164,11 @@ async def test_xlsx_skips_hidden_rows_and_expands_merged_cells() -> None:
         sheet.merge_cells("A2:A3")
         sheet.row_dimensions[4].hidden = True
 
-    extracted = await extract_indexable_text("этапы.xlsx", build_workbook_bytes(build))
+    extracted = await extract_indexable_text(
+        "этапы.xlsx",
+        build_workbook_bytes(build),
+        vision=DisabledVisionCapability(),
+    )
 
     assert extracted == (
         "Лист: Этапы\nЭтап: Подготовка, Задача: Смета\nЭтап: Подготовка, Задача: График"
@@ -159,36 +179,46 @@ async def test_xlsx_without_data_rows_yields_empty_text() -> None:
     def build(sheet):
         sheet.append(["Работа", "Стоимость"])
 
-    extracted = await extract_indexable_text("пусто.xlsx", build_workbook_bytes(build))
+    extracted = await extract_indexable_text(
+        "пусто.xlsx",
+        build_workbook_bytes(build),
+        vision=DisabledVisionCapability(),
+    )
 
     assert extracted == ""
 
 
 async def test_recognises_image_through_vision_model() -> None:
-    vision = SimpleNamespace(extract_text=AsyncMock(return_value="Схема электрощита"))
+    """Изображение уходит в способность распознавания как есть."""
+    vision = SimpleNamespace(extract_image_text=AsyncMock(return_value="Схема электрощита"))
     image = build_image_bytes()
 
-    extracted = await extract_indexable_text(
-        "схема.png",
-        image,
-        vision_client=vision,
-    )
+    extracted = await extract_indexable_text("схема.png", image, vision=vision)
 
     assert extracted == "Схема электрощита"
-    encoded = base64.b64encode(image).decode("ascii")
-    assert vision.extract_text.await_args.kwargs["image_data_url"] == (
-        f"data:image/png;base64,{encoded}"
-    )
+    assert vision.extract_image_text.await_args.kwargs == {
+        "filename": "схема.png",
+        "content": image,
+    }
 
 
 async def test_skips_image_when_vision_disabled() -> None:
-    assert await extract_indexable_text("схема.png", build_image_bytes()) is None
+    assert await extract_indexable_text(
+        "схема.png",
+        build_image_bytes(),
+        vision=DisabledVisionCapability(),
+    ) is None
 
 
 async def test_truncates_text_above_configured_limit() -> None:
     content = ("строка " * 100).encode("utf-8")
 
-    extracted = await extract_indexable_text("лог.log", content, max_chars=20)
+    extracted = await extract_indexable_text(
+        "лог.log",
+        content,
+        vision=DisabledVisionCapability(),
+        max_chars=20,
+    )
 
     assert extracted is not None
     assert len(extracted) == 20
@@ -197,7 +227,7 @@ async def test_truncates_text_above_configured_limit() -> None:
 async def test_extracts_legacy_xls_workbook() -> None:
     content = build_legacy_workbook_bytes([["Работа", "Стоимость"], ["Монтаж", 1500]])
 
-    extracted = await extract_indexable_text("смета.xls", content)
+    extracted = await extract_indexable_text("смета.xls", content, vision=DisabledVisionCapability())
 
     assert extracted == "Лист: Смета\nРабота: Монтаж, Стоимость: 1500"
 
@@ -208,7 +238,7 @@ async def test_legacy_xls_fills_gaps_from_previous_row() -> None:
         title="Этапы",
     )
 
-    extracted = await extract_indexable_text("этапы.xls", content)
+    extracted = await extract_indexable_text("этапы.xls", content, vision=DisabledVisionCapability())
 
     assert extracted == (
         "Лист: Этапы\nЭтап: Подготовка, Задача: Смета\nЭтап: Подготовка, Задача: График"
@@ -217,7 +247,11 @@ async def test_legacy_xls_fills_gaps_from_previous_row() -> None:
 
 async def test_corrupted_workbook_raises_value_error() -> None:
     with pytest.raises(ValueError):
-        await extract_indexable_text("битая.xlsx", b"not a workbook at all")
+        await extract_indexable_text(
+            "битая.xlsx",
+            b"not a workbook at all",
+            vision=DisabledVisionCapability(),
+        )
 
 
 async def test_xlsx_hidden_rows_align_when_table_starts_below_first_row() -> None:
@@ -228,6 +262,10 @@ async def test_xlsx_hidden_rows_align_when_table_starts_below_first_row() -> Non
         sheet["A6"] = "Черновик"
         sheet.row_dimensions[6].hidden = True
 
-    extracted = await extract_indexable_text("реестр.xlsx", build_workbook_bytes(build))
+    extracted = await extract_indexable_text(
+        "реестр.xlsx",
+        build_workbook_bytes(build),
+        vision=DisabledVisionCapability(),
+    )
 
     assert extracted == "Лист: Реестр\nПозиция: Кабель"

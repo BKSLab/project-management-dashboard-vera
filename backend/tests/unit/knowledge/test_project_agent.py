@@ -13,6 +13,7 @@ from src.db.models.tasks import Task, TaskPriority
 from src.exceptions.knowledge import KnowledgeProviderError
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
+from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.tasks import ProjectTaskStatistics, TasksRepository
@@ -38,6 +39,7 @@ from src.services.project_agent import (
     AgentOutput,
     AgentToolCall,
     AgentToolPlan,
+    ProjectAgentConfig,
     ProjectAgentService,
     StructuredToolName,
 )
@@ -113,6 +115,8 @@ def build_service(*, semantic_available: bool = True):
         )
 
     llm_client.get_structured_response.side_effect = answer_with_first_task_handle
+    # Дублёры собираются в один namespace только ради компактных проверок в
+    # тестах: сервис получает каждого клиента отдельной зависимостью.
     runtime = SimpleNamespace(
         embedding_client=embedding_client,
         qdrant_client=qdrant_client,
@@ -126,7 +130,17 @@ def build_service(*, semantic_available: bool = True):
         activity_repository=activity,
         jobs_repository=jobs,
         unit_of_work=AsyncMock(spec=UnitOfWork),
-        runtime=runtime,
+        milestones_repository=AsyncMock(spec=MilestonesRepository),
+        calendar_service=AsyncMock(spec=CalendarService),
+        scenario_service=AsyncMock(spec=CalendarScenarioService),
+        llm_client=llm_client,
+        embedding_client=embedding_client,
+        qdrant_client=qdrant_client,
+        config=ProjectAgentConfig(
+            knowledge_enabled=True,
+            semantic_limit=10,
+            score_threshold=0.35,
+        ),
     )
     return service, project, runtime
 

@@ -10,9 +10,9 @@ import docx
 from pdfminer.high_level import extract_text as extract_pdf_text
 from pdfminer.pdfpage import PDFPage
 
-from src.clients.vision import VisionClient
+from src.clients.vision import VisionCapability
 from src.knowledge.excel import extract_excel_text
-from src.knowledge.images import IMAGE_MEDIA_TYPES, build_image_data_url
+from src.knowledge.images import IMAGE_MEDIA_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ async def extract_indexable_text(
     filename: str,
     content: bytes,
     *,
-    vision_client: VisionClient | None = None,
+    vision: VisionCapability,
     max_chars: int | None = None,
 ) -> str | None:
     """Извлекает текст поддерживаемого вложения; остальные типы пропускает.
@@ -43,7 +43,8 @@ async def extract_indexable_text(
     Args:
         filename: Исходное имя файла, по расширению которого выбирается разбор.
         content: Бинарное содержимое файла.
-        vision_client: Клиент vision-модели; без него изображения пропускаются.
+        vision: Способность распознать изображение. Выключенное
+            распознавание передаётся явной no-op реализацией, а не ``None``.
         max_chars: Предел длины результата, если он задан настройками.
 
     Returns:
@@ -57,7 +58,7 @@ async def extract_indexable_text(
     if suffix not in INDEXABLE_EXTENSIONS:
         return None
     if suffix in IMAGE_EXTENSIONS:
-        text = await _extract_image(content, vision_client=vision_client, filename=filename)
+        text = await vision.extract_image_text(filename=filename, content=content)
     else:
         text = await asyncio.to_thread(_extract_binary_text, suffix, content)
     if text is None:
@@ -74,20 +75,6 @@ def _extract_binary_text(suffix: str, content: bytes) -> str:
     if suffix == ".pdf":
         return _extract_pdf(content)
     return _extract_docx(content)
-
-
-async def _extract_image(
-    content: bytes,
-    *,
-    vision_client: VisionClient | None,
-    filename: str,
-) -> str | None:
-    """Распознаёт изображение vision-моделью, если она сконфигурирована."""
-    if vision_client is None:
-        logger.info("ℹ️ Vision-модель отключена, изображение %s не индексируется.", filename)
-        return None
-    image_data_url = build_image_data_url(filename, content)
-    return await vision_client.extract_text(image_data_url=image_data_url)
 
 
 def _decode_text(content: bytes) -> str:

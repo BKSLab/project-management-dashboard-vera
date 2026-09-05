@@ -107,6 +107,7 @@ async def test_single_external_call_runs_after_database_session_closed(monkeypat
     result = await _prepare_and_execute_job(
         job=job(1),
         settings=SimpleNamespace(),
+        runtime=SimpleNamespace(),
     )
 
     assert result.error is None
@@ -141,6 +142,7 @@ async def test_task_batch_external_call_runs_after_database_session_closed(monke
     results = await _prepare_and_execute_task_jobs(
         jobs=[job(1), job(2)],
         settings=SimpleNamespace(),
+        runtime=SimpleNamespace(),
     )
 
     assert [result.chunks_count for result in results] == [1, 1]
@@ -176,7 +178,7 @@ async def test_unavailable_qdrant_does_not_stop_worker_cycle(monkeypatch) -> Non
     maintain_queue = AsyncMock()
     process_next = AsyncMock()
 
-    async def process_then_stop() -> bool:
+    async def process_then_stop(**_kwargs) -> bool:
         stop_event.set()
         return True
 
@@ -184,13 +186,13 @@ async def test_unavailable_qdrant_does_not_stop_worker_cycle(monkeypatch) -> Non
     settings = SimpleNamespace(
         knowledge=SimpleNamespace(knowledge_index_poll_seconds=0.01),
     )
-    monkeypatch.setattr("src.knowledge.worker.get_settings", lambda: settings)
-    monkeypatch.setattr("src.knowledge.worker.get_knowledge_runtime", lambda: runtime)
     monkeypatch.setattr("src.knowledge.worker._maintain_queue", maintain_queue)
     monkeypatch.setattr("src.knowledge.worker._process_next", process_next)
 
-    await run_knowledge_worker(stop_event)
+    # Настройки и клиенты приходят аргументами: подменять модульные globals
+    # больше не требуется.
+    await run_knowledge_worker(stop_event=stop_event, settings=settings, runtime=runtime)
 
     backfill.assert_awaited_once_with()
-    process_next.assert_awaited_once_with()
+    process_next.assert_awaited_once_with(settings=settings, runtime=runtime)
     assert runtime.payload_indexes_backfill_pending is True

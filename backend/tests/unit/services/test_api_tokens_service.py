@@ -15,6 +15,9 @@ from src.schemas.api_tokens import ApiTokenCreateSchema
 from src.services.api_tokens import ApiTokensService
 from src.utils.api_tokens import hash_token_secret
 
+# Предел активных токенов сервис получает значением, а не читает из настроек.
+MAX_ACTIVE_TOKENS = 10
+
 
 class FakeTokensRepository:
     """Репозиторий токенов в памяти."""
@@ -76,7 +79,7 @@ def _token(**overrides) -> ApiToken:
 async def test_issue_token_returns_secret_once_and_stores_only_hash() -> None:
     """Секрет возвращается пользователю, а в репозиторий уходит только хеш."""
     repository = FakeTokensRepository()
-    service = ApiTokensService(tokens_repository=repository)
+    service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
     result = await service.issue_token(
         user_id=1,
@@ -93,7 +96,7 @@ async def test_issue_token_returns_secret_once_and_stores_only_hash() -> None:
 async def test_issue_token_without_ttl_creates_endless_token() -> None:
     """Отсутствие срока означает бессрочный токен."""
     repository = FakeTokensRepository()
-    service = ApiTokensService(tokens_repository=repository)
+    service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
     await service.issue_token(
         user_id=1,
@@ -106,7 +109,7 @@ async def test_issue_token_without_ttl_creates_endless_token() -> None:
 async def test_issue_token_sets_expiration_from_ttl() -> None:
     """Срок жизни отсчитывается от момента выпуска."""
     repository = FakeTokensRepository()
-    service = ApiTokensService(tokens_repository=repository)
+    service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
     await service.issue_token(
         user_id=1,
@@ -121,7 +124,7 @@ async def test_issue_token_sets_expiration_from_ttl() -> None:
 async def test_issue_token_rejects_over_limit() -> None:
     """Достигнутый предел действующих токенов запрещает выпуск."""
     repository = FakeTokensRepository(active_count=10)
-    service = ApiTokensService(tokens_repository=repository)
+    service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
     with pytest.raises(ApiTokenLimitExceededError):
         await service.issue_token(
@@ -135,7 +138,7 @@ async def test_issue_token_rejects_over_limit() -> None:
 async def test_list_tokens_never_exposes_hash() -> None:
     """Список токенов не содержит ни секрета, ни его хеша."""
     repository = FakeTokensRepository(tokens=[_token(token_hash="секретный-хеш")])
-    service = ApiTokensService(tokens_repository=repository)
+    service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
     tokens = await service.list_tokens(1)
 
@@ -147,7 +150,7 @@ async def test_list_tokens_never_exposes_hash() -> None:
 async def test_revoke_unknown_token_raises_not_found() -> None:
     """Отзыв чужого или несуществующего токена не молчит."""
     repository = FakeTokensRepository(tokens=[])
-    service = ApiTokensService(tokens_repository=repository)
+    service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
     with pytest.raises(ApiTokenNotFoundError):
         await service.revoke_token(token_id=99, user_id=1)
@@ -156,7 +159,7 @@ async def test_revoke_unknown_token_raises_not_found() -> None:
 async def test_revoke_passes_owner_to_repository() -> None:
     """Отзыв всегда ограничен владельцем токена."""
     repository = FakeTokensRepository(tokens=[_token(id=5)])
-    service = ApiTokensService(tokens_repository=repository)
+    service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
     await service.revoke_token(token_id=5, user_id=1)
 
@@ -167,7 +170,7 @@ async def test_resolve_secret_looks_up_by_hash() -> None:
     """Поиск токена идёт по хешу, а не по самому секрету."""
     secret = "tt_test-secret"
     repository = FakeTokensRepository(tokens=[_token(token_hash=hash_token_secret(secret))])
-    service = ApiTokensService(tokens_repository=repository)
+    service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
     assert await service.resolve_secret(secret) is not None
     assert await service.resolve_secret("tt_другой") is None
@@ -180,7 +183,10 @@ async def test_repository_error_becomes_service_error() -> None:
         async def get_by_user(self, user_id: int) -> list[ApiToken]:
             raise ApiTokensRepositoryError("сбой БД")
 
-    service = ApiTokensService(tokens_repository=BrokenRepository())
+    service = ApiTokensService(
+        tokens_repository=BrokenRepository(),
+        max_active_tokens=MAX_ACTIVE_TOKENS,
+    )
 
     with pytest.raises(ApiTokensServiceError):
         await service.list_tokens(1)

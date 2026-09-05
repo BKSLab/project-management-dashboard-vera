@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.clients.vision import DisabledVisionCapability
 from src.exceptions.documents import DocumentsServiceError
 from src.repositories.tasks import TasksRepository
 from src.schemas.document_links import DocumentLinkSchema
@@ -45,13 +46,13 @@ def build_service():
     )
     links = AsyncMock(spec=DocumentLinksService)
     links.create_link.return_value = DocumentLinkSchema(id=12, document_id=11, task_id=8)
-    runtime = SimpleNamespace(vision_client=None)
     service = TaskDocumentImportService(
         tasks_repository=tasks,
         attachments_service=attachments,
         documents_service=documents,
         links_service=links,
-        runtime=runtime,
+        vision=DisabledVisionCapability(),
+        extract_max_chars=350_000,
     )
     return service, attachments, documents, links
 

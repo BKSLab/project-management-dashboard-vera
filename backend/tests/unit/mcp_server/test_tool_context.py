@@ -1,10 +1,14 @@
 """Проверки аутентификации и разрешения сущностей в MCP-инструментах."""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
+from src.clients.vision import DisabledVisionCapability
+from src.core.settings import get_settings
 from src.db.models.api_tokens import ApiTokenScope
 from src.db.models.project_members import ProjectMember, ProjectRole
 from src.db.models.projects import Project
@@ -39,6 +43,16 @@ def _project(**overrides) -> Project:
     return Project(**values)
 
 
+def _runtime() -> SimpleNamespace:
+    """Контейнер клиентов, который в проде создаёт lifespan приложения."""
+    return SimpleNamespace(
+        embedding_client=AsyncMock(),
+        qdrant_client=AsyncMock(),
+        llm_client=AsyncMock(),
+        vision=DisabledVisionCapability(),
+    )
+
+
 def _tools() -> ToolContext:
     return ToolContext(
         principal=AuthenticatedPrincipal(
@@ -47,6 +61,8 @@ def _tools() -> ToolContext:
             via_api_token=True,
         ),
         session=object(),
+        runtime=_runtime(),
+        settings=get_settings(),
     )
 
 

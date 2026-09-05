@@ -5,6 +5,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.clients.llm import LlmClient
+from src.clients.vision import VisionCapability
 from src.exceptions.documents import DocumentsRepositoryError
 from src.exceptions.projects import ProjectNotFoundError, ProjectsRepositoryError
 from src.exceptions.tasks import (
@@ -16,7 +18,6 @@ from src.exceptions.tasks import (
     TasksServiceError,
 )
 from src.knowledge.extract import INDEXABLE_EXTENSIONS, extract_indexable_text
-from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
 from src.prompts.task_description import TASK_DESCRIPTION_REPHRASE_PROMPT
 from src.repositories.documents import DocumentsRepository
 from src.repositories.projects import ProjectsRepository
@@ -50,13 +51,15 @@ class TaskDescriptionService:
         projects_repository: ProjectsRepository,
         tasks_repository: TasksRepository,
         documents_repository: DocumentsRepository,
-        runtime: KnowledgeRuntime | None = None,
-        file_context_limit: int = 5000,
+        llm_client: LlmClient,
+        vision: VisionCapability,
+        file_context_limit: int,
     ) -> None:
         self.projects_repository = projects_repository
         self.tasks_repository = tasks_repository
         self.documents_repository = documents_repository
-        self.runtime = runtime or get_knowledge_runtime()
+        self.llm_client = llm_client
+        self.vision = vision
         self.file_context_limit = file_context_limit
 
     async def rephrase(
@@ -123,7 +126,7 @@ class TaskDescriptionService:
                 "new_files": extracted_files,
                 "length_guidance": _length_guidance(data.description_md),
             }
-            result = await self.runtime.llm_client.get_structured_response(
+            result = await self.llm_client.get_structured_response(
                 system_prompt=TASK_DESCRIPTION_REPHRASE_PROMPT,
                 content=json.dumps(payload, ensure_ascii=False),
                 schema=TaskRephraseResultSchema,
@@ -172,7 +175,7 @@ class TaskDescriptionService:
                 extracted = await extract_indexable_text(
                     file.name,
                     file.content,
-                    vision_client=self.runtime.vision_client,
+                    vision=self.vision,
                     max_chars=self.file_context_limit,
                 )
             except ValueError as error:

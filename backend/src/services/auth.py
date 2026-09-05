@@ -1,6 +1,5 @@
 import logging
 
-from src.core.settings import get_settings
 from src.db.models.users import User
 from src.exceptions.auth import (
     AuthServiceError,
@@ -24,8 +23,16 @@ logger = logging.getLogger(__name__)
 class AuthService:
     """Сервис регистрации и входа."""
 
-    def __init__(self, users_repository: UsersRepository):
+    def __init__(self, users_repository: UsersRepository, *, invite_code: str):
+        """Создаёт сервис регистрации и входа.
+
+        Args:
+            users_repository: Репозиторий пользователей.
+            invite_code: Ожидаемый код приглашения. Передаётся значением:
+                сервис не должен знать о конфигурации приложения.
+        """
         self.users_repository = users_repository
+        self.invite_code = invite_code
 
     async def register(self, data: dict) -> UserSchema:
         """Регистрирует пользователя после проверки кода приглашения.
@@ -46,8 +53,7 @@ class AuthService:
         password = str(payload.pop("password", ""))
         payload.pop("password_confirm", None)
 
-        expected_code = get_settings().auth.registration_invite_code.get_secret_value()
-        if not secrets_match(invite_code, expected_code):
+        if not secrets_match(invite_code, self.invite_code):
             logger.warning("⚠️ Регистрация с неверным кодом приглашения.")
             raise InvalidInviteCodeError()
 

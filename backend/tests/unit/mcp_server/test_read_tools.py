@@ -3,10 +3,13 @@
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
+from src.clients.vision import DisabledVisionCapability
+from src.core.settings import get_settings
 from src.db.models.api_tokens import ApiTokenScope
 from src.db.models.project_members import ProjectMember, ProjectRole
 from src.db.models.project_milestones import ProjectMilestoneStatus
@@ -78,6 +81,16 @@ class FakeContext:
     headers = {"Authorization": "Bearer tt_test"}
 
 
+def _runtime() -> SimpleNamespace:
+    """Контейнер клиентов, который в проде создаёт lifespan приложения."""
+    return SimpleNamespace(
+        embedding_client=AsyncMock(),
+        qdrant_client=AsyncMock(),
+        llm_client=AsyncMock(),
+        vision=DisabledVisionCapability(),
+    )
+
+
 def _tools(scope: ApiTokenScope = ApiTokenScope.READ) -> ToolContext:
     return ToolContext(
         principal=AuthenticatedPrincipal(
@@ -93,6 +106,8 @@ def _tools(scope: ApiTokenScope = ApiTokenScope.READ) -> ToolContext:
             via_api_token=True,
         ),
         session=object(),
+        runtime=_runtime(),
+        settings=get_settings(),
     )
 
 

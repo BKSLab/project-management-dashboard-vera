@@ -32,11 +32,17 @@ from src.api.v1.endpoints.task_documents import router as task_documents_router
 from src.api.v1.endpoints.tasks import router as tasks_router
 from src.api.v1.endpoints.users import router as users_router
 from src.api.v1.endpoints.wbs_nodes import router as wbs_nodes_router
+from src.core.app_state import RUNTIME_STATE_KEY, SETTINGS_STATE_KEY
 from src.core.config_logger import configure_logging
 from src.core.settings import get_settings
 from src.db.session import async_session_factory, engine
 from src.exceptions.knowledge import KnowledgeProviderError
-from src.knowledge.runtime import close_knowledge_runtime, get_knowledge_runtime
+from src.knowledge.runtime import (
+    build_knowledge_runtime,
+    close_knowledge_runtime,
+    create_http_client,
+    create_qdrant_client,
+)
 from src.knowledge.worker import run_knowledge_worker
 from src.mcp_server.server import build_mcp_app, mcp_server
 from src.utils.check_db import check_db_connection
@@ -47,22 +53,34 @@ settings = get_settings()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Проверяет критичные ресурсы при старте и освобождает их при остановке.
+async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, object]]:
+    """Создаёт тяжёлые ресурсы при старте и освобождает их при остановке.
+
+    Приложение — единственный владелец сетевых клиентов: они создаются
+    здесь, отдаются graph-у зависимостей через состояние запроса и здесь же
+    закрываются. Смонтированное MCP-приложение видит то же состояние,
+    поэтому у обоих транспортов один набор клиентов, а не два.
 
     Args:
         app: Экземпляр FastAPI, жизненным циклом которого управляет функция.
 
     Yields:
-        Управление запущенному приложению после успешных стартовых проверок.
+        Состояние запроса с ресурсами приложения.
     """
     logger.info("🚀 Запуск приложения %s.", settings.app.app_name)
     async with async_session_factory() as db_session:
         await check_db_connection(db_session=db_session)
+
+    http_client = create_http_client(settings)
+    qdrant_client = create_qdrant_client(settings)
+    runtime = build_knowledge_runtime(
+        settings=settings,
+        http_client=http_client,
+        qdrant_client=qdrant_client,
+    )
     worker_stop = asyncio.Event()
     worker_task: asyncio.Task | None = None
     if settings.knowledge.knowledge_enabled:
-        runtime = get_knowledge_runtime()
         try:
             await runtime.qdrant_client.backfill_payload_indexes()
         except KnowledgeProviderError:
@@ -72,7 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 exc_info=True,
             )
         worker_task = asyncio.create_task(
-            run_knowledge_worker(worker_stop),
+            run_knowledge_worker(stop_event=worker_stop, settings=settings, runtime=runtime),
             name="project-knowledge-indexer",
         )
         logger.info("✅ Фоновый индексатор базы знаний запущен.")
@@ -82,14 +100,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with mcp_server.session_manager.run():
             logger.info("✅ MCP-сервер доступен на %s.", settings.app.mcp_path)
             logger.info("✅ Приложение успешно запущено.")
-            yield
+            yield {RUNTIME_STATE_KEY: runtime, SETTINGS_STATE_KEY: settings}
     finally:
         worker_stop.set()
         if worker_task is not None:
             worker_task.cancel()
             with suppress(asyncio.CancelledError):
                 await worker_task
-        await close_knowledge_runtime()
+        await close_knowledge_runtime(runtime)
         await engine.dispose()
         logger.info("✅ Ресурсы приложения освобождены.")
 
@@ -166,5 +184,5 @@ for api_router in (
 
 # MCP монтируется отдельным ASGI-приложением: его транспорт держит долгие
 # соединения и не вписывается в контур обычных JSON-эндпоинтов.
-mcp_app = build_mcp_app()
+mcp_app = build_mcp_app(settings=settings)
 app.mount(settings.app.mcp_path, mcp_app)

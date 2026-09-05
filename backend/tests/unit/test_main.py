@@ -1,3 +1,5 @@
+"""Проверки composition root: создание и освобождение ресурсов приложения."""
+
 import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -7,56 +9,125 @@ import pytest
 from fastapi import FastAPI
 
 import src.main as main_module
+from src.core.app_state import RUNTIME_STATE_KEY, SETTINGS_STATE_KEY
 from src.exceptions.knowledge import KnowledgeProviderError
 
 
-@pytest.mark.asyncio
-async def test_lifespan_starts_application_when_qdrant_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Недоступный Qdrant не блокирует запуск основного трекера."""
+@pytest.fixture
+def composition(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """Подменяет тяжёлые ресурсы и возвращает наблюдаемые за ними дублёры."""
     db_session = object()
 
     @asynccontextmanager
     async def session_factory():
         yield db_session
 
-    backfill = AsyncMock(side_effect=KnowledgeProviderError("Qdrant offline"))
-    runtime = SimpleNamespace(qdrant_client=SimpleNamespace(backfill_payload_indexes=backfill))
-    check_db = AsyncMock()
+    http_client = object()
+    qdrant_sdk = object()
+    runtime = SimpleNamespace(
+        qdrant_client=SimpleNamespace(backfill_payload_indexes=AsyncMock()),
+    )
+    created = SimpleNamespace(http=0, qdrant=0, runtime=0)
+
+    def create_http_client(settings):
+        created.http += 1
+        return http_client
+
+    def create_qdrant_client(settings):
+        created.qdrant += 1
+        return qdrant_sdk
+
+    def build_runtime(*, settings, http_client, qdrant_client):
+        created.runtime += 1
+        return runtime
+
+    settings = SimpleNamespace(
+        app=SimpleNamespace(app_name="Test app", mcp_path="/mcp"),
+        knowledge=SimpleNamespace(knowledge_enabled=True),
+    )
     close_runtime = AsyncMock()
     dispose_engine = AsyncMock()
-    warning = Mock()
+    check_db = AsyncMock()
     worker_started = asyncio.Event()
 
-    async def run_worker(stop_event: asyncio.Event) -> None:
+    async def run_worker(*, stop_event: asyncio.Event, settings, runtime) -> None:
         worker_started.set()
         await stop_event.wait()
 
     monkeypatch.setattr(main_module, "async_session_factory", session_factory)
     monkeypatch.setattr(main_module, "check_db_connection", check_db)
-    monkeypatch.setattr(main_module, "get_knowledge_runtime", lambda: runtime)
+    monkeypatch.setattr(main_module, "create_http_client", create_http_client)
+    monkeypatch.setattr(main_module, "create_qdrant_client", create_qdrant_client)
+    monkeypatch.setattr(main_module, "build_knowledge_runtime", build_runtime)
     monkeypatch.setattr(main_module, "run_knowledge_worker", run_worker)
     monkeypatch.setattr(main_module, "close_knowledge_runtime", close_runtime)
     monkeypatch.setattr(main_module, "engine", SimpleNamespace(dispose=dispose_engine))
-    monkeypatch.setattr(main_module.logger, "warning", warning)
+    monkeypatch.setattr(main_module, "settings", settings)
+
+    # Настоящий session manager MCP запускается один раз на экземпляр, а
+    # тестов lifespan несколько: подменяем его на новый контекст в каждом.
+    @asynccontextmanager
+    async def session_manager_run():
+        yield
+
     monkeypatch.setattr(
         main_module,
-        "settings",
-        SimpleNamespace(
-            app=SimpleNamespace(app_name="Test app", mcp_path="/mcp"),
-            knowledge=SimpleNamespace(knowledge_enabled=True),
-        ),
+        "mcp_server",
+        SimpleNamespace(session_manager=SimpleNamespace(run=session_manager_run)),
     )
 
-    async with main_module.lifespan(FastAPI()):
-        await asyncio.wait_for(worker_started.wait(), timeout=1)
+    return SimpleNamespace(
+        db_session=db_session,
+        runtime=runtime,
+        settings=settings,
+        created=created,
+        close_runtime=close_runtime,
+        dispose_engine=dispose_engine,
+        check_db=check_db,
+        worker_started=worker_started,
+    )
 
-    check_db.assert_awaited_once_with(db_session=db_session)
+
+async def test_lifespan_creates_and_closes_resources_exactly_once(
+    composition: SimpleNamespace,
+) -> None:
+    """Каждый сетевой ресурс создаётся и закрывается ровно один раз."""
+    async with main_module.lifespan(FastAPI()):
+        await asyncio.wait_for(composition.worker_started.wait(), timeout=1)
+
+    assert composition.created.http == 1
+    assert composition.created.qdrant == 1
+    assert composition.created.runtime == 1
+    composition.check_db.assert_awaited_once_with(db_session=composition.db_session)
+    composition.close_runtime.assert_awaited_once_with(composition.runtime)
+    composition.dispose_engine.assert_awaited_once_with()
+
+
+async def test_lifespan_publishes_resources_in_request_state(
+    composition: SimpleNamespace,
+) -> None:
+    """Ресурсы попадают в состояние запроса, доступное и MCP-транспорту."""
+    async with main_module.lifespan(FastAPI()) as state:
+        assert state[RUNTIME_STATE_KEY] is composition.runtime
+        assert state[SETTINGS_STATE_KEY] is composition.settings
+
+
+async def test_lifespan_starts_application_when_qdrant_is_unavailable(
+    composition: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Недоступный Qdrant не блокирует запуск основного трекера."""
+    backfill = AsyncMock(side_effect=KnowledgeProviderError("Qdrant offline"))
+    composition.runtime.qdrant_client.backfill_payload_indexes = backfill
+    warning = Mock()
+    monkeypatch.setattr(main_module.logger, "warning", warning)
+
+    async with main_module.lifespan(FastAPI()):
+        await asyncio.wait_for(composition.worker_started.wait(), timeout=1)
+
     backfill.assert_awaited_once_with()
-    assert runtime.payload_indexes_backfill_pending is True
-    close_runtime.assert_awaited_once_with()
-    dispose_engine.assert_awaited_once_with()
+    assert composition.runtime.payload_indexes_backfill_pending is True
+    composition.close_runtime.assert_awaited_once_with(composition.runtime)
     warning.assert_called_once_with(
         "⚠️ Qdrant недоступен при старте; backfill payload-индексов отложен.",
         exc_info=True,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from src.core.settings import get_settings
+from src.clients.vision import VisionCapability
 from src.exceptions.documents import DocumentsServiceError
 from src.exceptions.task_attachments import (
     TaskAttachmentsServiceError,
@@ -13,7 +13,6 @@ from src.exceptions.task_attachments import (
 )
 from src.exceptions.tasks import TaskNotFoundError
 from src.knowledge.extract import INDEXABLE_EXTENSIONS, extract_indexable_text
-from src.knowledge.runtime import KnowledgeRuntime, get_knowledge_runtime
 from src.repositories.tasks import TasksRepository
 from src.schemas.task_documents import TaskDocumentImportSchema
 from src.services.document_links import DocumentLinksService
@@ -33,14 +32,15 @@ class TaskDocumentImportService:
         attachments_service: TaskAttachmentsService,
         documents_service: DocumentsService,
         links_service: DocumentLinksService,
-        runtime: KnowledgeRuntime | None = None,
+        vision: VisionCapability,
+        extract_max_chars: int,
     ) -> None:
         self.tasks_repository = tasks_repository
         self.attachments_service = attachments_service
         self.documents_service = documents_service
         self.links_service = links_service
-        self.runtime = runtime or get_knowledge_runtime()
-        self.settings = get_settings()
+        self.vision = vision
+        self.extract_max_chars = extract_max_chars
 
     @property
     def max_file_size(self) -> int:
@@ -76,8 +76,8 @@ class TaskDocumentImportService:
             extracted = await extract_indexable_text(
                 safe_name,
                 content,
-                vision_client=self.runtime.vision_client,
-                max_chars=self.settings.knowledge.knowledge_extract_max_chars,
+                vision=self.vision,
+                max_chars=self.extract_max_chars,
             )
         except ValueError as error:
             raise TaskDocumentImportError(

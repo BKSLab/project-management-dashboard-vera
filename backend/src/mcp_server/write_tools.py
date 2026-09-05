@@ -86,7 +86,7 @@ async def create_task(
             payload["due_date"] = _parse_date(due_date)
 
         try:
-            created = await build_tasks_service(tools.session).create_task(
+            created = await build_tasks_service(tools.session, tools.settings).create_task(
                 project_id=project.id,
                 data=payload,
                 created_by_user_id=tools.user.id,
@@ -148,7 +148,7 @@ async def update_task(
             raise ToolError("Не передано ни одного поля для изменения.")
 
         try:
-            updated = await build_tasks_service(tools.session).update_task(
+            updated = await build_tasks_service(tools.session, tools.settings).update_task(
                 task_id=task.id,
                 data=payload,
             )
@@ -177,7 +177,7 @@ async def move_task(
         target = _stage_by_name(stages, stage)
 
         try:
-            moved = await build_tasks_service(tools.session).move_task(
+            moved = await build_tasks_service(tools.session, tools.settings).move_task(
                 task_id=task.id,
                 stage_id=target.id,
             )
@@ -213,7 +213,7 @@ async def delete_task(
         key = build_task_key(project.key, task.number)
 
         try:
-            await build_tasks_service(tools.session).delete_task(task_id=task.id)
+            await build_tasks_service(tools.session, tools.settings).delete_task(task_id=task.id)
         except ApplicationError as error:
             raise ToolError(_domain_message(error, "Не удалось удалить задачу.")) from error
         return {"task_key": key, "deleted": True}
@@ -242,7 +242,7 @@ async def add_comment(
         author_name = (author or "").strip() or _default_author(tools)
 
         try:
-            comment = await build_comments_service(tools.session).add_comment(
+            comment = await build_comments_service(tools.session, tools.settings).add_comment(
                 task_id=task.id,
                 author_name=author_name,
                 body_md=body,
@@ -287,7 +287,7 @@ async def set_task_dates(
         if not payload:
             raise ToolError("Не передано ни одной даты для изменения.")
         try:
-            updated = await build_tasks_service(tools.session).update_task(
+            updated = await build_tasks_service(tools.session, tools.settings).update_task(
                 task_id=task.id,
                 data=payload,
             )
@@ -328,7 +328,7 @@ async def create_milestone(
         except ValueError as error:
             raise ToolError("Статус вехи должен быть PLANNED или ACHIEVED.") from error
         try:
-            created = await build_milestones_service(tools.session).create_milestone(
+            created = await build_milestones_service(tools.session, tools.settings).create_milestone(
                 project.id,
                 {
                     "title": title.strip(),

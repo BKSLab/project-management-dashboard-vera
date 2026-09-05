@@ -101,7 +101,7 @@ def build_service(
         tasks_repository=tasks_repository,
         activity_repository=activity_repository,
         unit_of_work=unit_of_work,
-        runtime=SimpleNamespace(llm_client=llm_client),
+        llm_client=llm_client,
     )
     return service, {
         "wbs": wbs_repository,

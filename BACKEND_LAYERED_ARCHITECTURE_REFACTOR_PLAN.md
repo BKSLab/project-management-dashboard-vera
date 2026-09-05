@@ -17,7 +17,7 @@
 | Этап | Статус | Тесты после этапа | Коммит |
 |---|---|---|---|
 | 0. Safety net | ✅ выполнен | 633 passed | `stage-0` |
-| 1. Client/config dependencies | ⬜ | — | — |
+| 1. Client/config dependencies | ✅ выполнен | 791 passed | `stage-1` |
 | 2. Auth/access в сервисы, write scope | ⬜ | — | — |
 | 3. Exception boundaries | ⬜ | — | — |
 | 4. Транзакционные границы | ⬜ | — | — |
@@ -649,7 +649,24 @@ Presentation loop/tool handler получает сервис/use case, а не s
 characterization tests фиксируют контракт, а не текущую внутреннюю реализацию;
 timeout mismatch не остаётся без записанного решения.
 
-### Этап 1. Ввести явные client/config dependencies
+### Этап 1. Ввести явные client/config dependencies — ✅ выполнен
+
+Результат: `DBSettings` получил пять явных параметров пула, `HttpClientSettings`
+и `qdrant_timeout` — явные пределы исходящих соединений; `KnowledgeRuntime` стал
+контейнером, которым владеет lifespan (ленивый global и `get_knowledge_runtime()`
+как локатор удалены); добавлены `dependencies/http_client.py`,
+`dependencies/clients.py` и `dependencies/settings.py`; сервисы получают узкие
+клиенты и значения конструктором, `get_settings()` из `services/**` убран;
+`VisionClient | None` заменён на `VisionCapability` с `DisabledVisionCapability`;
+`ProjectQdrantClient` принимает готовый `AsyncQdrantClient`; retry разделён на
+transport / content / fail-fast; `build_mcp_app(settings=...)`; worker получает
+settings и runtime аргументами.
+
+Ресурсы попадают в `scope["state"]` из lifespan, поэтому смонтированный
+MCP-транспорт видит тот же контейнер клиентов, что и HTTP-граф, — второго
+набора соединений не возникает.
+
+Итог: `791 passed`, `ruff All checks passed`.
 
 Нормативное основание: [PAT-STRUCT], [PAT-CONFIG], [PAT-LIFESPAN], [PAT-HTTP],
 [PAT-CLIENT].

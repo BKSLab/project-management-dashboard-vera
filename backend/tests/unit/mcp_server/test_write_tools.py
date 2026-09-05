@@ -2,10 +2,14 @@
 
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
+from src.clients.vision import DisabledVisionCapability
+from src.core.settings import get_settings
 from src.db.models.api_tokens import ApiTokenScope
 from src.db.models.project_members import ProjectMember, ProjectRole
 from src.db.models.project_milestones import ProjectMilestoneStatus
@@ -127,6 +131,16 @@ class FakeMilestonesService:
         )()
 
 
+def _runtime() -> SimpleNamespace:
+    """Контейнер клиентов, который в проде создаёт lifespan приложения."""
+    return SimpleNamespace(
+        embedding_client=AsyncMock(),
+        qdrant_client=AsyncMock(),
+        llm_client=AsyncMock(),
+        vision=DisabledVisionCapability(),
+    )
+
+
 def _tools(scope: ApiTokenScope = ApiTokenScope.WRITE) -> ToolContext:
     return ToolContext(
         principal=AuthenticatedPrincipal(
@@ -142,6 +156,8 @@ def _tools(scope: ApiTokenScope = ApiTokenScope.WRITE) -> ToolContext:
             via_api_token=True,
         ),
         session=object(),
+        runtime=_runtime(),
+        settings=get_settings(),
     )
 
 
@@ -217,12 +233,16 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(wt, "ProjectMembersRepository", Members)
     monkeypatch.setattr(wt, "ProjectStagesRepository", Stages)
     monkeypatch.setattr(wt, "UsersRepository", Users)
-    monkeypatch.setattr(wt, "build_tasks_service", lambda session: tasks_service)
-    monkeypatch.setattr(wt, "build_comments_service", lambda session: comments_service)
+    monkeypatch.setattr(wt, "build_tasks_service", lambda session, settings: tasks_service)
+    monkeypatch.setattr(
+        wt,
+        "build_comments_service",
+        lambda session, settings: comments_service,
+    )
     monkeypatch.setattr(
         wt,
         "build_milestones_service",
-        lambda session: tasks_service.milestones_service,
+        lambda session, settings: tasks_service.milestones_service,
     )
     monkeypatch.setattr(ctx, "ProjectsRepository", Projects)
     monkeypatch.setattr(ctx, "ProjectMembersRepository", Members)
