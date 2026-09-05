@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 
 from src.clients.llm import LlmClient
@@ -21,7 +20,7 @@ from src.exceptions.tasks import (
 )
 from src.knowledge.extract import INDEXABLE_EXTENSIONS, extract_indexable_text
 from src.prompts.task_description import TASK_DESCRIPTION_REPHRASE_PROMPT
-from src.schemas.tasks import TaskRephraseRequestSchema, TaskRephraseResultSchema
+from src.schemas.tasks import TaskRephraseFile, TaskRephraseRequestSchema, TaskRephraseResultSchema
 from src.services.db_scope import TaskDescriptionScopeFactory
 from src.services.tasks import build_task_key
 
@@ -34,14 +33,6 @@ DOCUMENT_CONTEXT_LIMIT = 5000
 MAX_REPHRASE_FILES = 10
 
 
-@dataclass(frozen=True, slots=True)
-class TaskRephraseFile:
-    """Прочитанный multipart-файл, ещё не сохранённый в задаче."""
-
-    name: str
-    content: bytes
-
-
 class TaskDescriptionService:
     """Создаёт улучшенный черновик описания без изменения данных задачи."""
 
@@ -52,6 +43,7 @@ class TaskDescriptionService:
         llm_client: LlmClient,
         vision: VisionCapability,
         file_context_limit: int,
+        max_file_size: int,
     ) -> None:
         """Создаёт сервис переформулирования черновика задачи.
 
@@ -62,11 +54,14 @@ class TaskDescriptionService:
             llm_client: Клиент chat completions.
             vision: Способность распознавать изображения.
             file_context_limit: Предел длины текста из приложенных файлов.
+            max_file_size: Предел размера одного файла контекста. Значение
+                нужно транспорту, чтобы читать файл с ограничением.
         """
         self.scope = scope
         self.llm_client = llm_client
         self.vision = vision
         self.file_context_limit = file_context_limit
+        self.max_file_size = max_file_size
 
     async def rephrase(
         self,
@@ -222,6 +217,8 @@ class TaskDescriptionService:
             raise TaskContextFileError(file_name=f"более {MAX_REPHRASE_FILES} файлов")
         result: list[dict[str, str]] = []
         for file in files:
+            if not file.content:
+                raise TaskContextFileError(file_name=file.name or "без имени")
             if Path(file.name).suffix.lower() not in INDEXABLE_EXTENSIONS:
                 raise TaskContextFileError(file_name=file.name)
             try:

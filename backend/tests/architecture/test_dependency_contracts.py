@@ -33,8 +33,6 @@ SETTINGS_ALLOWLIST = {
 PENDING_SETTINGS_READERS = {
     # Этап 2: auth-зависимость становится тонким transport-адаптером.
     SRC / "dependencies" / "auth.py",
-    # Этап 7: cookie policy передаётся явной transport-зависимостью.
-    SRC / "api" / "v1" / "endpoints" / "auth.py",
 }
 
 

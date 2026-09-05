@@ -592,6 +592,7 @@ def get_task_description_service(
         llm_client=llm_client,
         vision=vision,
         file_context_limit=settings.llm.task_rephrase_file_max_chars,
+        max_file_size=TaskAttachmentsService.MAX_FILE_SIZE,
     )
 
 

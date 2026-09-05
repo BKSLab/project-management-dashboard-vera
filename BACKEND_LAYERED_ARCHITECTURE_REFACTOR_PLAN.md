@@ -23,7 +23,7 @@
 | 4. Транзакционные границы | ✅ выполнен | 1033 passed | `stage-4` |
 | 5. Атомарный импорт документа | ✅ выполнен | 1037 passed | `stage-5` |
 | 6. Короткие DB scopes | ✅ выполнен | 1071 passed | `stage-6` |
-| 7. Очистка endpoints | ⬜ | — | — |
+| 7. Очистка endpoints | ✅ выполнен | 1171 passed | `stage-7` |
 | 8. MCP на сервисы | ⬜ | — | — |
 | 9. DI knowledge worker | ⬜ | — | — |
 | 10. Архитектурные тесты | ⬜ | — | — |
@@ -1038,7 +1038,29 @@ tests [PAT-TEST]. Prepare/external/persist — выбранное проектн
   proxy timeout и ссылается на follow-up по async contract;
 - output/status codes не меняются.
 
-### Этап 7. Очистить оставшиеся HTTP endpoints
+### Этап 7. Очистить оставшиеся HTTP endpoints — ✅ выполнен
+
+`auth.py`: появился единый use case `AuthService.register_and_login`, а
+политика cookie вынесена в `dependencies/cookies.py` как явная
+transport-зависимость. `get_settings()` из эндпоинта убран — временное
+исключение в architecture-тесте снято, и guard сам это потребовал.
+
+`calendar.py`: `TaskPriority` и `TaskRole` переехали в `schemas/enums.py`.
+Направление зависимости стало обратным: модель базы ссылается на общее
+перечисление контракта. Имя PG-типа задано явно, поэтому миграции не
+затронуты.
+
+`tasks.py` rephrase: чтение multipart с ограничением вынесено в
+`api/v1/uploads.py`; предел числа файлов, пустой файл и допустимые
+расширения остались доменными правилами сервиса. DTO `TaskRephraseFile`
+переехал в схемы: транспорт больше не импортирует его из реализации.
+
+Добавлен `tests/architecture/test_layer_boundaries.py`. Он сразу нашёл
+конструкторы репозиториев в MCP и worker — это ровно то, что снимают
+этапы 8 и 9, поэтому исключения оформлены явным списком с проверкой на
+устаревание.
+
+Итог: `1171 passed`, `ruff All checks passed`.
 
 Нормативное основание: [PAT-ENDPOINT], [PAT-ARCH] и [PAT-ERROR].
 

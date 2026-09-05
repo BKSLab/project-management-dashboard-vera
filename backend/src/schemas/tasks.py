@@ -1,9 +1,10 @@
+from dataclasses import dataclass
 from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.db.models.task_participants import TaskParticipantRole
-from src.db.models.tasks import TaskPriority, TaskRole
+from src.schemas.enums import TaskPriority, TaskRole
 from src.schemas.users import UserSummarySchema
 
 
@@ -236,6 +237,19 @@ class TaskCreateSchema(BaseModel):
         description="Плановая дата завершения.",
         examples=["2026-09-08"],
     )
+
+
+@dataclass(frozen=True, slots=True)
+class TaskRephraseFile:
+    """Прочитанный файл контекста, ещё не сохранённый в задаче.
+
+    Объявлен рядом со схемой запроса: это часть контракта сценария, а не
+    деталь его реализации, и транспорт не должен импортировать его из
+    модуля сервиса.
+    """
+
+    name: str
+    content: bytes
 
 
 class TaskRephraseRequestSchema(BaseModel):

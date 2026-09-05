@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 from src.db.models.project_milestones import ProjectMilestoneStatus
 from src.db.models.task_dependencies import TaskDependencyType
-from src.db.models.tasks import TaskPriority
+from src.schemas.enums import TaskPriority
 
 
 class CalendarRangeSchema(BaseModel):

@@ -3,7 +3,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.db.models.projects import ProjectStatus
-from src.db.models.tasks import TaskPriority
+from src.schemas.enums import TaskPriority
 
 
 class DashboardTotalsSchema(BaseModel):

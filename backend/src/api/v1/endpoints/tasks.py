@@ -10,6 +10,7 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
+from src.api.v1.uploads import close_uploads, read_uploads
 from src.dependencies.access import require_project_access, require_task_access
 from src.dependencies.auth import PrincipalDep, require_write_scope
 from src.dependencies.services import (
@@ -27,13 +28,12 @@ from src.schemas.document_links import LinkedDocumentSchema
 from src.schemas.tasks import (
     TaskCreateSchema,
     TaskMoveSchema,
+    TaskRephraseFile,
     TaskRephraseRequestSchema,
     TaskRephraseResultSchema,
     TaskSchema,
     TaskUpdateSchema,
 )
-from src.services.task_attachments import TaskAttachmentsService
-from src.services.task_descriptions import MAX_REPHRASE_FILES, TaskRephraseFile
 
 router = APIRouter(tags=["tasks"])
 logger = logging.getLogger(__name__)
@@ -173,13 +173,13 @@ async def rephrase_task_description(
         File(description="Новые документы, выбранные в форме задачи."),
     ] = None,
 ) -> TaskRephraseResultSchema:
-    """Переформулирует черновик, не изменяя сохранённые данные."""
+    """Переформулирует черновик, не изменяя сохранённые данные.
+
+    Транспорт разбирает multipart и читает файлы с ограничением; сколько
+    файлов допустимо, какие расширения индексируются и что считать
+    пустым файлом — доменные правила, и они остаются в сервисе.
+    """
     uploads = files or []
-    if len(uploads) > MAX_REPHRASE_FILES:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Для одного запроса можно передать не более {MAX_REPHRASE_FILES} файлов.",
-        )
     try:
         try:
             data = TaskRephraseRequestSchema.model_validate_json(payload)
@@ -189,26 +189,13 @@ async def rephrase_task_description(
                 detail="Некорректные данные для переформулирования.",
             ) from error
 
-        context_files: list[TaskRephraseFile] = []
-        for upload in uploads:
-            content = await upload.read(TaskAttachmentsService.MAX_FILE_SIZE + 1)
-            if not content:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=f"Файл «{upload.filename or 'без имени'}» пуст.",
-                )
-            if len(content) > TaskAttachmentsService.MAX_FILE_SIZE:
-                raise HTTPException(
-                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                    detail="Размер файла превышает допустимые 10 МБ.",
-                )
-            context_files.append(
-                TaskRephraseFile(name=upload.filename or "", content=content)
-            )
+        read_files = await read_uploads(uploads, max_size=service.max_file_size)
         return await service.rephrase(
             project_id=project_id,
             data=data,
-            files=context_files,
+            files=[
+                TaskRephraseFile(name=item.name, content=item.content) for item in read_files
+            ],
         )
     except (TasksServiceError, KnowledgeProviderError) as error:
         logger.exception(
@@ -217,8 +204,7 @@ async def rephrase_task_description(
         )
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     finally:
-        for upload in uploads:
-            await upload.close()
+        await close_uploads(uploads)
 
 
 @router.get(

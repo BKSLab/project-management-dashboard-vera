@@ -5,12 +5,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from src.api.v1.responses import NOT_FOUND_RESPONSE, SERVER_ERROR_RESPONSE, VALIDATION_RESPONSE
-from src.db.models.tasks import TaskPriority
 from src.dependencies.access import require_project_access
 from src.dependencies.services import CalendarServiceDep
 from src.exceptions.calendar import CalendarServiceError
 from src.exceptions.projects import ProjectNotFoundError
 from src.schemas.calendar import CalendarResponseSchema, UnscheduledTasksPageSchema
+from src.schemas.enums import TaskPriority
 
 router = APIRouter(tags=["calendar"])
 logger = logging.getLogger(__name__)

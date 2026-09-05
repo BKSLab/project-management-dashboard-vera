@@ -11,9 +11,9 @@ from src.exceptions.tasks import TaskContextDocumentError, TaskDescriptionRewrit
 from src.repositories.documents import DocumentsRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
-from src.schemas.tasks import TaskRephraseRequestSchema, TaskRephraseResultSchema
+from src.schemas.tasks import TaskRephraseFile, TaskRephraseRequestSchema, TaskRephraseResultSchema
 from src.services.db_scope import TaskDescriptionScope
-from src.services.task_descriptions import TaskDescriptionService, TaskRephraseFile
+from src.services.task_descriptions import TaskDescriptionService
 
 
 def build_service(*, file_context_limit: int = 5000):
@@ -53,6 +53,7 @@ def build_service(*, file_context_limit: int = 5000):
         llm_client=llm,
         vision=DisabledVisionCapability(),
         file_context_limit=file_context_limit,
+        max_file_size=10 * 1024 * 1024,
     )
     return service, projects, tasks, documents, llm
 

@@ -71,6 +71,12 @@ class FakeAuthService:
         self.registered.append(data)
         return _user_schema()
 
+    async def register_and_login(self, data: dict) -> tuple[UserSchema, str]:
+        """Регистрация и вход — один сценарий сервиса."""
+        user = await self.register(data=data)
+        self.logged_in.append((data["username"], data["password"]))
+        return user, "signed.session.token"
+
     async def login(self, username: str, password: str) -> tuple[UserSchema, str]:
         if self.login_error is not None:
             raise self.login_error

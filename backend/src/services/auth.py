@@ -211,6 +211,27 @@ class AuthService:
             logger.error("❌ Ошибка регистрации пользователя.", exc_info=True)
             raise AuthServiceError(str(error)) from error
 
+    async def register_and_login(self, data: dict) -> tuple[UserSchema, str]:
+        """Регистрирует пользователя и сразу открывает ему сессию.
+
+        Регистрация без входа не имеет смысла для клиента: он всё равно
+        тут же логинится. Держать эти два шага вместе — задача сервиса, а
+        не транспорта.
+
+        Args:
+            data: Поля регистрации, включая пароль и код приглашения.
+
+        Returns:
+            Карточка созданного пользователя и подписанный токен сессии.
+
+        Raises:
+            InvalidInviteCodeError: Если код приглашения не подошёл.
+            UsernameConflictError: Если логин уже занят.
+            AuthServiceError: Если создать пользователя не удалось.
+        """
+        user = await self.register(data=data)
+        return user, create_access_token(user_id=user.id)
+
     async def login(self, username: str, password: str) -> tuple[UserSchema, str]:
         """Проверяет пару логин и пароль и выпускает токен сессии.
 

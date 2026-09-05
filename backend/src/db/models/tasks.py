@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import enum
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
@@ -20,6 +19,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from src.schemas.enums import TaskPriority, TaskRole
+
 from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
@@ -31,29 +32,6 @@ if TYPE_CHECKING:
     from .task_dependencies import TaskDependency
     from .task_participants import TaskParticipant
     from .wbs_nodes import WbsNode
-
-
-class TaskRole(str, enum.Enum):
-    """Роль, ответственная за выполнение задачи."""
-
-    PM = "PM"
-    BE = "BE"
-    FE = "FE"
-    UXR = "UXR"
-    UXD = "UXD"
-    EXPERT = "EXPERT"
-    QA = "QA"
-    BA = "BA"
-    MKT = "MKT"
-
-
-class TaskPriority(str, enum.Enum):
-    """Приоритет задачи."""
-
-    LOW = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH = "HIGH"
-    URGENT = "URGENT"
 
 
 class Task(Base, TimestampMixin):
