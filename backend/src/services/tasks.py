@@ -79,8 +79,8 @@ class TasksService:
         activity_repository: TaskActivityRepository,
         wbs_nodes_repository: WbsNodesRepository,
         unit_of_work: UnitOfWork,
-        attachment_storage: TaskAttachmentStorage | None = None,
-        knowledge_events: KnowledgeEvents | None = None,
+        attachment_storage: TaskAttachmentStorage,
+        knowledge_events: KnowledgeEvents,
     ):
         self.tasks_repository = tasks_repository
         self.members_repository = members_repository
@@ -263,12 +263,11 @@ class TasksService:
                     task_id=task.id,
                     assignments=assignments,
                 )
-            if self.knowledge_events is not None:
-                await self.knowledge_events.upsert(
-                    project_id=project_id,
-                    entity_type=KnowledgeEntityType.TASK,
-                    entity_id=task.id,
-                )
+            await self.knowledge_events.upsert(
+                project_id=project_id,
+                entity_type=KnowledgeEntityType.TASK,
+                entity_id=task.id,
+            )
             await self.unit_of_work.commit()
             logger.info("✅ Задача %s-%s создана.", project.key, task.number)
             return await self._to_task_schema(task=task, project_key=project.key)
@@ -347,7 +346,7 @@ class TasksService:
                     task_id=task.id,
                     assignments=assignments,
                 )
-            if self.knowledge_events is not None and TASK_SEMANTIC_FIELDS.intersection(payload):
+            if TASK_SEMANTIC_FIELDS.intersection(payload):
                 await self.knowledge_events.upsert(
                     project_id=updated.project_id,
                     entity_type=KnowledgeEntityType.TASK,
@@ -468,12 +467,11 @@ class TasksService:
             task = await self._get_task(task_id=task_id)
             project_id = task.project_id
             await self.tasks_repository.delete(task=task)
-            if self.knowledge_events is not None:
-                await self.knowledge_events.delete(
-                    project_id=project_id,
-                    entity_type=KnowledgeEntityType.TASK,
-                    entity_id=task_id,
-                )
+            await self.knowledge_events.delete(
+                project_id=project_id,
+                entity_type=KnowledgeEntityType.TASK,
+                entity_id=task_id,
+            )
             await self.unit_of_work.commit()
             await self._cleanup_deleted_task_files(task_id=task_id)
         except RepositoryErrors as error:

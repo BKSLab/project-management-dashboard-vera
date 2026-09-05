@@ -73,7 +73,7 @@ class WbsNodesService:
         tasks_repository: TasksRepository,
         activity_repository: TaskActivityRepository,
         unit_of_work: UnitOfWork,
-        knowledge_events: KnowledgeEvents | None = None,
+        knowledge_events: KnowledgeEvents,
     ):
         self.wbs_nodes_repository = wbs_nodes_repository
         self.projects_repository = projects_repository
@@ -213,14 +213,13 @@ class WbsNodesService:
             node = await self._get_node_in_project(node_id=node_id, project_id=project_id)
             nodes = await self.wbs_nodes_repository.get_by_project(project_id=project_id)
             updated = await self.wbs_nodes_repository.update(node=node, data={"title": title})
-            if self.knowledge_events is not None:
-                affected_ids = _collect_subtree_ids(nodes=nodes, root_id=node_id)
-                task_ids = await self.tasks_repository.get_ids_by_wbs_nodes(affected_ids)
-                await self.knowledge_events.upsert_many(
-                    project_id=project_id,
-                    entity_type=KnowledgeEntityType.TASK,
-                    entity_ids=task_ids,
-                )
+            affected_ids = _collect_subtree_ids(nodes=nodes, root_id=node_id)
+            task_ids = await self.tasks_repository.get_ids_by_wbs_nodes(affected_ids)
+            await self.knowledge_events.upsert_many(
+                project_id=project_id,
+                entity_type=KnowledgeEntityType.TASK,
+                entity_ids=task_ids,
+            )
             await self.unit_of_work.commit()
             return WbsNodeSchema.model_validate(updated)
         except RepositoryErrors as error:
@@ -282,7 +281,7 @@ class WbsNodesService:
                 node=node,
                 data={"parent_id": parent_id, "position": position},
             )
-            if self.knowledge_events is not None and parent_changed:
+            if parent_changed:
                 affected_ids = _collect_subtree_ids(nodes=nodes, root_id=node_id)
                 task_ids = await self.tasks_repository.get_ids_by_wbs_nodes(affected_ids)
                 await self.knowledge_events.upsert_many(
@@ -319,19 +318,14 @@ class WbsNodesService:
             nodes = await self.wbs_nodes_repository.get_by_project(project_id=project_id)
             node = self._require_node(nodes=nodes, node_id=node_id, project_id=project_id)
             affected_ids = _collect_subtree_ids(nodes=nodes, root_id=node_id)
-            task_ids = (
-                await self.tasks_repository.get_ids_by_wbs_nodes(affected_ids)
-                if self.knowledge_events is not None
-                else []
-            )
+            task_ids = await self.tasks_repository.get_ids_by_wbs_nodes(affected_ids)
             released_tasks = await self.tasks_repository.clear_wbs_node(node_ids=affected_ids)
             await self.wbs_nodes_repository.delete(node=node)
-            if self.knowledge_events is not None:
-                await self.knowledge_events.upsert_many(
-                    project_id=project_id,
-                    entity_type=KnowledgeEntityType.TASK,
-                    entity_ids=task_ids,
-                )
+            await self.knowledge_events.upsert_many(
+                project_id=project_id,
+                entity_type=KnowledgeEntityType.TASK,
+                entity_ids=task_ids,
+            )
             await self.unit_of_work.commit()
             logger.info(
                 "✅ Раздел ИСР id=%s удалён: разделов %s, задач возвращено в пул %s.",
@@ -471,7 +465,7 @@ class WbsNodesService:
             updated = await self.tasks_repository.update(task=task, data=changes)
             # Перекладывание карточки по холсту не меняет содержания задачи,
             # поэтому переиндексация нужна только при смене раздела.
-            if self.knowledge_events is not None and node_changed:
+            if node_changed:
                 await self.knowledge_events.upsert(
                     project_id=project_id,
                     entity_type=KnowledgeEntityType.TASK,

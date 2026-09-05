@@ -22,6 +22,7 @@ from src.schemas.wbs_suggestion import (
     WbsSuggestedNodeSchema,
     WbsSuggestionSchema,
 )
+from src.services.knowledge_events import KnowledgeEvents
 from src.services.wbs_suggestion import WbsSuggestionService
 
 PROJECT = SimpleNamespace(id=1, key="PROJ", name="Портал", description_md=None)
@@ -102,6 +103,7 @@ def build_service(
         activity_repository=activity_repository,
         unit_of_work=unit_of_work,
         llm_client=llm_client,
+        knowledge_events=AsyncMock(spec=KnowledgeEvents),
     )
     return service, {
         "wbs": wbs_repository,

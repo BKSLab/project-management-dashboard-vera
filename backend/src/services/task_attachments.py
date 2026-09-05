@@ -41,6 +41,18 @@ class TaskAttachmentContent:
     previewable: bool
 
 
+@dataclass(frozen=True, slots=True)
+class StoredAttachment:
+    """Сохранённый файл вместе с ключом его физического хранения.
+
+    Ключ нужен только владельцу составного сценария для компенсации и
+    наружу, в HTTP-контракт, не попадает.
+    """
+
+    attachment: TaskAttachmentSchema
+    storage_key: str
+
+
 class TaskAttachmentsService:
     """Сервис сценариев работы с файлами задач."""
 
@@ -85,7 +97,7 @@ class TaskAttachmentsService:
         tasks_repository: TasksRepository,
         storage: TaskAttachmentStorage,
         unit_of_work: UnitOfWork,
-        knowledge_events: KnowledgeEvents | None = None,
+        knowledge_events: KnowledgeEvents,
     ) -> None:
         self.attachments_repository = attachments_repository
         self.tasks_repository = tasks_repository
@@ -119,7 +131,7 @@ class TaskAttachmentsService:
             logger.error("❌ Ошибка получения файлов задачи id=%s.", task_id, exc_info=True)
             raise TaskAttachmentsServiceError(str(error)) from error
 
-    async def upload_attachment(
+    async def save_in_transaction(
         self,
         *,
         task_id: int,
@@ -127,17 +139,22 @@ class TaskAttachmentsService:
         content_type: str | None,
         content: bytes,
         index_for_knowledge: bool = True,
-    ) -> TaskAttachmentSchema:
-        """Проверяет и сохраняет новый файл задачи.
+    ) -> StoredAttachment:
+        """Сохраняет файл, оставляя финальный commit владельцу сценария.
+
+        Наружу отдаётся ещё и ключ хранения: откат транзакции уберёт
+        метаданные, но не физический файл, и владелец сценария должен
+        знать, что именно ему компенсировать.
 
         Args:
             task_id: Идентификатор задачи.
             file_name: Исходное имя из multipart-запроса.
             content_type: MIME-тип, заявленный клиентом.
             content: Прочитанное с ограничением бинарное содержимое.
+            index_for_knowledge: Ставить ли файл в очередь индексации.
 
         Returns:
-            Метаданные созданного файла.
+            Метаданные созданного файла и ключ его физического хранения.
 
         Raises:
             TaskNotFoundError: Если задача не найдена.
@@ -178,14 +195,16 @@ class TaskAttachmentsService:
                 task_id,
                 len(content),
             )
-            if self.knowledge_events is not None and index_for_knowledge:
+            if index_for_knowledge:
                 await self.knowledge_events.upsert(
                     project_id=task.project_id,
                     entity_type=KnowledgeEntityType.ATTACHMENT,
                     entity_id=attachment.id,
                 )
-            await self.unit_of_work.commit()
-            return self._to_schema(attachment)
+            return StoredAttachment(
+                attachment=self._to_schema(attachment),
+                storage_key=storage_key,
+            )
         except (
             TaskAttachmentStorageError,
             TaskAttachmentsRepositoryError,
@@ -204,6 +223,61 @@ class TaskAttachmentsService:
                     )
             logger.error("❌ Ошибка загрузки файла задачи id=%s.", task_id, exc_info=True)
             raise TaskAttachmentsServiceError(str(error)) from error
+
+    async def upload_attachment(
+        self,
+        *,
+        task_id: int,
+        file_name: str,
+        content_type: str | None,
+        content: bytes,
+        index_for_knowledge: bool = True,
+    ) -> TaskAttachmentSchema:
+        """Проверяет и сохраняет новый файл задачи как самостоятельную запись.
+
+        Args:
+            task_id: Идентификатор задачи.
+            file_name: Исходное имя из multipart-запроса.
+            content_type: MIME-тип, заявленный клиентом.
+            content: Прочитанное с ограничением бинарное содержимое.
+            index_for_knowledge: Ставить ли файл в очередь индексации.
+
+        Returns:
+            Метаданные созданного файла.
+
+        Raises:
+            TaskNotFoundError: Если задача не найдена.
+            TaskAttachmentValidationError: Если файл пуст или имя некорректно.
+            TaskAttachmentTooLargeError: Если файл превышает 10 МБ.
+            TaskAttachmentUnsupportedTypeError: Если расширение запрещено.
+            TaskAttachmentLimitError: Если к задаче уже прикреплено 20 файлов.
+            TaskAttachmentsServiceError: Если сохранить файл не удалось.
+        """
+        stored = await self.save_in_transaction(
+            task_id=task_id,
+            file_name=file_name,
+            content_type=content_type,
+            content=content,
+            index_for_knowledge=index_for_knowledge,
+        )
+        try:
+            await self.unit_of_work.commit()
+        except UnitOfWorkRepositoryError as error:
+            await self._remove_file(stored.storage_key)
+            logger.error("❌ Ошибка загрузки файла задачи id=%s.", task_id, exc_info=True)
+            raise TaskAttachmentsServiceError(str(error)) from error
+        return stored.attachment
+
+    async def _remove_file(self, storage_key: str) -> None:
+        """Best-effort удаляет физический файл после отката записи."""
+        try:
+            await self.storage.delete(storage_key)
+        except TaskAttachmentStorageError:
+            logger.warning(
+                "⚠️ Не удалось компенсирующе удалить файл %s.",
+                storage_key,
+                exc_info=True,
+            )
 
     async def get_attachment_content(
         self,
@@ -255,12 +329,11 @@ class TaskAttachmentsService:
             task = await self._ensure_task_exists(task_id)
             storage_key = attachment.storage_key
             await self.attachments_repository.delete(attachment=attachment)
-            if self.knowledge_events is not None:
-                await self.knowledge_events.delete(
-                    project_id=task.project_id,
-                    entity_type=KnowledgeEntityType.ATTACHMENT,
-                    entity_id=attachment_id,
-                )
+            await self.knowledge_events.delete(
+                project_id=task.project_id,
+                entity_type=KnowledgeEntityType.ATTACHMENT,
+                entity_id=attachment_id,
+            )
             await self.unit_of_work.commit()
             try:
                 await self.storage.delete(storage_key)

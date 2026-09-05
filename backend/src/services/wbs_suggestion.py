@@ -77,7 +77,7 @@ class WbsSuggestionService:
         activity_repository: TaskActivityRepository,
         unit_of_work: UnitOfWork,
         llm_client: LlmClient,
-        knowledge_events: KnowledgeEvents | None = None,
+        knowledge_events: KnowledgeEvents,
     ):
         self.wbs_nodes_repository = wbs_nodes_repository
         self.projects_repository = projects_repository
@@ -251,7 +251,7 @@ class WbsSuggestionService:
                 )
                 moved_task_ids.append(task.id)
 
-            if self.knowledge_events is not None and moved_task_ids:
+            if moved_task_ids:
                 await self.knowledge_events.upsert_many(
                     project_id=project_id,
                     entity_type=KnowledgeEntityType.TASK,

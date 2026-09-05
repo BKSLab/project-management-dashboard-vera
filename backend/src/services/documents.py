@@ -44,7 +44,7 @@ class DocumentsService:
         documents_repository: DocumentsRepository,
         projects_repository: ProjectsRepository,
         unit_of_work: UnitOfWork,
-        knowledge_events: KnowledgeEvents | None = None,
+        knowledge_events: KnowledgeEvents,
     ):
         self.documents_repository = documents_repository
         self.projects_repository = projects_repository
@@ -122,6 +122,7 @@ class DocumentsService:
         title: str,
         slug: str | None,
         content_md: str,
+        commit: bool = True,
     ) -> DocumentDetailSchema:
         """Создаёт документ проекта, подбирая свободный slug при необходимости.
 
@@ -130,6 +131,8 @@ class DocumentsService:
             title: Заголовок документа.
             slug: Желаемый URL-идентификатор или ``None``.
             content_md: Markdown-содержимое документа.
+            commit: Завершить ли транзакцию самостоятельно. ``False``
+                оставляет финальный commit владельцу составного сценария.
 
         Returns:
             Созданный документ.
@@ -154,13 +157,13 @@ class DocumentsService:
                     "content_md": content_md,
                 }
             )
-            if self.knowledge_events is not None:
-                await self.knowledge_events.upsert(
-                    project_id=project_id,
-                    entity_type=KnowledgeEntityType.DOCUMENT,
-                    entity_id=document.id,
-                )
-            await self.unit_of_work.commit()
+            await self.knowledge_events.upsert(
+                project_id=project_id,
+                entity_type=KnowledgeEntityType.DOCUMENT,
+                entity_id=document.id,
+            )
+            if commit:
+                await self.unit_of_work.commit()
             return DocumentDetailSchema.model_validate(document)
         except DocumentSlugAlreadyExistsRepositoryError as error:
             logger.warning("⚠️ Конфликт slug при создании документа: %s.", error.slug)
@@ -189,12 +192,11 @@ class DocumentsService:
             if document is None:
                 raise DocumentNotFoundError(document_id=document_id)
             updated = await self.documents_repository.update(document=document, data=data)
-            if self.knowledge_events is not None:
-                await self.knowledge_events.upsert(
-                    project_id=updated.project_id,
-                    entity_type=KnowledgeEntityType.DOCUMENT,
-                    entity_id=updated.id,
-                )
+            await self.knowledge_events.upsert(
+                project_id=updated.project_id,
+                entity_type=KnowledgeEntityType.DOCUMENT,
+                entity_id=updated.id,
+            )
             await self.unit_of_work.commit()
             return DocumentDetailSchema.model_validate(updated)
         except DocumentSlugAlreadyExistsRepositoryError as error:
@@ -223,12 +225,11 @@ class DocumentsService:
                 raise DocumentNotFoundError(document_id=document_id)
             project_id = document.project_id
             await self.documents_repository.delete(document=document)
-            if self.knowledge_events is not None:
-                await self.knowledge_events.delete(
-                    project_id=project_id,
-                    entity_type=KnowledgeEntityType.DOCUMENT,
-                    entity_id=document_id,
-                )
+            await self.knowledge_events.delete(
+                project_id=project_id,
+                entity_type=KnowledgeEntityType.DOCUMENT,
+                entity_id=document_id,
+            )
             await self.unit_of_work.commit()
         except RepositoryErrors as error:
             logger.error("❌ Ошибка удаления документа id=%s.", document_id, exc_info=True)

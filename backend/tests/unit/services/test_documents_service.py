@@ -16,6 +16,7 @@ from src.repositories.documents import DocumentsRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.services.documents import DocumentsService
+from src.services.knowledge_events import KnowledgeEvents
 
 
 def make_document(slug: str = "roadmap") -> SimpleNamespace:
@@ -47,6 +48,7 @@ def build_service(
         documents_repository=documents_repository,
         projects_repository=projects,
         unit_of_work=AsyncMock(spec=UnitOfWork),
+        knowledge_events=AsyncMock(spec=KnowledgeEvents),
     )
 
 

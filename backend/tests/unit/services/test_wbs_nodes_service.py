@@ -99,7 +99,7 @@ def build_service(
         tasks_repository=tasks_repository or AsyncMock(spec=TasksRepository),
         activity_repository=activity_repository or AsyncMock(spec=TaskActivityRepository),
         unit_of_work=unit_of_work or AsyncMock(spec=UnitOfWork),
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
     )
 
 
@@ -165,7 +165,7 @@ async def test_create_node_does_not_enqueue_index_job() -> None:
 
     await build_service(
         wbs_repository,
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
     ).create_node(project_id=1, title="Backend", parent_id=None)
 
     assert knowledge_events.method_calls == []
@@ -254,7 +254,7 @@ async def test_reorder_siblings_does_not_enqueue_index_job() -> None:
 
     await build_service(
         wbs_repository,
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
     ).move_node(project_id=1, node_id=2, parent_id=None, before_id=1)
 
     knowledge_events.upsert_many.assert_not_awaited()
@@ -279,7 +279,7 @@ async def test_rename_node_enqueues_tasks_from_subtree_before_commit() -> None:
     await build_service(
         wbs_repository,
         tasks_repository,
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
         unit_of_work=unit_of_work,
     ).update_node(project_id=1, node_id=1, title="Platform")
 
@@ -327,7 +327,7 @@ async def test_reparent_node_enqueues_only_tasks_from_subtree() -> None:
     await build_service(
         wbs_repository,
         tasks_repository,
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
     ).move_node(project_id=1, node_id=1, parent_id=3, before_id=None)
 
     tasks_repository.get_ids_by_wbs_nodes.assert_awaited_once_with({1, 2})
@@ -416,7 +416,7 @@ async def test_delete_node_enqueues_released_tasks_from_deleted_subtree() -> Non
     await build_service(
         wbs_repository,
         tasks_repository,
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
     ).delete_node(project_id=1, node_id=1)
 
     knowledge_events.upsert_many.assert_awaited_once_with(

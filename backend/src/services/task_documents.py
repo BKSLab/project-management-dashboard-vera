@@ -9,6 +9,7 @@ from src.exceptions.clients import ClientError
 from src.exceptions.document_links import DocumentLinksServiceError
 from src.exceptions.documents import DocumentsServiceError
 from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.storage import StorageError
 from src.exceptions.task_attachments import TaskAttachmentsServiceError
 from src.exceptions.task_documents import (
     TaskDocumentStepFailedError,
@@ -18,12 +19,15 @@ from src.exceptions.task_documents import (
     TaskDocumentValidationError,
 )
 from src.exceptions.tasks import TasksRepositoryError
+from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.knowledge.extract import INDEXABLE_EXTENSIONS, extract_indexable_text
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.schemas.task_documents import TaskDocumentImportSchema
 from src.services.document_links import DocumentLinksService
 from src.services.documents import DocumentsService
 from src.services.task_attachments import TaskAttachmentsService
+from src.storage.task_attachments import TaskAttachmentStorage
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +60,8 @@ class TaskDocumentImportService:
         attachments_service: TaskAttachmentsService,
         documents_service: DocumentsService,
         links_service: DocumentLinksService,
+        unit_of_work: UnitOfWork,
+        attachment_storage: TaskAttachmentStorage,
         vision: VisionCapability,
         extract_max_chars: int,
     ) -> None:
@@ -63,6 +69,8 @@ class TaskDocumentImportService:
         self.attachments_service = attachments_service
         self.documents_service = documents_service
         self.links_service = links_service
+        self.unit_of_work = unit_of_work
+        self.attachment_storage = attachment_storage
         self.vision = vision
         self.extract_max_chars = extract_max_chars
 
@@ -105,39 +113,43 @@ class TaskDocumentImportService:
         safe_name = self._validate(file_name=file_name, content=content)
         extracted = await self._extract_text(safe_name=safe_name, content=content)
 
-        attachment = None
-        document = None
+        storage_key: str | None = None
         try:
-            attachment = await self.attachments_service.upload_attachment(
+            # Три записи — один бизнес-факт, поэтому и транзакция одна:
+            # вложенные сервисы не фиксируют свою часть сами.
+            stored = await self.attachments_service.save_in_transaction(
                 task_id=task_id,
                 file_name=safe_name,
                 content_type=content_type,
                 content=content,
                 index_for_knowledge=False,
             )
+            storage_key = stored.storage_key
             title = safe_name[:255]
             document = await self.documents_service.create_document(
                 project_id=task.project_id,
                 title=title,
                 slug=None,
                 content_md=_document_markdown(title=title, content=extracted),
+                commit=False,
             )
             link = await self.links_service.create_link(
                 document_id=document.id,
                 task_id=task_id,
                 user_id=user_id,
+                commit=False,
             )
+            await self.unit_of_work.commit()
             return TaskDocumentImportSchema(
-                attachment=attachment,
+                attachment=stored.attachment,
                 document=document,
                 link=link,
             )
         except BaseException as error:
-            await self._compensate(
-                task_id=task_id,
-                attachment_id=attachment.id if attachment is not None else None,
-                document_id=document.id if document is not None else None,
-            )
+            # Откат снимает все записи разом; компенсировать нужно только
+            # то, что база откатить не может, — физический файл.
+            await self._rollback()
+            await self._remove_stored_file(storage_key)
             if isinstance(error, NESTED_SERVICE_ERRORS):
                 raise TaskDocumentStepFailedError(error) from error
             raise
@@ -188,35 +200,29 @@ class TaskDocumentImportService:
             )
         return extracted
 
-    async def _compensate(
-        self,
-        *,
-        task_id: int,
-        attachment_id: int | None,
-        document_id: int | None,
-    ) -> None:
-        """Удаляет промежуточные сущности, если составной импорт оборвался."""
-        if document_id is not None:
-            try:
-                await self.documents_service.delete_document(document_id=document_id)
-            except DocumentsServiceError:
-                logger.warning(
-                    "⚠️ Не удалось удалить промежуточный документ id=%s.",
-                    document_id,
-                    exc_info=True,
-                )
-        if attachment_id is not None:
-            try:
-                await self.attachments_service.delete_attachment(
-                    task_id=task_id,
-                    attachment_id=attachment_id,
-                )
-            except TaskAttachmentsServiceError:
-                logger.warning(
-                    "⚠️ Не удалось удалить промежуточный файл id=%s.",
-                    attachment_id,
-                    exc_info=True,
-                )
+    async def _rollback(self) -> None:
+        """Откатывает транзакцию импорта, не маскируя исходную ошибку."""
+        try:
+            await self.unit_of_work.rollback()
+        except UnitOfWorkRepositoryError:
+            logger.warning("⚠️ Не удалось откатить транзакцию импорта документа.", exc_info=True)
+
+    async def _remove_stored_file(self, storage_key: str | None) -> None:
+        """Удаляет физический файл: его откат транзакции не затрагивает.
+
+        Метаданные исчезнут вместе с откатом, а файл на диске останется
+        сиротой, если его не убрать здесь.
+        """
+        if storage_key is None:
+            return
+        try:
+            await self.attachment_storage.delete(storage_key)
+        except StorageError:
+            logger.warning(
+                "⚠️ Не удалось удалить файл %s после отката импорта.",
+                storage_key,
+                exc_info=True,
+            )
 
 
 def _as_service_error(error: Exception) -> ServiceError:

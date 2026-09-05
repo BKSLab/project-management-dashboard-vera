@@ -55,6 +55,7 @@ class DocumentLinksService:
         document_id: int,
         task_id: int,
         user_id: int,
+        commit: bool = True,
     ) -> DocumentLinkSchema:
         """Связывает документ с задачей одного проекта.
 
@@ -99,7 +100,7 @@ class DocumentLinksService:
                 )
             link = await self.document_links_repository.create(
                 data={"document_id": document_id, "task_id": task_id},
-                commit=True,
+                commit=commit,
             )
             return DocumentLinkSchema.model_validate(link)
         except DocumentLinkAlreadyExistsRepositoryError as error:

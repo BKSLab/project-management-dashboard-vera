@@ -36,6 +36,7 @@ from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.wbs_nodes import WbsNodesRepository
 from src.services.knowledge_events import KnowledgeEvents
 from src.services.tasks import TasksService
+from src.storage.task_attachments import TaskAttachmentStorage
 
 PROJECT = SimpleNamespace(id=1, key="PROJ")
 
@@ -129,7 +130,8 @@ def build_service(
         activity_repository=activity_repository or AsyncMock(spec=TaskActivityRepository),
         wbs_nodes_repository=wbs_nodes_repository or AsyncMock(spec=WbsNodesRepository),
         unit_of_work=AsyncMock(spec=UnitOfWork),
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
+        attachment_storage=AsyncMock(spec=TaskAttachmentStorage),
     )
 
 
@@ -149,7 +151,7 @@ async def test_create_task_allocates_number_and_uses_first_stage() -> None:
     result = await build_service(
         tasks_repository,
         stages_repository,
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
     ).create_task(
         project_id=1,
         data={"title": "Реализовать фильтрацию", "stage_id": None},
@@ -378,7 +380,7 @@ async def test_update_task_records_priority_and_assignee_changes() -> None:
     service = build_service(
         tasks_repository,
         activity_repository=activity_repository,
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
     )
 
     await service.update_task(
@@ -424,7 +426,7 @@ async def test_update_task_records_start_date_without_reindexing() -> None:
     await build_service(
         tasks_repository,
         activity_repository=activity_repository,
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
     ).update_task(task_id=10, data={"start_date": date(2026, 9, 2)})
 
     event = activity_repository.save.await_args.kwargs
@@ -500,7 +502,7 @@ async def test_move_task_records_stage_change_and_appends_to_end() -> None:
         tasks_repository,
         stages_repository,
         activity_repository=activity_repository,
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
     )
 
     await service.move_task(task_id=10, stage_id=2)
@@ -649,7 +651,7 @@ async def test_fix_baseline_copies_current_plan_and_records_history() -> None:
     service = build_service(
         tasks_repository,
         activity_repository=activity_repository,
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
     )
 
     result = await service.fix_baseline(task_id=10)

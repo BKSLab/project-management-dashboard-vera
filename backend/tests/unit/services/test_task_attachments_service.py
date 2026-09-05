@@ -14,6 +14,7 @@ from src.exceptions.tasks import TaskNotFoundError
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
+from src.services.knowledge_events import KnowledgeEvents
 from src.services.task_attachments import TaskAttachmentsService
 from src.storage.task_attachments import TaskAttachmentStorage
 
@@ -33,6 +34,7 @@ def create_service() -> tuple[
         tasks_repository=tasks_repository,
         storage=storage,
         unit_of_work=AsyncMock(spec=UnitOfWork),
+        knowledge_events=AsyncMock(spec=KnowledgeEvents),
     )
     return service, attachments_repository, tasks_repository, storage
 
@@ -58,7 +60,7 @@ async def test_upload_attachment_when_task_missing_raises_not_found() -> None:
 @pytest.mark.asyncio
 async def test_upload_attachment_saves_safe_name_and_metadata() -> None:
     service, attachments_repository, tasks_repository, storage = create_service()
-    tasks_repository.get_by_id.return_value = object()
+    tasks_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
     attachments_repository.get_count_for_task.return_value = 0
     storage.save.return_value = "tasks/7/abc.pdf"
     attachments_repository.save.return_value = SimpleNamespace(
@@ -89,7 +91,7 @@ async def test_upload_attachment_saves_safe_name_and_metadata() -> None:
 async def test_upload_attachment_rejects_oversized_content() -> None:
     service, attachments_repository, tasks_repository, storage = create_service()
     service.MAX_FILE_SIZE = 3
-    tasks_repository.get_by_id.return_value = object()
+    tasks_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
     attachments_repository.get_count_for_task.return_value = 0
 
     with pytest.raises(TaskAttachmentTooLargeError) as exc_info:
@@ -107,7 +109,7 @@ async def test_upload_attachment_rejects_oversized_content() -> None:
 @pytest.mark.asyncio
 async def test_upload_attachment_rejects_unsupported_extension() -> None:
     service, attachments_repository, tasks_repository, storage = create_service()
-    tasks_repository.get_by_id.return_value = object()
+    tasks_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
     attachments_repository.get_count_for_task.return_value = 0
 
     with pytest.raises(TaskAttachmentUnsupportedTypeError) as exc_info:
@@ -125,7 +127,7 @@ async def test_upload_attachment_rejects_unsupported_extension() -> None:
 @pytest.mark.asyncio
 async def test_upload_attachment_deletes_file_when_metadata_save_fails() -> None:
     service, attachments_repository, tasks_repository, storage = create_service()
-    tasks_repository.get_by_id.return_value = object()
+    tasks_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
     attachments_repository.get_count_for_task.return_value = 0
     storage.save.return_value = "tasks/1/abc.pdf"
     attachments_repository.save.side_effect = TaskAttachmentsRepositoryError("БД недоступна")

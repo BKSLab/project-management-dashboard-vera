@@ -650,6 +650,8 @@ def get_task_document_import_service(
     attachments_service: TaskAttachmentsServiceDep,
     documents_service: DocumentsServiceDep,
     links_service: DocumentLinksServiceDep,
+    unit_of_work: UnitOfWorkDep,
+    storage: TaskAttachmentStorageDep,
     vision: VisionCapabilityDep,
     settings: SettingsDep,
 ) -> TaskDocumentImportService:
@@ -659,6 +661,8 @@ def get_task_document_import_service(
         attachments_service=attachments_service,
         documents_service=documents_service,
         links_service=links_service,
+        unit_of_work=unit_of_work,
+        attachment_storage=storage,
         vision=vision,
         extract_max_chars=settings.knowledge.knowledge_extract_max_chars,
     )

@@ -41,7 +41,7 @@ class MilestonesService:
         projects_repository: ProjectsRepository,
         wbs_nodes_repository: WbsNodesRepository,
         unit_of_work: UnitOfWork,
-        knowledge_events: KnowledgeEvents | None = None,
+        knowledge_events: KnowledgeEvents,
     ) -> None:
         self.milestones_repository = milestones_repository
         self.projects_repository = projects_repository
@@ -65,12 +65,11 @@ class MilestonesService:
             await self._ensure_project_exists(project_id)
             await self._validate_wbs_node(project_id, data.get("wbs_node_id"))
             milestone = await self.milestones_repository.save({**data, "project_id": project_id})
-            if self.knowledge_events is not None:
-                await self.knowledge_events.upsert(
-                    project_id=project_id,
-                    entity_type=KnowledgeEntityType.MILESTONE,
-                    entity_id=milestone.id,
-                )
+            await self.knowledge_events.upsert(
+                project_id=project_id,
+                entity_type=KnowledgeEntityType.MILESTONE,
+                entity_id=milestone.id,
+            )
             await self.unit_of_work.commit()
             return MilestoneSchema.model_validate(milestone)
         except RepositoryErrors as error:
@@ -88,7 +87,7 @@ class MilestonesService:
             milestone = await self._get_in_project(project_id, milestone_id)
             await self._validate_wbs_node(project_id, data.get("wbs_node_id"))
             updated = await self.milestones_repository.update(milestone, data)
-            if self.knowledge_events is not None and {"title", "description_md"}.intersection(data):
+            if {'title', 'description_md'}.intersection(data):
                 await self.knowledge_events.upsert(
                     project_id=project_id,
                     entity_type=KnowledgeEntityType.MILESTONE,
@@ -105,12 +104,11 @@ class MilestonesService:
         try:
             milestone = await self._get_in_project(project_id, milestone_id)
             await self.milestones_repository.delete(milestone)
-            if self.knowledge_events is not None:
-                await self.knowledge_events.delete(
-                    project_id=project_id,
-                    entity_type=KnowledgeEntityType.MILESTONE,
-                    entity_id=milestone_id,
-                )
+            await self.knowledge_events.delete(
+                project_id=project_id,
+                entity_type=KnowledgeEntityType.MILESTONE,
+                entity_id=milestone_id,
+            )
             await self.unit_of_work.commit()
         except RepositoryErrors as error:
             logger.error("❌ Ошибка удаления вехи id=%s.", milestone_id, exc_info=True)

@@ -12,6 +12,7 @@ from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
+from src.services.knowledge_events import KnowledgeEvents
 from src.services.task_comments import TaskCommentsService
 
 
@@ -26,6 +27,7 @@ async def test_add_comment_when_task_missing_raises_not_found() -> None:
         tasks_repository=tasks_repository,
         activity_repository=activity_repository,
         unit_of_work=AsyncMock(spec=UnitOfWork),
+        knowledge_events=AsyncMock(spec=KnowledgeEvents),
     )
 
     with pytest.raises(TaskNotFoundError) as exc_info:
@@ -45,6 +47,7 @@ async def test_get_comments_wraps_repository_error() -> None:
         tasks_repository=tasks_repository,
         activity_repository=AsyncMock(spec=TaskActivityRepository),
         unit_of_work=AsyncMock(spec=UnitOfWork),
+        knowledge_events=AsyncMock(spec=KnowledgeEvents),
     )
 
     with pytest.raises(TaskCommentsServiceError) as exc_info:
@@ -63,6 +66,7 @@ async def test_delete_comment_when_missing_raises_not_found() -> None:
         tasks_repository=AsyncMock(spec=TasksRepository),
         activity_repository=AsyncMock(spec=TaskActivityRepository),
         unit_of_work=AsyncMock(spec=UnitOfWork),
+        knowledge_events=AsyncMock(spec=KnowledgeEvents),
     )
 
     with pytest.raises(TaskCommentNotFoundError) as exc_info:

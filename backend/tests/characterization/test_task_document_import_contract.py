@@ -25,14 +25,16 @@ from src.exceptions.task_documents import (
     TaskDocumentUnsupportedFormatError,
 )
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.schemas.document_links import DocumentLinkSchema
 from src.schemas.documents import DocumentDetailSchema
 from src.schemas.task_attachments import TaskAttachmentSchema
 from src.schemas.task_documents import TaskDocumentImportSchema
 from src.services.document_links import DocumentLinksService
 from src.services.documents import DocumentsService
-from src.services.task_attachments import TaskAttachmentsService
+from src.services.task_attachments import StoredAttachment, TaskAttachmentsService
 from src.services.task_documents import TaskDocumentImportService
+from src.storage.task_attachments import TaskAttachmentStorage
 
 IMPORT_PATH = "/api/v1/tasks/8/documents/import"
 
@@ -186,7 +188,10 @@ def _build_service(*, link_error: Exception | None = None):
 
     attachments = AsyncMock(spec=TaskAttachmentsService)
     attachments.max_file_size = 10 * 1024 * 1024
-    attachments.upload_attachment.return_value = _attachment()
+    attachments.save_in_transaction.return_value = StoredAttachment(
+        attachment=_attachment(),
+        storage_key="tasks/8/stored.txt",
+    )
 
     documents = AsyncMock(spec=DocumentsService)
     documents.create_document.return_value = _document()
@@ -197,15 +202,19 @@ def _build_service(*, link_error: Exception | None = None):
     else:
         links.create_link.return_value = _link()
 
+    unit_of_work = AsyncMock(spec=UnitOfWork)
+    storage = AsyncMock(spec=TaskAttachmentStorage)
     service = TaskDocumentImportService(
         tasks_repository=tasks,
         attachments_service=attachments,
         documents_service=documents,
         links_service=links,
+        unit_of_work=unit_of_work,
+        attachment_storage=storage,
         vision=DisabledVisionCapability(),
         extract_max_chars=350_000,
     )
-    return service, attachments, documents, links
+    return service, attachments, documents, links, unit_of_work, storage
 
 
 async def test_import_leaves_nothing_behind_when_last_step_fails() -> None:
@@ -214,7 +223,7 @@ async def test_import_leaves_nothing_behind_when_last_step_fails() -> None:
     Сейчас это достигается компенсацией уже сохранённых записей, после
     этапа 5 — единой транзакцией. Проверяется результат, а не механизм.
     """
-    service, attachments, documents, _ = _build_service(
+    service, attachments, documents, _, unit_of_work, storage = _build_service(
         link_error=DocumentsServiceError("связь не создана")
     )
 
@@ -227,13 +236,18 @@ async def test_import_leaves_nothing_behind_when_last_step_fails() -> None:
             content=b"hello",
         )
 
-    documents.delete_document.assert_awaited_once_with(document_id=11)
-    attachments.delete_attachment.assert_awaited_once_with(task_id=8, attachment_id=10)
+    # Инвариант тот же, механизм другой: вместо компенсации уже
+    # закоммиченных строк — откат единственной транзакции.
+    unit_of_work.rollback.assert_awaited_once_with()
+    unit_of_work.commit.assert_not_awaited()
+    documents.delete_document.assert_not_awaited()
+    attachments.delete_attachment.assert_not_awaited()
+    storage.delete.assert_awaited_once_with("tasks/8/stored.txt")
 
 
 async def test_import_creates_attachment_document_and_link_in_order() -> None:
     """Успешный сценарий создаёт все три сущности и ничего не удаляет."""
-    service, attachments, documents, links = _build_service()
+    service, attachments, documents, links, unit_of_work, storage = _build_service()
 
     result = await service.import_file(
         task_id=8,
@@ -246,16 +260,17 @@ async def test_import_creates_attachment_document_and_link_in_order() -> None:
     assert result.attachment.id == 10
     assert result.document.id == 11
     assert result.link.id == 12
-    attachments.upload_attachment.assert_awaited_once()
+    attachments.save_in_transaction.assert_awaited_once()
     documents.create_document.assert_awaited_once()
     links.create_link.assert_awaited_once()
+    unit_of_work.commit.assert_awaited_once_with()
     documents.delete_document.assert_not_awaited()
     attachments.delete_attachment.assert_not_awaited()
 
 
 async def test_unsupported_extension_is_rejected_before_any_write() -> None:
     """Неподдерживаемый формат отсекается до создания чего-либо."""
-    service, attachments, documents, links = _build_service()
+    service, attachments, documents, links, unit_of_work, storage = _build_service()
 
     with pytest.raises(TaskDocumentUnsupportedFormatError):
         await service.import_file(
@@ -266,6 +281,7 @@ async def test_unsupported_extension_is_rejected_before_any_write() -> None:
             content=b"PK\x03\x04",
         )
 
-    attachments.upload_attachment.assert_not_awaited()
+    attachments.save_in_transaction.assert_not_awaited()
     documents.create_document.assert_not_awaited()
     links.create_link.assert_not_awaited()
+    unit_of_work.commit.assert_not_awaited()

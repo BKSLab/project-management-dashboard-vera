@@ -30,7 +30,7 @@ class TaskCommentsService:
         tasks_repository: TasksRepository,
         activity_repository: TaskActivityRepository,
         unit_of_work: UnitOfWork,
-        knowledge_events: KnowledgeEvents | None = None,
+        knowledge_events: KnowledgeEvents,
     ):
         self.comments_repository = comments_repository
         self.tasks_repository = tasks_repository
@@ -96,12 +96,11 @@ class TaskCommentsService:
                 from_value=None,
                 to_value=body_md[:255],
             )
-            if self.knowledge_events is not None:
-                await self.knowledge_events.upsert(
-                    project_id=task.project_id,
-                    entity_type=KnowledgeEntityType.COMMENT,
-                    entity_id=comment.id,
-                )
+            await self.knowledge_events.upsert(
+                project_id=task.project_id,
+                entity_type=KnowledgeEntityType.COMMENT,
+                entity_id=comment.id,
+            )
             await self.unit_of_work.commit()
             return CommentSchema.model_validate(comment)
         except (
@@ -133,7 +132,7 @@ class TaskCommentsService:
                 raise TaskCommentNotFoundError(comment_id=comment_id)
             task = await self.tasks_repository.get_by_id(task_id=comment.task_id)
             await self.comments_repository.delete(comment=comment)
-            if self.knowledge_events is not None and task is not None:
+            if task is not None:
                 await self.knowledge_events.delete(
                     project_id=task.project_id,
                     entity_type=KnowledgeEntityType.COMMENT,

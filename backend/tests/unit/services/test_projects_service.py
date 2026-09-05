@@ -20,6 +20,7 @@ from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.services.knowledge_events import KnowledgeEvents
 from src.services.projects import DEFAULT_STAGES, ProjectsService, build_project_stats
+from src.storage.task_attachments import TaskAttachmentStorage
 
 TODAY = date(2026, 9, 1)
 OWNER_ID = 1
@@ -88,7 +89,8 @@ def build_service(
         stages_repository=stages_repository or AsyncMock(spec=ProjectStagesRepository),
         tasks_repository=tasks_repository or AsyncMock(spec=TasksRepository),
         unit_of_work=unit_of_work or AsyncMock(spec=UnitOfWork),
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
+        attachment_storage=AsyncMock(spec=TaskAttachmentStorage),
     )
 
 
@@ -157,7 +159,7 @@ async def test_update_project_point_fields_enqueues_project_upsert(field: str, v
 
     await build_service(
         projects_repository=projects_repository,
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
     ).update_project(project_id=7, data={field: value})
 
     knowledge_events.upsert.assert_awaited_once_with(
@@ -177,7 +179,7 @@ async def test_update_project_key_enqueues_full_reindex() -> None:
 
     await build_service(
         projects_repository=projects_repository,
-        knowledge_events=knowledge_events,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
     ).update_project(project_id=7, data={"key": "NEW", "name": "Новое имя"})
 
     knowledge_events.reindex_project.assert_awaited_once_with(7)
@@ -198,6 +200,7 @@ async def test_delete_project_removes_attachment_directories() -> None:
         tasks_repository=tasks_repository,
         attachment_storage=storage,
         unit_of_work=AsyncMock(spec=UnitOfWork),
+        knowledge_events=AsyncMock(spec=KnowledgeEvents),
     )
 
     await service.delete_project(project_id=1)
