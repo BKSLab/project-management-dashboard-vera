@@ -5,7 +5,16 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
-    """Базовая модель."""
+    """Базовая модель.
+
+    `eager_defaults` включён явно: PostgreSQL возвращает серверные значения
+    прямо из `INSERT ... RETURNING` и `UPDATE ... RETURNING`, поэтому после
+    записи не нужен отдельный SELECT ради `created_at` и `updated_at`.
+    Без него SQLAlchemy пометила бы эти поля устаревшими, и запись
+    превращалась бы в два обращения к базе вместо одного.
+    """
+
+    __mapper_args__ = {"eager_defaults": True}
 
 
 class TimestampMixin:

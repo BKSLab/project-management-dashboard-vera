@@ -32,8 +32,9 @@ class FakeTokensRepository:
     async def count_active_by_user(self, user_id: int) -> int:
         return self.active_count
 
-    async def create(self, **kwargs) -> ApiToken:
+    async def create(self, *, commit: bool = True, **kwargs) -> ApiToken:
         self.created = kwargs
+        self.created_with_commit = commit
         return ApiToken(
             id=1,
             created_at=datetime.now(UTC),
@@ -44,7 +45,7 @@ class FakeTokensRepository:
     async def get_by_user(self, user_id: int) -> list[ApiToken]:
         return self.tokens
 
-    async def revoke(self, *, token_id: int, user_id: int) -> bool:
+    async def revoke(self, *, token_id: int, user_id: int, commit: bool = True) -> bool:
         self.revoked = (token_id, user_id)
         return any(token.id == token_id for token in self.tokens)
 
@@ -54,7 +55,7 @@ class FakeTokensRepository:
             None,
         )
 
-    async def touch_last_used(self, token: ApiToken) -> None:
+    async def touch_last_used(self, token: ApiToken, *, commit: bool = True) -> None:
         self.touched.append(token)
 
 

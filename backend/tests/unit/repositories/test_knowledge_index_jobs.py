@@ -1,3 +1,5 @@
+"""Однозапросные операции очереди индексации."""
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -7,41 +9,66 @@ from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 
 
 @pytest.mark.asyncio
-async def test_enqueue_flushes_without_committing_transaction() -> None:
+async def test_add_many_flushes_without_committing_transaction() -> None:
+    """Задания попадают в текущую транзакцию, но не фиксируются отдельно.
+
+    Outbox обязан оказаться в базе тем же commit, что и бизнес-факт: иначе
+    задание индексации может пережить откат породившего его изменения.
+    """
     session = MagicMock()
-    session.execute = AsyncMock()
+    session.add_all = MagicMock()
     session.flush = AsyncMock()
-    session.refresh = AsyncMock()
     session.commit = AsyncMock()
-    result = MagicMock()
-    result.scalars.return_value.first.return_value = None
-    session.execute.return_value = result
     repository = KnowledgeIndexJobsRepository(session)
 
-    job = await repository.enqueue(
+    jobs = await repository.add_many(
         project_id=1,
         entity_type=KnowledgeEntityType.TASK,
         operation=KnowledgeIndexOperation.UPSERT,
-        entity_id=7,
+        entity_ids=["7", "8"],
     )
 
-    assert job.entity_id == "7"
+    assert [job.entity_id for job in jobs] == ["7", "8"]
+    session.add_all.assert_called_once()
     session.flush.assert_awaited_once()
-    session.refresh.assert_awaited_once_with(job)
     session.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_enqueue_many_deduplicates_ids_inside_batch() -> None:
-    repository = KnowledgeIndexJobsRepository(MagicMock())
-    repository.enqueue = AsyncMock(side_effect=[MagicMock(id=1), MagicMock(id=2)])
+async def test_add_many_writes_the_whole_batch_at_once() -> None:
+    """Пачка вставляется одной операцией, а не построчно."""
+    session = MagicMock()
+    session.add_all = MagicMock()
+    session.flush = AsyncMock()
+    repository = KnowledgeIndexJobsRepository(session)
 
-    jobs = await repository.enqueue_many(
+    await repository.add_many(
         project_id=1,
         entity_type=KnowledgeEntityType.TASK,
         operation=KnowledgeIndexOperation.UPSERT,
-        entity_ids=[7, 7, 8],
+        entity_ids=[str(index) for index in range(10)],
     )
 
-    assert [job.id for job in jobs] == [1, 2]
-    assert [call.kwargs["entity_id"] for call in repository.enqueue.await_args_list] == [7, 8]
+    assert session.add_all.call_count == 1
+    assert session.flush.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_add_many_on_empty_batch_touches_nothing() -> None:
+    """Пустой набор не порождает ни одного обращения к базе."""
+    session = MagicMock()
+    session.add_all = MagicMock()
+    session.flush = AsyncMock()
+    repository = KnowledgeIndexJobsRepository(session)
+
+    assert (
+        await repository.add_many(
+            project_id=1,
+            entity_type=KnowledgeEntityType.TASK,
+            operation=KnowledgeIndexOperation.UPSERT,
+            entity_ids=[],
+        )
+        == []
+    )
+    session.add_all.assert_not_called()
+    session.flush.assert_not_awaited()

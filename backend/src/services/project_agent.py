@@ -15,8 +15,6 @@ from src.clients.embedding import EmbeddingClient
 from src.clients.llm import LlmClient
 from src.clients.qdrant import KnowledgeSearchHit, ProjectQdrantClient
 from src.db.models.knowledge_index_jobs import (
-    KnowledgeEntityType,
-    KnowledgeIndexOperation,
     KnowledgeIndexStatus,
 )
 from src.db.models.projects import Project
@@ -24,6 +22,7 @@ from src.exceptions.base import RepositoryError
 from src.exceptions.clients import ClientError
 from src.exceptions.knowledge import (
     KnowledgeDisabledError,
+    KnowledgeEventsServiceError,
     KnowledgeIndexJobsRepositoryError,
     KnowledgeProviderError,
     KnowledgeServiceError,
@@ -52,6 +51,7 @@ from src.schemas.knowledge import (
 )
 from src.services.calendar import MAX_CALENDAR_RANGE_DAYS, CalendarService
 from src.services.calendar_scenarios import CalendarScenarioService
+from src.services.knowledge_events import KnowledgeEvents
 from src.services.tasks import build_task_key
 
 logger = logging.getLogger(__name__)
@@ -199,6 +199,7 @@ class ProjectAgentService:
         embedding_client: EmbeddingClient,
         qdrant_client: ProjectQdrantClient,
         config: ProjectAgentConfig,
+        knowledge_events: KnowledgeEvents,
     ) -> None:
         self.stages_repository = stages_repository
         self.tasks_repository = tasks_repository
@@ -214,6 +215,7 @@ class ProjectAgentService:
         self.embedding_client = embedding_client
         self.qdrant_client = qdrant_client
         self.config = config
+        self.knowledge_events = knowledge_events
 
     async def ask(
         self,
@@ -429,13 +431,12 @@ class ProjectAgentService:
         if not self.config.knowledge_enabled:
             raise KnowledgeDisabledError("KNOWLEDGE_ENABLED=false")
         try:
-            await self.jobs_repository.enqueue(
-                project_id=project_id,
-                entity_type=KnowledgeEntityType.PROJECT,
-                operation=KnowledgeIndexOperation.REINDEX_PROJECT,
-            )
+            # Постановка задания и её фиксация — один факт: владелец
+            # транзакции здесь, а не внутри репозитория очереди.
+            await self.knowledge_events.reindex_project(project_id=project_id)
             await self.unit_of_work.commit()
-        except (KnowledgeIndexJobsRepositoryError, UnitOfWorkRepositoryError) as error:
+        except (KnowledgeEventsServiceError, UnitOfWorkRepositoryError) as error:
+            await self.unit_of_work.rollback()
             raise KnowledgeServiceError(str(error)) from error
 
     async def _select_tools(

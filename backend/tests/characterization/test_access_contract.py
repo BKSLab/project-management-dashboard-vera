@@ -102,7 +102,7 @@ class FakeTokensRepository:
             return None
         return token
 
-    async def touch_last_used(self, token: ApiToken) -> None:
+    async def touch_last_used(self, token: ApiToken, *, commit: bool = True) -> None:
         token.last_used_at = datetime.now(UTC)
 
 

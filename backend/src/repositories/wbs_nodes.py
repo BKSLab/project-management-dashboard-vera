@@ -88,7 +88,6 @@ class WbsNodesRepository:
             node = WbsNode(**data)
             self.db_session.add(node)
             await self.db_session.flush()
-            await self.db_session.refresh(node)
             return node
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
@@ -112,7 +111,6 @@ class WbsNodesRepository:
             for field, value in data.items():
                 setattr(node, field, value)
             await self.db_session.flush()
-            await self.db_session.refresh(node)
             return node
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()

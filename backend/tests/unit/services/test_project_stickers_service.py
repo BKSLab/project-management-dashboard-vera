@@ -81,7 +81,8 @@ async def test_list_returns_transport_contract() -> None:
 @pytest.mark.asyncio
 async def test_create_stamps_authenticated_author_and_commits() -> None:
     repository = AsyncMock(spec=ProjectStickersRepository)
-    repository.create.return_value = sticker(task_ids=[11])
+    repository.insert.return_value = 4
+    repository.get_by_id.return_value = sticker(task_ids=[11])
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_project.return_value = [SimpleNamespace(id=11)]
     unit_of_work = AsyncMock(spec=UnitOfWork)
@@ -95,14 +96,15 @@ async def test_create_stamps_authenticated_author_and_commits() -> None:
     )
 
     assert result.id == 4
-    saved = repository.create.await_args.kwargs
+    saved = repository.insert.await_args.kwargs
     assert saved["data"]["created_by_user_id"] == 7
     assert saved["data"]["created_by_username_snapshot"] == "vera"
     assert saved["data"]["created_by_display_name_snapshot"] == "Иванова Вера Петровна"
     assert saved["data"]["body"] == "Согласовать API"
     assert saved["data"]["canvas_x"] == 40.0
     assert saved["data"]["canvas_y"] == 40.0
-    assert saved["task_ids"] == [11]
+    links = repository.replace_task_links.await_args.kwargs
+    assert links["task_ids"] == [11]
     unit_of_work.commit.assert_awaited_once_with()
 
 
@@ -121,14 +123,17 @@ async def test_create_rejects_task_from_another_project() -> None:
         author_display_name="Иванова Вера Петровна",
         )
 
-    repository.create.assert_not_awaited()
+    repository.insert.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_update_uses_revision_replaces_tasks_and_preserves_author() -> None:
     repository = AsyncMock(spec=ProjectStickersRepository)
-    repository.get_by_id.return_value = sticker(revision=3, task_ids=[11])
-    repository.update.return_value = sticker(revision=4, task_ids=[12])
+    repository.get_by_id.side_effect = [
+        sticker(revision=3, task_ids=[11]),
+        sticker(revision=4, task_ids=[12]),
+    ]
+    repository.update_fields.return_value = True
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_project.return_value = [SimpleNamespace(id=12)]
     unit_of_work = AsyncMock(spec=UnitOfWork)
@@ -145,13 +150,13 @@ async def test_update_uses_revision_replaces_tasks_and_preserves_author() -> Non
     )
 
     assert result.revision == 4
-    changes = repository.update.await_args.kwargs
+    changes = repository.update_fields.await_args.kwargs
     assert changes["expected_revision"] == 3
     assert changes["changes"] == {
         "body": "Новый текст",
         "color": ProjectStickerColor.BLUE,
     }
-    assert changes["task_ids"] == [12]
+    assert repository.replace_task_links.await_args.kwargs["task_ids"] == [12]
     assert "created_by_user_id" not in changes["changes"]
     unit_of_work.commit.assert_awaited_once_with()
 
@@ -168,14 +173,14 @@ async def test_update_rejects_stale_revision_before_write() -> None:
             data=ProjectStickerUpdateSchema(revision=4, body="Поздняя версия"),
         )
 
-    repository.update.assert_not_awaited()
+    repository.update_fields.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_update_detects_compare_and_swap_race() -> None:
     repository = AsyncMock(spec=ProjectStickersRepository)
     repository.get_by_id.return_value = sticker(revision=2)
-    repository.update.return_value = None
+    repository.update_fields.return_value = False
 
     with pytest.raises(ProjectStickerRevisionConflictError):
         await service(repository).update_sticker(
@@ -204,7 +209,8 @@ async def test_move_updates_only_canvas_position_and_commits() -> None:
     moved = sticker(revision=3)
     moved.canvas_x = 312.5
     moved.canvas_y = -48.0
-    repository.update_position.return_value = moved
+    repository.update_position.return_value = True
+    repository.get_by_id.return_value = moved
     unit_of_work = AsyncMock(spec=UnitOfWork)
 
     result = await service(repository, unit_of_work=unit_of_work).move_sticker(
@@ -228,7 +234,7 @@ async def test_move_updates_only_canvas_position_and_commits() -> None:
 @pytest.mark.asyncio
 async def test_move_missing_sticker_is_not_found() -> None:
     repository = AsyncMock(spec=ProjectStickersRepository)
-    repository.update_position.return_value = None
+    repository.update_position.return_value = False
 
     with pytest.raises(ProjectStickerNotFoundError):
         await service(repository).move_sticker(

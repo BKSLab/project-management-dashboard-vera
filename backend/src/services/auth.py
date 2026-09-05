@@ -153,7 +153,7 @@ class AuthService:
 
         user = await self._load_active_user(token.user_id)
         try:
-            await self.tokens_repository.touch_last_used(token)
+            await self.tokens_repository.touch_last_used(token, commit=True)
         except ApiTokensRepositoryError:
             # Отметка использования — диагностика, а не условие доступа.
             logger.warning("⚠️ Не удалось отметить использование токена id=%s.", token.id)
@@ -199,7 +199,8 @@ class AuthService:
 
         try:
             user = await self.users_repository.save(
-                data={**payload, "password_hash": hash_password(password)}
+                data={**payload, "password_hash": hash_password(password)},
+                commit=True,
             )
             logger.info("✅ Зарегистрирован пользователь %s.", user.username)
             return to_user_schema(user)

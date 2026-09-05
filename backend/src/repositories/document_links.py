@@ -116,7 +116,12 @@ class DocumentLinksRepository:
                 error_details=f"Ошибка при получении связей задачи id={task_id}."
             ) from error
 
-    async def create(self, data: dict) -> DocumentLink:
+    async def create(
+        self,
+        data: dict,
+        *,
+        commit: bool = True,
+    ) -> DocumentLink:
         """Создаёт связь документа и возвращает сохранённую модель.
 
         Args:
@@ -131,8 +136,11 @@ class DocumentLinksRepository:
         try:
             link = DocumentLink(**data)
             self.db_session.add(link)
-            await self.db_session.commit()
-            await self.db_session.refresh(link)
+            # flush выполняется всегда: без него при commit=False запись
+            # не дошла бы до базы и не получила серверных значений.
+            await self.db_session.flush()
+            if commit:
+                await self.db_session.commit()
             return link
         except IntegrityError as error:
             await self.db_session.rollback()
@@ -153,7 +161,12 @@ class DocumentLinksRepository:
                 error_details="Ошибка при создании связи документа."
             ) from error
 
-    async def delete(self, link: DocumentLink) -> None:
+    async def delete(
+        self,
+        link: DocumentLink,
+        *,
+        commit: bool = True,
+    ) -> None:
         """Удаляет связь документа.
 
         Args:
@@ -167,7 +180,11 @@ class DocumentLinksRepository:
         """
         try:
             await self.db_session.delete(link)
-            await self.db_session.commit()
+            # flush выполняется всегда: без него при commit=False запись
+            # не дошла бы до базы и не получила серверных значений.
+            await self.db_session.flush()
+            if commit:
+                await self.db_session.commit()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось удалить связь документа id=%s.", link.id, exc_info=True)

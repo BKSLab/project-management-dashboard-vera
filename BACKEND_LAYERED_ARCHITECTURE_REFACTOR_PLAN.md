@@ -20,7 +20,7 @@
 | 1. Client/config dependencies | ✅ выполнен | 791 passed | `stage-1` |
 | 2. Auth/access в сервисы, write scope | ✅ выполнен | 882 passed | `stage-2` |
 | 3. Exception boundaries | ✅ выполнен | 931 passed | `stage-3` |
-| 4. Транзакционные границы | ⬜ | — | — |
+| 4. Транзакционные границы | ✅ выполнен | 1033 passed | `stage-4` |
 | 5. Атомарный импорт документа | ⬜ | — | — |
 | 6. Короткие DB scopes | ⬜ | — | — |
 | 7. Очистка endpoints | ⬜ | — | — |
@@ -837,7 +837,32 @@ token-management routes и 4 read-only POST routes составляют явны
 - API tests подтверждают, что внутренние details не утекли;
 - AST/import test запрещает client/storage modules импортировать `*ServiceError`.
 
-### Этап 4. Сделать транзакционные границы явными
+### Этап 4. Сделать транзакционные границы явными — ✅ выполнен
+
+Порядок соблюдён: сначала 14 integration-тестов зафиксировали, какие
+server defaults возвращают записывающие методы, и только потом убраны все
+**24 `session.refresh()`**. На `Base` включён `eager_defaults`, поэтому
+`created_at` и `updated_at` приходят из `RETURNING` того же запроса.
+Инвариант подтверждён напрямую: тест считает SQL-запросы и проверяет, что
+обычная вставка — это один `INSERT ... RETURNING` без последующего SELECT.
+
+Введён keyword-only контракт `commit` у методов, которые коммитили сами
+(users, document_links, api_tokens, knowledge_index_jobs); выбор теперь
+виден в месте вызова. Обязательный `flush` оставлен всегда: без него при
+`commit=False` запись не дошла бы до базы и не получила идентификатора.
+
+Разделены multi-query методы: `ProjectStickersRepository.create/update/
+update_position` → `insert` + `replace_task_links` + `get_by_id`,
+`TaskParticipantsRepository.replace_for_task` → `delete_for_task` +
+`save_many`, дедупликация `enqueue` переехала в `KnowledgeEvents`,
+`mark_failed` и `_set_terminal_state` выражены одним `UPDATE`.
+`ProjectStagesRepository.save_many` больше не дочитывает строки по одной.
+
+Добавлен `tests/architecture/test_repository_contracts.py`. Он сразу нашёл
+два нарушения в новом коде — публичный метод, вызывающий другой публичный,
+и три метода, коммитящих без объявленного флага, — оба исправлены.
+
+Итог: `1033 passed`, `ruff All checks passed`.
 
 Нормативное основание: one-statement repository contract [PAT-REPO] и
 service-owned transaction [PAT-TX]. Это два разных инварианта; один нельзя

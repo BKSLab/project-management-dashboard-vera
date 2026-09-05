@@ -10,7 +10,10 @@ from src.services.knowledge_events import KnowledgeEvents
 @pytest.mark.asyncio
 async def test_event_queue_failure_is_propagated() -> None:
     repository = AsyncMock()
-    repository.enqueue.side_effect = KnowledgeIndexJobsRepositoryError("database unavailable")
+    repository.get_pending.return_value = []
+    repository.add_many.side_effect = KnowledgeIndexJobsRepositoryError(
+        "database unavailable"
+    )
     events = KnowledgeEvents(repository=repository)
 
     with pytest.raises(KnowledgeEventsServiceError):
@@ -20,7 +23,7 @@ async def test_event_queue_failure_is_propagated() -> None:
             entity_id=42,
         )
 
-    repository.enqueue.assert_awaited_once()
+    repository.add_many.assert_awaited_once()
 
 
 @pytest.mark.asyncio

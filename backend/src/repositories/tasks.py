@@ -944,7 +944,6 @@ class TasksRepository:
             task = Task(**data)
             self.db_session.add(task)
             await self.db_session.flush()
-            await self.db_session.refresh(task)
             return task
         except IntegrityError as error:
             await self.db_session.rollback()
@@ -980,7 +979,6 @@ class TasksRepository:
             for field, value in data.items():
                 setattr(task, field, value)
             await self.db_session.flush()
-            await self.db_session.refresh(task)
             return task
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()

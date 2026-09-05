@@ -91,6 +91,7 @@ class ApiTokensService:
                 prefix=build_display_prefix(secret),
                 scope=ApiTokenScope(data.scope),
                 expires_at=expires_at,
+                commit=True,
             )
         except ApiTokensRepositoryError as error:
             raise ApiTokensServiceError(str(error)) from error
@@ -113,7 +114,11 @@ class ApiTokensService:
             ApiTokensServiceError: Если репозиторий вернул ошибку.
         """
         try:
-            revoked = await self.tokens_repository.revoke(token_id=token_id, user_id=user_id)
+            revoked = await self.tokens_repository.revoke(
+                token_id=token_id,
+                user_id=user_id,
+                commit=True,
+            )
         except ApiTokensRepositoryError as error:
             raise ApiTokensServiceError(str(error)) from error
         if not revoked:

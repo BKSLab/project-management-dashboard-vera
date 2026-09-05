@@ -4,7 +4,6 @@ from sqlalchemy import select
 from src.db.models.knowledge_index_jobs import (
     KnowledgeEntityType,
     KnowledgeIndexJob,
-    KnowledgeIndexOperation,
 )
 from src.db.models.project_stages import ProjectStage
 from src.db.models.projects import Project
@@ -12,6 +11,7 @@ from src.db.models.tasks import Task
 from src.exceptions.knowledge import KnowledgeIndexJobsRepositoryError
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.tasks import TasksRepository
+from src.services.knowledge_events import KnowledgeEvents
 
 
 def task_data(project: Project, stage: ProjectStage, *, number: int, title: str) -> dict:
@@ -35,10 +35,9 @@ async def test_domain_rollback_removes_outbox_job(
     task = await TasksRepository(db_session).save(
         task_data(project, stage, number=701, title="Откатываемая задача")
     )
-    await KnowledgeIndexJobsRepository(db_session).enqueue(
+    await KnowledgeEvents(repository=KnowledgeIndexJobsRepository(db_session)).upsert(
         project_id=project.id,
         entity_type=KnowledgeEntityType.TASK,
-        operation=KnowledgeIndexOperation.UPSERT,
         entity_id=task.id,
     )
 
@@ -63,11 +62,11 @@ async def test_outbox_insert_failure_rolls_back_domain_change(
     )
 
     with pytest.raises(KnowledgeIndexJobsRepositoryError):
-        await KnowledgeIndexJobsRepository(db_session).enqueue(
+        await KnowledgeIndexJobsRepository(db_session).add_many(
             project_id=project.id,
             entity_type=KnowledgeEntityType.TASK,
             operation=None,  # type: ignore[arg-type]
-            entity_id=999,
+            entity_ids=["999"],
         )
 
     assert (

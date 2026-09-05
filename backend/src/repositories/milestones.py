@@ -77,7 +77,6 @@ class MilestonesRepository:
             milestone = ProjectMilestone(**data)
             self.db_session.add(milestone)
             await self.db_session.flush()
-            await self.db_session.refresh(milestone)
             return milestone
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
@@ -90,7 +89,6 @@ class MilestonesRepository:
             for field, value in data.items():
                 setattr(milestone, field, value)
             await self.db_session.flush()
-            await self.db_session.refresh(milestone)
             return milestone
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()

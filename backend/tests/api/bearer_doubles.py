@@ -86,7 +86,7 @@ class FakeTokensRepository:
     async def get_active_by_hash(self, token_hash: str) -> ApiToken | None:
         return token(self.scope) if token_hash == hash_token_secret(SECRET) else None
 
-    async def touch_last_used(self, stored: ApiToken) -> None:
+    async def touch_last_used(self, stored: ApiToken, *, commit: bool = True) -> None:
         return None
 
 

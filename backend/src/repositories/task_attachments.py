@@ -161,7 +161,6 @@ class TaskAttachmentsRepository:
             )
             self.db_session.add(attachment)
             await self.db_session.flush()
-            await self.db_session.refresh(attachment)
             return attachment
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()

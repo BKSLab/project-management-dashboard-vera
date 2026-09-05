@@ -41,7 +41,8 @@ async def create_sticker(
     user: User,
     task_ids: list[int],
 ) -> ProjectSticker:
-    return await repository.create(
+    # Порядок операций теперь принадлежит сервису; помощник повторяет его.
+    sticker_id = await repository.insert(
         data={
             "project_id": project.id,
             "body": "Согласовать API",
@@ -50,8 +51,11 @@ async def create_sticker(
             "created_by_username_snapshot": user.username,
             "created_by_display_name_snapshot": f"{user.last_name} {user.first_name}",
         },
-        task_ids=task_ids,
     )
+    await repository.replace_task_links(sticker_id=sticker_id, task_ids=task_ids)
+    created = await repository.get_by_id(project_id=project.id, sticker_id=sticker_id)
+    assert created is not None
+    return created
 
 
 @pytest.mark.asyncio
@@ -72,28 +76,29 @@ async def test_crud_roundtrip_and_task_links(
     )
 
     listed = await repository.list_by_project_id(project.id)
-    updated = await repository.update(
+    changed = await repository.update_fields(
         project_id=project.id,
         sticker_id=created.id,
         expected_revision=1,
         changes={"body": "Новый текст", "color": ProjectStickerColor.BLUE},
-        task_ids=[second.id],
     )
-    stale = await repository.update(
+    await repository.replace_task_links(sticker_id=created.id, task_ids=[second.id])
+    updated = await repository.get_by_id(project_id=project.id, sticker_id=created.id)
+    stale = await repository.update_fields(
         project_id=project.id,
         sticker_id=created.id,
         expected_revision=1,
         changes={"body": "Устаревший текст"},
-        task_ids=None,
     )
 
     assert [item.id for item in listed] == [created.id]
+    assert changed is True
     assert updated is not None
     assert updated.body == "Новый текст"
     assert updated.color is ProjectStickerColor.BLUE
     assert updated.revision == 2
     assert [link.task_id for link in updated.task_links] == [second.id]
-    assert stale is None
+    assert stale is False
 
 
 @pytest.mark.asyncio
@@ -141,11 +146,13 @@ async def test_position_update_preserves_content_revision_and_timestamp(
         canvas_y=-72.5,
     )
 
-    assert moved is not None
-    assert moved.canvas_x == 318.25
-    assert moved.canvas_y == -72.5
-    assert moved.revision == 1
-    assert moved.updated_at == original_updated_at
+    assert moved is True
+    stored = await repository.get_by_id(project_id=project.id, sticker_id=created.id)
+    assert stored is not None
+    assert stored.canvas_x == 318.25
+    assert stored.canvas_y == -72.5
+    assert stored.revision == 1
+    assert stored.updated_at == original_updated_at
 
 
 @pytest.mark.asyncio
@@ -164,7 +171,7 @@ async def test_position_update_is_scoped_to_project(
         canvas_y=100.0,
     )
 
-    assert moved is None
+    assert moved is False
 
 
 @pytest.mark.asyncio

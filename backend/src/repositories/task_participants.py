@@ -67,25 +67,50 @@ class TaskParticipantsRepository:
             )
             raise TasksRepositoryError("Ошибка получения назначений участника.") from error
 
-    async def replace_for_task(self, task_id: int, assignments: list[dict]) -> None:
-        """Атомарно заменяет полный набор ролевых назначений задачи."""
+    async def delete_for_task(self, task_id: int) -> None:
+        """Удаляет все ролевые назначения задачи одним запросом.
+
+        Args:
+            task_id: Идентификатор задачи.
+
+        Raises:
+            TasksRepositoryError: Если удалить назначения не удалось.
+        """
         try:
             await self.db_session.execute(
                 delete(TaskParticipant).where(TaskParticipant.task_id == task_id)
             )
             await self.db_session.flush()
-            if assignments:
-                self.db_session.add_all(
-                    [
-                        TaskParticipant(task_id=task_id, **assignment)
-                        for assignment in assignments
-                    ]
-                )
-                await self.db_session.flush()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error(
-                "❌ Не удалось заменить участников задачи id=%s.",
+                "❌ Не удалось удалить участников задачи id=%s.",
+                task_id,
+                exc_info=True,
+            )
+            raise TasksRepositoryError("Ошибка удаления участников задачи.") from error
+
+    async def save_many(self, task_id: int, assignments: list[dict]) -> None:
+        """Добавляет набор ролевых назначений одной вставкой.
+
+        Args:
+            task_id: Идентификатор задачи.
+            assignments: Роли и исполнители.
+
+        Raises:
+            TasksRepositoryError: Если сохранить назначения не удалось.
+        """
+        if not assignments:
+            return
+        try:
+            self.db_session.add_all(
+                [TaskParticipant(task_id=task_id, **assignment) for assignment in assignments]
+            )
+            await self.db_session.flush()
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось сохранить участников задачи id=%s.",
                 task_id,
                 exc_info=True,
             )

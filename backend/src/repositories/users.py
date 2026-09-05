@@ -84,7 +84,12 @@ class UsersRepository:
             logger.error("❌ Не удалось подсчитать пользователей.", exc_info=True)
             raise UsersRepositoryError("Ошибка подсчёта пользователей.") from error
 
-    async def save(self, data: dict) -> User:
+    async def save(
+        self,
+        data: dict,
+        *,
+        commit: bool = True,
+    ) -> User:
         """Создаёт пользователя и возвращает сохранённую модель.
 
         Args:
@@ -100,8 +105,11 @@ class UsersRepository:
         try:
             user = User(**data)
             self.db_session.add(user)
-            await self.db_session.commit()
-            await self.db_session.refresh(user)
+            # flush выполняется всегда: без него при commit=False запись
+            # не дошла бы до базы и не получила серверных значений.
+            await self.db_session.flush()
+            if commit:
+                await self.db_session.commit()
             return user
         except IntegrityError as error:
             await self.db_session.rollback()
@@ -118,7 +126,13 @@ class UsersRepository:
             logger.error("❌ Не удалось создать пользователя.", exc_info=True)
             raise UsersRepositoryError("Ошибка создания пользователя.") from error
 
-    async def update(self, user: User, data: dict) -> User:
+    async def update(
+        self,
+        user: User,
+        data: dict,
+        *,
+        commit: bool = True,
+    ) -> User:
         """Обновляет пользователя и возвращает сохранённую модель.
 
         Args:
@@ -134,8 +148,11 @@ class UsersRepository:
         try:
             for field, value in data.items():
                 setattr(user, field, value)
-            await self.db_session.commit()
-            await self.db_session.refresh(user)
+            # flush выполняется всегда: без него при commit=False запись
+            # не дошла бы до базы и не получила серверных значений.
+            await self.db_session.flush()
+            if commit:
+                await self.db_session.commit()
             return user
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()

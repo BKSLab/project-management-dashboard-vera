@@ -62,7 +62,6 @@ class TaskDependenciesRepository:
         try:
             self.db_session.add(dependency)
             await self.db_session.flush()
-            await self.db_session.refresh(dependency)
             return dependency
         except IntegrityError as error:
             await self.db_session.rollback()

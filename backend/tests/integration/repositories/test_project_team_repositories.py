@@ -61,9 +61,11 @@ async def test_task_participants_round_trip_and_follow_membership_cascade(
         }
     )
     participants_repository = TaskParticipantsRepository(db_session)
-    await participants_repository.replace_for_task(
-        task_id=task.id,
-        assignments=[
+    # Замена набора — две однозапросные операции; порядок задаёт сценарий.
+    await participants_repository.delete_for_task(task.id)
+    await participants_repository.save_many(
+        task.id,
+        [
             {
                 "project_member_id": executor_member.id,
                 "role": TaskParticipantRole.EXECUTOR,

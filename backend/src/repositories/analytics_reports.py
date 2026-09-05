@@ -106,7 +106,6 @@ class AnalyticsReportsRepository:
             report = AnalyticsReport(**data)
             self.db_session.add(report)
             await self.db_session.flush()
-            await self.db_session.refresh(report)
             return report
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()

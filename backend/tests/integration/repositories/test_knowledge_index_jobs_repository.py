@@ -11,19 +11,54 @@ from src.db.models.knowledge_index_jobs import (
 )
 from src.db.models.projects import Project
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
+from src.services.knowledge_events import KnowledgeEvents
+
+
+async def enqueue(
+    repository: KnowledgeIndexJobsRepository,
+    *,
+    project_id: int,
+    entity_type: KnowledgeEntityType,
+    operation: KnowledgeIndexOperation,
+    entity_id: int | str | None = None,
+) -> KnowledgeIndexJob:
+    """Ставит одно задание тем же путём, что и продовый publisher.
+
+    Дедупликация принадлежит `KnowledgeEvents`, поэтому тест очереди
+    пользуется им, а не собирает логику заново.
+    """
+    events = KnowledgeEvents(repository=repository)
+    normalized = str(entity_id) if entity_id is not None else None
+    await events._enqueue_missing(
+        project_id=project_id,
+        entity_type=entity_type,
+        operation=operation,
+        entity_ids=[normalized],
+    )
+    pending = await repository.get_pending(
+        project_id=project_id,
+        entity_type=entity_type,
+        operation=operation,
+        entity_ids=[normalized],
+    )
+    return pending[0]
+
+
 
 
 @pytest.mark.asyncio
 async def test_queue_deduplicates_and_claims_pending_job(db_session, project: Project) -> None:
     repository = KnowledgeIndexJobsRepository(db_session)
 
-    first = await repository.enqueue(
+    first = await enqueue(
+        repository,
         project_id=project.id,
         entity_type=KnowledgeEntityType.TASK,
         entity_id=42,
         operation=KnowledgeIndexOperation.UPSERT,
     )
-    duplicate = await repository.enqueue(
+    duplicate = await enqueue(
+        repository,
         project_id=project.id,
         entity_type=KnowledgeEntityType.TASK,
         entity_id=42,
@@ -33,7 +68,7 @@ async def test_queue_deduplicates_and_claims_pending_job(db_session, project: Pr
     assert duplicate.id == first.id
     assert (await repository.get_status_counts(project.id))[KnowledgeIndexStatus.PENDING] == 1
 
-    claimed = await repository.claim_next()
+    claimed = next(iter(await repository.claim_next_batch(limit=1)), None)
 
     assert claimed is not None
     assert claimed.id == first.id
@@ -58,13 +93,14 @@ async def test_failed_job_records_finish_time_and_zero_chunks(
     project: Project,
 ) -> None:
     repository = KnowledgeIndexJobsRepository(db_session)
-    queued = await repository.enqueue(
+    queued = await enqueue(
+        repository,
         project_id=project.id,
         entity_type=KnowledgeEntityType.PROJECT,
         entity_id=project.id,
         operation=KnowledgeIndexOperation.UPSERT,
     )
-    claimed = await repository.claim_next()
+    claimed = next(iter(await repository.claim_next_batch(limit=1)), None)
     assert claimed is not None
 
     await repository.mark_failed(claimed.id, "embedding unavailable", max_attempts=1)
@@ -139,19 +175,22 @@ async def test_claim_batch_contains_only_task_upserts_from_same_project(
 ) -> None:
     repository = KnowledgeIndexJobsRepository(db_session)
     for entity_id in (1, 2):
-        await repository.enqueue(
+        await enqueue(
+            repository,
             project_id=project.id,
             entity_type=KnowledgeEntityType.TASK,
             entity_id=entity_id,
             operation=KnowledgeIndexOperation.UPSERT,
         )
-    await repository.enqueue(
+    await enqueue(
+        repository,
         project_id=project.id,
         entity_type=KnowledgeEntityType.DOCUMENT,
         entity_id=3,
         operation=KnowledgeIndexOperation.UPSERT,
     )
-    await repository.enqueue(
+    await enqueue(
+        repository,
         project_id=project.id + 1,
         entity_type=KnowledgeEntityType.TASK,
         entity_id=4,
@@ -176,18 +215,21 @@ async def test_claim_batch_stops_before_project_barrier(
     barrier: KnowledgeIndexOperation,
 ) -> None:
     repository = KnowledgeIndexJobsRepository(db_session)
-    first = await repository.enqueue(
+    first = await enqueue(
+        repository,
         project_id=project.id,
         entity_type=KnowledgeEntityType.TASK,
         entity_id=1,
         operation=KnowledgeIndexOperation.UPSERT,
     )
-    barrier_job = await repository.enqueue(
+    barrier_job = await enqueue(
+        repository,
         project_id=project.id,
         entity_type=KnowledgeEntityType.PROJECT,
         operation=barrier,
     )
-    last = await repository.enqueue(
+    last = await enqueue(
+        repository,
         project_id=project.id,
         entity_type=KnowledgeEntityType.TASK,
         entity_id=2,
@@ -198,6 +240,6 @@ async def test_claim_batch_stops_before_project_barrier(
 
     assert [job.id for job in claimed] == [first.id]
     await repository.mark_succeeded(first.id)
-    assert (await repository.claim_next()).id == barrier_job.id
+    assert (await repository.claim_next_batch(limit=1))[0].id == barrier_job.id
     await repository.mark_succeeded(barrier_job.id)
-    assert (await repository.claim_next()).id == last.id
+    assert (await repository.claim_next_batch(limit=1))[0].id == last.id

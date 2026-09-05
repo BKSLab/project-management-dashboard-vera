@@ -98,7 +98,8 @@ class DocumentLinksService:
                     task_id=task_id,
                 )
             link = await self.document_links_repository.create(
-                data={"document_id": document_id, "task_id": task_id}
+                data={"document_id": document_id, "task_id": task_id},
+                commit=True,
             )
             return DocumentLinkSchema.model_validate(link)
         except DocumentLinkAlreadyExistsRepositoryError as error:
@@ -125,7 +126,7 @@ class DocumentLinksService:
             link = await self.document_links_repository.get_by_id(link_id=link_id)
             if link is None:
                 raise DocumentLinkNotFoundError(link_id=link_id)
-            await self.document_links_repository.delete(link=link)
+            await self.document_links_repository.delete(link=link, commit=True)
         except RepositoryErrors as error:
             logger.error("❌ Ошибка удаления связи документа id=%s.", link_id, exc_info=True)
             raise DocumentLinksServiceError(str(error)) from error

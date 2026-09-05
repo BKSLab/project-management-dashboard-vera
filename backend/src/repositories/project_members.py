@@ -117,7 +117,6 @@ class ProjectMembersRepository:
             member = ProjectMember(**data)
             self.db_session.add(member)
             await self.db_session.flush()
-            await self.db_session.refresh(member)
             return member
         except IntegrityError as error:
             await self.db_session.rollback()

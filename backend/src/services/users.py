@@ -74,7 +74,7 @@ class UsersService:
         """
         try:
             user = await self._get_user(user_id=user_id)
-            updated = await self.users_repository.update(user=user, data=data)
+            updated = await self.users_repository.update(user=user, data=data, commit=True)
             return to_user_schema(updated)
         except UsersRepositoryError as error:
             logger.error("❌ Ошибка обновления профиля id=%s.", user_id, exc_info=True)
@@ -108,6 +108,7 @@ class UsersService:
             await self.users_repository.update(
                 user=user,
                 data={"password_hash": hash_password(new_password)},
+                commit=True,
             )
             logger.info("✅ Пароль пользователя id=%s изменён.", user_id)
         except UsersRepositoryError as error:
@@ -145,7 +146,11 @@ class UsersService:
                 extension=extension,
                 content=content,
             )
-            await self.users_repository.update(user=user, data={"avatar_key": storage_key})
+            await self.users_repository.update(
+                user=user,
+                data={"avatar_key": storage_key},
+                commit=True,
+            )
             if previous_key is not None:
                 await self._remove_file(storage_key=previous_key)
             logger.info("✅ Фотография пользователя id=%s обновлена.", user_id)
@@ -202,7 +207,11 @@ class UsersService:
             if user.avatar_key is None:
                 raise AvatarNotFoundError(user_id=user_id)
             storage_key = user.avatar_key
-            await self.users_repository.update(user=user, data={"avatar_key": None})
+            await self.users_repository.update(
+                user=user,
+                data={"avatar_key": None},
+                commit=True,
+            )
             await self._remove_file(storage_key=storage_key)
         except AvatarStorageError as error:
             logger.error("❌ Хранилище не удалило фотографию id=%s.", user_id, exc_info=True)

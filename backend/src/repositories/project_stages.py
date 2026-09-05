@@ -141,9 +141,9 @@ class ProjectStagesRepository:
         try:
             stages = [ProjectStage(**item) for item in items]
             self.db_session.add_all(stages)
+            # Один INSERT на весь набор: построчного дочитывания больше нет,
+            # серверные значения приходят из RETURNING этой же вставки.
             await self.db_session.flush()
-            for stage in stages:
-                await self.db_session.refresh(stage)
             return stages
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
@@ -167,7 +167,6 @@ class ProjectStagesRepository:
             stage = ProjectStage(**data)
             self.db_session.add(stage)
             await self.db_session.flush()
-            await self.db_session.refresh(stage)
             return stage
         except IntegrityError as error:
             await self.db_session.rollback()
@@ -202,7 +201,6 @@ class ProjectStagesRepository:
             for field, value in data.items():
                 setattr(stage, field, value)
             await self.db_session.flush()
-            await self.db_session.refresh(stage)
             return stage
         except IntegrityError as error:
             await self.db_session.rollback()

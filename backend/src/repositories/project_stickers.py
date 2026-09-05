@@ -64,37 +64,89 @@ class ProjectStickersRepository:
                 f"Ошибка получения стикера id={sticker_id}."
             ) from error
 
-    async def create(self, *, data: dict[str, Any], task_ids: list[int]) -> ProjectSticker:
-        """Создаёт стикер и полный набор его task links без commit."""
+    async def insert(self, *, data: dict[str, Any]) -> int:
+        """Вставляет стикер и возвращает его идентификатор.
+
+        Связи с задачами и чтение готовой карточки — отдельные операции:
+        порядок и транзакция принадлежат сервису.
+
+        Args:
+            data: Поля нового стикера.
+
+        Returns:
+            Идентификатор созданного стикера.
+
+        Raises:
+            ProjectStickersRepositoryError: Если вставка не удалась.
+        """
         try:
-            sticker = ProjectSticker(
-                **data,
-                revision=1,
-                task_links=[ProjectStickerTaskLink(task_id=task_id) for task_id in task_ids],
-            )
+            sticker = ProjectSticker(**data, revision=1)
             self.db_session.add(sticker)
             await self.db_session.flush()
-            loaded = await self.get_by_id(project_id=sticker.project_id, sticker_id=sticker.id)
-            if loaded is None:  # pragma: no cover - строка только что прошла flush
-                raise RuntimeError("Созданный стикер не найден.")
-            return loaded
-        except ProjectStickersRepositoryError:
-            raise
+            return sticker.id
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось создать стикер проекта.", exc_info=True)
             raise ProjectStickersRepositoryError("Ошибка создания стикера проекта.") from error
 
-    async def update(
+    async def replace_task_links(self, *, sticker_id: int, task_ids: list[int]) -> None:
+        """Заменяет набор связей стикера с задачами.
+
+        Args:
+            sticker_id: Идентификатор стикера.
+            task_ids: Новый набор задач.
+
+        Raises:
+            ProjectStickersRepositoryError: Если изменить связи не удалось.
+        """
+        try:
+            await self.db_session.execute(
+                delete(ProjectStickerTaskLink).where(
+                    ProjectStickerTaskLink.sticker_id == sticker_id
+                )
+            )
+            if task_ids:
+                self.db_session.add_all(
+                    [
+                        ProjectStickerTaskLink(sticker_id=sticker_id, task_id=task_id)
+                        for task_id in task_ids
+                    ]
+                )
+            await self.db_session.flush()
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось изменить связи стикера id=%s.", sticker_id, exc_info=True
+            )
+            raise ProjectStickersRepositoryError(
+                f"Ошибка изменения связей стикера id={sticker_id}."
+            ) from error
+
+    async def update_fields(
         self,
         *,
         project_id: int,
         sticker_id: int,
         expected_revision: int,
         changes: dict[str, Any],
-        task_ids: list[int] | None,
-    ) -> ProjectSticker | None:
-        """Атомарно обновляет совпавшую ревизию и необязательный набор задач."""
+    ) -> bool:
+        """Обновляет совпавшую ревизию стикера одним запросом.
+
+        Совпадение ревизии проверяется самим `UPDATE`: отдельная проверка
+        перед записью оставляла бы окно для параллельной правки.
+
+        Args:
+            project_id: Проект стикера.
+            sticker_id: Идентификатор стикера.
+            expected_revision: Ревизия, которую видел клиент.
+            changes: Изменяемые поля.
+
+        Returns:
+            ``True``, если ревизия совпала и запись изменена.
+
+        Raises:
+            ProjectStickersRepositoryError: Если обновление не удалось.
+        """
         try:
             statement = (
                 update(ProjectSticker)
@@ -111,25 +163,7 @@ class ProjectStickersRepository:
                 .returning(ProjectSticker.id)
             )
             result: Result = await self.db_session.execute(statement)
-            if result.scalar_one_or_none() is None:
-                return None
-
-            if task_ids is not None:
-                await self.db_session.execute(
-                    delete(ProjectStickerTaskLink).where(
-                        ProjectStickerTaskLink.sticker_id == sticker_id
-                    )
-                )
-                self.db_session.add_all(
-                    [
-                        ProjectStickerTaskLink(sticker_id=sticker_id, task_id=task_id)
-                        for task_id in task_ids
-                    ]
-                )
-            await self.db_session.flush()
-            return await self.get_by_id(project_id=project_id, sticker_id=sticker_id)
-        except ProjectStickersRepositoryError:
-            raise
+            return result.scalar_one_or_none() is not None
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось изменить стикер id=%s.", sticker_id, exc_info=True)
@@ -171,8 +205,21 @@ class ProjectStickersRepository:
         sticker_id: int,
         canvas_x: float,
         canvas_y: float,
-    ) -> ProjectSticker | None:
-        """Перемещает стикер, не меняя ревизию и дату его содержимого."""
+    ) -> bool:
+        """Перемещает стикер, не меняя ревизию и дату его содержимого.
+
+        Args:
+            project_id: Проект стикера.
+            sticker_id: Идентификатор стикера.
+            canvas_x: Новая координата по горизонтали.
+            canvas_y: Новая координата по вертикали.
+
+        Returns:
+            ``True``, если стикер найден и перемещён.
+
+        Raises:
+            ProjectStickersRepositoryError: Если перемещение не удалось.
+        """
         try:
             statement = (
                 update(ProjectSticker)
@@ -190,12 +237,7 @@ class ProjectStickersRepository:
                 .returning(ProjectSticker.id)
             )
             result: Result = await self.db_session.execute(statement)
-            if result.scalar_one_or_none() is None:
-                return None
-            await self.db_session.flush()
-            return await self.get_by_id(project_id=project_id, sticker_id=sticker_id)
-        except ProjectStickersRepositoryError:
-            raise
+            return result.scalar_one_or_none() is not None
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось переместить стикер id=%s.", sticker_id, exc_info=True)

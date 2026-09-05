@@ -28,6 +28,7 @@ class ApiTokensRepository:
         prefix: str,
         scope: ApiTokenScope,
         expires_at: datetime | None,
+        commit: bool = True,
     ) -> ApiToken:
         """Сохраняет выпущенный токен.
 
@@ -55,8 +56,11 @@ class ApiTokensRepository:
                 expires_at=expires_at,
             )
             self.db_session.add(token)
-            await self.db_session.commit()
-            await self.db_session.refresh(token)
+            # flush выполняется всегда: без него при commit=False запись
+            # не дошла бы до базы и не получила серверных значений.
+            await self.db_session.flush()
+            if commit:
+                await self.db_session.commit()
             return token
         except SQLAlchemyError as error:
             await self.db_session.rollback()
@@ -152,7 +156,13 @@ class ApiTokensRepository:
             )
             raise ApiTokensRepositoryError(str(error)) from error
 
-    async def revoke(self, *, token_id: int, user_id: int) -> bool:
+    async def revoke(
+        self,
+        *,
+        token_id: int,
+        user_id: int,
+        commit: bool = True,
+    ) -> bool:
         """Отзывает токен, если он принадлежит пользователю.
 
         Args:
@@ -177,14 +187,21 @@ class ApiTokensRepository:
                 return False
             if token.revoked_at is None:
                 token.revoked_at = datetime.now(UTC)
-                await self.db_session.commit()
+                await self.db_session.flush()
+                if commit:
+                    await self.db_session.commit()
             return True
         except SQLAlchemyError as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось отозвать токен id=%s.", token_id, exc_info=True)
             raise ApiTokensRepositoryError(str(error)) from error
 
-    async def touch_last_used(self, token: ApiToken) -> None:
+    async def touch_last_used(
+        self,
+        token: ApiToken,
+        *,
+        commit: bool = True,
+    ) -> None:
         """Отмечает использование токена не чаще одного раза в интервал.
 
         Запись на каждый вызов инструмента превратила бы чтение в запись,
@@ -201,7 +218,9 @@ class ApiTokensRepository:
             return
         try:
             token.last_used_at = now
-            await self.db_session.commit()
+            await self.db_session.flush()
+            if commit:
+                await self.db_session.commit()
         except SQLAlchemyError as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось отметить использование токена.", exc_info=True)

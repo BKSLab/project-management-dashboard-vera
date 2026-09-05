@@ -38,6 +38,7 @@ from src.schemas.calendar_scenarios import (
 from src.schemas.knowledge import KnowledgeChatMessageSchema
 from src.services.calendar import CalendarService
 from src.services.calendar_scenarios import CalendarScenarioService
+from src.services.knowledge_events import KnowledgeEvents
 from src.services.project_agent import (
     PROJECT_DESCRIPTION_LIMIT,
     AgentOutput,
@@ -145,6 +146,7 @@ def build_service(*, semantic_available: bool = True):
             semantic_limit=10,
             score_threshold=0.35,
         ),
+        knowledge_events=AsyncMock(spec=KnowledgeEvents),
     )
     return service, project, runtime
 

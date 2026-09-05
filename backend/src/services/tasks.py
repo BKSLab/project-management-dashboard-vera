@@ -259,7 +259,7 @@ class TasksService:
 
             task = await self._save_with_number(project_id=project_id, payload=payload)
             if participant_data:
-                await self.participants_repository.replace_for_task(
+                await self._replace_participants(
                     task_id=task.id,
                     assignments=assignments,
                 )
@@ -343,7 +343,7 @@ class TasksService:
                 else task
             )
             if assignments is not None:
-                await self.participants_repository.replace_for_task(
+                await self._replace_participants(
                     task_id=task.id,
                     assignments=assignments,
                 )
@@ -681,6 +681,16 @@ class TasksService:
         if start_date is not None and due_date is not None and start_date > due_date:
             raise TaskDateRangeError()
 
+
+    async def _replace_participants(self, task_id: int, assignments: list[dict]) -> None:
+        """Заменяет ролевые назначения задачи: удаление и вставка.
+
+        Обе операции однозапросные и выполняются внутри уже открытой
+        транзакции сценария: их последовательность — оркестрация, а
+        значит принадлежит сервису.
+        """
+        await self.participants_repository.delete_for_task(task_id)
+        await self.participants_repository.save_many(task_id, assignments)
 
 def build_task_key(project_key: str, number: int) -> str:
     """Возвращает отображаемый идентификатор задачи вида ``PROJ-142``."""

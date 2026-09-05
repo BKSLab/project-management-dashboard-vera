@@ -274,7 +274,6 @@ class DocumentsRepository:
             document = Document(**data)
             self.db_session.add(document)
             await self.db_session.flush()
-            await self.db_session.refresh(document)
             return document
         except IntegrityError as error:
             await self.db_session.rollback()
@@ -311,7 +310,6 @@ class DocumentsRepository:
             for field, value in data.items():
                 setattr(document, field, value)
             await self.db_session.flush()
-            await self.db_session.refresh(document)
             return document
         except IntegrityError as error:
             await self.db_session.rollback()

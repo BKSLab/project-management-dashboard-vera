@@ -1,7 +1,18 @@
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
-from sqlalchemy import Result, and_, delete, exists, func, select, update
+from sqlalchemy import (
+    Result,
+    and_,
+    case,
+    delete,
+    exists,
+    func,
+    literal,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -16,6 +27,10 @@ from src.exceptions.knowledge import KnowledgeIndexJobsRepositoryError
 
 logger = logging.getLogger(__name__)
 
+LAST_ERROR_LIMIT = 4000
+MAX_RETRY_DELAY_SECONDS = 300
+STATUS_TYPE = KnowledgeIndexJob.__table__.c.status.type
+
 BARRIER_OPERATIONS = (
     KnowledgeIndexOperation.REINDEX_PROJECT,
     KnowledgeIndexOperation.DELETE_COLLECTION,
@@ -28,83 +43,114 @@ class KnowledgeIndexJobsRepository:
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
 
-    async def enqueue(
+    async def get_pending(
         self,
         *,
         project_id: int,
         entity_type: KnowledgeEntityType,
         operation: KnowledgeIndexOperation,
-        entity_id: int | str | None = None,
-    ) -> KnowledgeIndexJob:
-        """Добавляет задание, не дублируя идентичное ожидающее задание."""
-        normalized_entity_id = str(entity_id) if entity_id is not None else None
-        try:
-            conditions = [
-                KnowledgeIndexJob.project_id == project_id,
-                KnowledgeIndexJob.entity_type == entity_type,
-                KnowledgeIndexJob.operation == operation,
-                KnowledgeIndexJob.status == KnowledgeIndexStatus.PENDING,
-            ]
-            if normalized_entity_id is None:
-                conditions.append(KnowledgeIndexJob.entity_id.is_(None))
-            else:
-                conditions.append(KnowledgeIndexJob.entity_id == normalized_entity_id)
-            existing = (
-                (
-                    await self.db_session.execute(
-                        select(KnowledgeIndexJob).where(*conditions).order_by(KnowledgeIndexJob.id)
-                    )
-                )
-                .scalars()
-                .first()
-            )
-            if existing is not None:
-                return existing
+        entity_ids: list[str | None],
+    ) -> list[KnowledgeIndexJob]:
+        """Возвращает уже ожидающие задания для перечисленных сущностей.
 
-            job = KnowledgeIndexJob(
+        Один запрос на весь набор: дедупликация пачки не должна
+        превращаться в отдельный SELECT на каждый элемент.
+
+        Args:
+            project_id: Проект заданий.
+            entity_type: Тип индексируемой сущности.
+            operation: Операция индексации.
+            entity_ids: Идентификаторы сущностей; ``None`` — задание уровня проекта.
+
+        Returns:
+            Ожидающие задания, найденные среди перечисленных сущностей.
+
+        Raises:
+            KnowledgeIndexJobsRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        if not entity_ids:
+            return []
+        concrete = [item for item in entity_ids if item is not None]
+        matches_entity = []
+        if concrete:
+            matches_entity.append(KnowledgeIndexJob.entity_id.in_(concrete))
+        if any(item is None for item in entity_ids):
+            matches_entity.append(KnowledgeIndexJob.entity_id.is_(None))
+        try:
+            result: Result = await self.db_session.execute(
+                select(KnowledgeIndexJob)
+                .where(
+                    KnowledgeIndexJob.project_id == project_id,
+                    KnowledgeIndexJob.entity_type == entity_type,
+                    KnowledgeIndexJob.operation == operation,
+                    KnowledgeIndexJob.status == KnowledgeIndexStatus.PENDING,
+                    or_(*matches_entity),
+                )
+                .order_by(KnowledgeIndexJob.id)
+            )
+            return list(result.scalars().all())
+        except SQLAlchemyError as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось прочитать очередь индексации.", exc_info=True)
+            raise KnowledgeIndexJobsRepositoryError(str(error)) from error
+
+    async def add_many(
+        self,
+        *,
+        project_id: int,
+        entity_type: KnowledgeEntityType,
+        operation: KnowledgeIndexOperation,
+        entity_ids: list[str | None],
+        commit: bool = False,
+    ) -> list[KnowledgeIndexJob]:
+        """Добавляет задания одной вставкой.
+
+        Args:
+            project_id: Проект заданий.
+            entity_type: Тип индексируемой сущности.
+            operation: Операция индексации.
+            entity_ids: Идентификаторы сущностей; ``None`` — задание уровня проекта.
+            commit: Завершить ли запись самостоятельно. По умолчанию задания
+                фиксируются вместе с бизнес-изменением: outbox и сам факт
+                должны попасть в базу одной транзакцией.
+
+        Returns:
+            Созданные задания.
+
+        Raises:
+            KnowledgeIndexJobsRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        if not entity_ids:
+            return []
+        now = datetime.now(UTC)
+        jobs = [
+            KnowledgeIndexJob(
                 project_id=project_id,
                 entity_type=entity_type,
-                entity_id=normalized_entity_id,
+                entity_id=entity_id,
                 operation=operation,
                 status=KnowledgeIndexStatus.PENDING,
-                available_at=datetime.now(UTC),
+                available_at=now,
             )
-            self.db_session.add(job)
+            for entity_id in entity_ids
+        ]
+        try:
+            self.db_session.add_all(jobs)
             await self.db_session.flush()
-            await self.db_session.refresh(job)
-            return job
+            if commit:
+                await self.db_session.commit()
+            return jobs
         except SQLAlchemyError as error:
             await self.db_session.rollback()
             logger.error("❌ Не удалось поставить задание индексации.", exc_info=True)
             raise KnowledgeIndexJobsRepositoryError(str(error)) from error
 
-    async def enqueue_many(
+    async def claim_next_batch(
         self,
         *,
-        project_id: int,
-        entity_type: KnowledgeEntityType,
-        operation: KnowledgeIndexOperation,
-        entity_ids: list[int | str],
+        limit: int,
+        commit: bool = True,
     ) -> list[KnowledgeIndexJob]:
-        """Добавляет набор заданий в текущую транзакцию без отдельного commit."""
-        jobs: list[KnowledgeIndexJob] = []
-        for entity_id in dict.fromkeys(entity_ids):
-            jobs.append(
-                await self.enqueue(
-                    project_id=project_id,
-                    entity_type=entity_type,
-                    operation=operation,
-                    entity_id=entity_id,
-                )
-            )
-        return jobs
-
-    async def claim_next(self) -> KnowledgeIndexJob | None:
-        """Атомарно забирает следующее готовое задание одним worker-ом."""
-        jobs = await self.claim_next_batch(limit=1)
-        return jobs[0] if jobs else None
-
-    async def claim_next_batch(self, *, limit: int) -> list[KnowledgeIndexJob]:
         """Забирает совместимую пачку TASK UPSERT, соблюдая барьеры проекта."""
         if limit < 1:
             raise ValueError("Размер пачки заданий должен быть положительным.")
@@ -189,42 +235,86 @@ class KnowledgeIndexJobsRepository:
                 job.started_at = now
                 job.finished_at = None
                 job.chunks_count = None
-            await self.db_session.commit()
+            if commit:
+                await self.db_session.commit()
             return jobs
         except SQLAlchemyError as error:
             await self.db_session.rollback()
             raise KnowledgeIndexJobsRepositoryError(str(error)) from error
 
-    async def mark_succeeded(self, job_id: int, chunks_count: int = 0) -> None:
+    async def mark_succeeded(
+        self,
+        job_id: int,
+        chunks_count: int = 0,
+        *,
+        commit: bool = True,
+    ) -> None:
         """Отмечает задание успешно выполненным."""
         await self._set_terminal_state(
             job_id=job_id,
             status=KnowledgeIndexStatus.SUCCEEDED,
             last_error=None,
             chunks_count=chunks_count,
+            commit=commit,
         )
 
-    async def mark_failed(self, job_id: int, error: str, max_attempts: int) -> None:
-        """Планирует retry либо переводит исчерпанное задание в FAILED."""
+    async def mark_failed(
+        self,
+        job_id: int,
+        error: str,
+        max_attempts: int,
+        *,
+        commit: bool = True,
+    ) -> None:
+        """Планирует retry либо переводит исчерпанное задание в FAILED.
+
+        Решение выражено одним UPDATE: отдельное чтение перед записью
+        оставляло бы окно, в котором число попыток успевало измениться.
+
+        Args:
+            job_id: Идентификатор задания.
+            error: Текст ошибки выполнения.
+            max_attempts: Предел попыток, после которого задание считается
+                окончательно неуспешным.
+            commit: Завершить ли запись самостоятельно.
+
+        Raises:
+            KnowledgeIndexJobsRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        exhausted = KnowledgeIndexJob.attempts >= max_attempts
+        # Задержка растёт вдвое с каждой попыткой и упирается в потолок.
+        backoff_seconds = func.least(
+            func.power(2, func.greatest(KnowledgeIndexJob.attempts, 1)),
+            MAX_RETRY_DELAY_SECONDS,
+        )
         try:
-            job = await self.db_session.get(KnowledgeIndexJob, job_id)
-            if job is None:
-                return
-            job.last_error = error[:4000]
-            job.finished_at = datetime.now(UTC)
-            job.chunks_count = 0
-            if job.attempts >= max_attempts:
-                job.status = KnowledgeIndexStatus.FAILED
-            else:
-                job.status = KnowledgeIndexStatus.PENDING
-                delay_seconds = min(2 ** max(job.attempts, 1), 300)
-                job.available_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
-            await self.db_session.commit()
+            await self.db_session.execute(
+                update(KnowledgeIndexJob)
+                .where(KnowledgeIndexJob.id == job_id)
+                .values(
+                    last_error=error[:LAST_ERROR_LIMIT],
+                    finished_at=datetime.now(UTC),
+                    chunks_count=0,
+                    # Тип литералов задаётся явно: без него PostgreSQL
+                    # получил бы text там, где объявлен enum-столбец.
+                    status=case(
+                        (exhausted, literal(KnowledgeIndexStatus.FAILED, STATUS_TYPE)),
+                        else_=literal(KnowledgeIndexStatus.PENDING, STATUS_TYPE),
+                    ),
+                    available_at=case(
+                        (exhausted, KnowledgeIndexJob.available_at),
+                        else_=func.now() + func.make_interval(0, 0, 0, 0, 0, 0, backoff_seconds),
+                    ),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if commit:
+                await self.db_session.commit()
         except SQLAlchemyError as repository_error:
             await self.db_session.rollback()
             raise KnowledgeIndexJobsRepositoryError(str(repository_error)) from repository_error
 
-    async def reset_processing(self) -> int:
+    async def reset_processing(self, *, commit: bool = True) -> int:
         """Возвращает прерванные при прошлом shutdown задания в очередь."""
         try:
             result = await self.db_session.execute(
@@ -238,13 +328,14 @@ class KnowledgeIndexJobsRepository:
                     chunks_count=None,
                 )
             )
-            await self.db_session.commit()
+            if commit:
+                await self.db_session.commit()
             return int(result.rowcount or 0)
         except SQLAlchemyError as error:
             await self.db_session.rollback()
             raise KnowledgeIndexJobsRepositoryError(str(error)) from error
 
-    async def delete_succeeded_before(self, cutoff: datetime) -> int:
+    async def delete_succeeded_before(self, cutoff: datetime, *, commit: bool = True) -> int:
         """Удаляет завершённые успешные задания старше указанной даты."""
         try:
             result = await self.db_session.execute(
@@ -257,7 +348,8 @@ class KnowledgeIndexJobsRepository:
                     < cutoff,
                 )
             )
-            await self.db_session.commit()
+            if commit:
+                await self.db_session.commit()
             return int(result.rowcount or 0)
         except SQLAlchemyError as error:
             await self.db_session.rollback()
@@ -303,16 +395,23 @@ class KnowledgeIndexJobsRepository:
         status: KnowledgeIndexStatus,
         last_error: str | None,
         chunks_count: int,
+        commit: bool = True,
     ) -> None:
+        """Переводит задание в конечное состояние одним UPDATE."""
         try:
-            job = await self.db_session.get(KnowledgeIndexJob, job_id)
-            if job is None:
-                return
-            job.status = status
-            job.last_error = last_error
-            job.finished_at = datetime.now(UTC)
-            job.chunks_count = chunks_count
-            await self.db_session.commit()
+            await self.db_session.execute(
+                update(KnowledgeIndexJob)
+                .where(KnowledgeIndexJob.id == job_id)
+                .values(
+                    status=status,
+                    last_error=last_error,
+                    finished_at=datetime.now(UTC),
+                    chunks_count=chunks_count,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if commit:
+                await self.db_session.commit()
         except SQLAlchemyError as error:
             await self.db_session.rollback()
             raise KnowledgeIndexJobsRepositoryError(str(error)) from error

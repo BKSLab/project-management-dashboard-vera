@@ -125,7 +125,6 @@ class TaskActivityRepository:
             )
             self.db_session.add(activity)
             await self.db_session.flush()
-            await self.db_session.refresh(activity)
             return activity
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()

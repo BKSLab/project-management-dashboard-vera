@@ -67,7 +67,9 @@ class ProjectStickersService:
         """Создаёт стикер с неизменяемым снимком автора."""
         try:
             await self._validate_task_ids(project_id, data.task_ids)
-            sticker = await self.stickers_repository.create(
+            # Вставка, связи и чтение карточки — три операции одной
+            # транзакции: их порядок принадлежит сценарию, а не репозиторию.
+            sticker_id = await self.stickers_repository.insert(
                 data={
                     "project_id": project_id,
                     "body": data.body,
@@ -78,10 +80,17 @@ class ProjectStickersService:
                     "created_by_username_snapshot": author_username,
                     "created_by_display_name_snapshot": author_display_name,
                 },
+            )
+            await self.stickers_repository.replace_task_links(
+                sticker_id=sticker_id,
                 task_ids=data.task_ids,
             )
+            created = await self.stickers_repository.get_by_id(
+                project_id=project_id,
+                sticker_id=sticker_id,
+            )
             await self.unit_of_work.commit()
-            return _to_sticker_schema(sticker)
+            return _to_sticker_schema(created)
         except RepositoryErrors as error:
             logger.error(
                 "❌ Ошибка создания стикера проекта id=%s.",
@@ -105,10 +114,14 @@ class ProjectStickersService:
                 canvas_x=data.canvas_x,
                 canvas_y=data.canvas_y,
             )
-            if moved is None:
+            if not moved:
                 raise ProjectStickerNotFoundError(sticker_id)
+            sticker = await self.stickers_repository.get_by_id(
+                project_id=project_id,
+                sticker_id=sticker_id,
+            )
             await self.unit_of_work.commit()
-            return _to_sticker_schema(moved)
+            return _to_sticker_schema(sticker)
         except RepositoryErrors as error:
             logger.error("❌ Ошибка перемещения стикера id=%s.", sticker_id, exc_info=True)
             raise ProjectStickersServiceError(str(error)) from error
@@ -138,17 +151,25 @@ class ProjectStickersService:
                 exclude={"revision", "task_ids"},
                 exclude_unset=True,
             )
-            updated = await self.stickers_repository.update(
+            updated = await self.stickers_repository.update_fields(
                 project_id=project_id,
                 sticker_id=sticker_id,
                 expected_revision=data.revision,
                 changes=changes,
-                task_ids=task_ids,
             )
-            if updated is None:
+            if not updated:
                 raise ProjectStickerRevisionConflictError(sticker_id, data.revision)
+            if task_ids is not None:
+                await self.stickers_repository.replace_task_links(
+                    sticker_id=sticker_id,
+                    task_ids=task_ids,
+                )
+            sticker = await self.stickers_repository.get_by_id(
+                project_id=project_id,
+                sticker_id=sticker_id,
+            )
             await self.unit_of_work.commit()
-            return _to_sticker_schema(updated)
+            return _to_sticker_schema(sticker)
         except RepositoryErrors as error:
             logger.error("❌ Ошибка изменения стикера id=%s.", sticker_id, exc_info=True)
             raise ProjectStickersServiceError(str(error)) from error

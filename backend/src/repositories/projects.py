@@ -127,7 +127,6 @@ class ProjectsRepository:
             project = Project(**data)
             self.db_session.add(project)
             await self.db_session.flush()
-            await self.db_session.refresh(project)
             return project
         except IntegrityError as error:
             await self.db_session.rollback()
@@ -162,7 +161,6 @@ class ProjectsRepository:
             for field, value in data.items():
                 setattr(project, field, value)
             await self.db_session.flush()
-            await self.db_session.refresh(project)
             return project
         except IntegrityError as error:
             await self.db_session.rollback()

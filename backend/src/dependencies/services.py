@@ -509,6 +509,7 @@ def get_project_agent_service(
     embedding_client: EmbeddingClientDep,
     qdrant_client: QdrantClientDep,
     settings: SettingsDep,
+    knowledge_events: KnowledgeEventsDep,
 ) -> ProjectAgentService:
     """Создаёт Project Agent в рамках сессии доступного проекта."""
     return ProjectAgentService(
@@ -526,6 +527,7 @@ def get_project_agent_service(
         embedding_client=embedding_client,
         qdrant_client=qdrant_client,
         config=build_project_agent_config(settings),
+        knowledge_events=knowledge_events,
     )
 
 
