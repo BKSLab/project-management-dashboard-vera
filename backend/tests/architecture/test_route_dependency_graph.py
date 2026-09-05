@@ -35,6 +35,13 @@ READ_ONLY_POST_ROUTES = {
     ("POST", "/api/v1/projects/{project_id}/knowledge/ask"),
 }
 
+# Маршруты с долгоживущим ответом. Проверка доступа у них выполняется в
+# короткой области базы внутри сервиса, поэтому guard в графе маршрута
+# отсутствует намеренно, а request-scoped сессии там быть не должно.
+STREAMING_ROUTES = {
+    ("GET", "/api/v1/tasks/{task_id}/attachments/{attachment_id}/content"),
+}
+
 EXPECTED_NON_GET_TOTAL = 56
 EXPECTED_MUTATION_TOTAL = 47
 
@@ -162,11 +169,17 @@ def test_session_only_routes_are_closed_for_tokens() -> None:
 
 
 def test_every_protected_route_authenticates() -> None:
-    """Ни один непубличный маршрут не обходит аутентификацию."""
+    """Ни один непубличный маршрут не обходит аутентификацию.
+
+    У streaming-маршрутов аутентификация выполняется внутри короткой
+    области базы, поэтому её отсутствие в графе — намеренное решение.
+    То, что она действительно есть, проверяет контракт выдачи файла.
+    """
     unauthenticated = [
         f"{method} {path}"
         for method, path, route in api_routes()
-        if (method, path) not in PUBLIC_ROUTES and "get_principal" not in route_dependencies(route)
+        if (method, path) not in PUBLIC_ROUTES | STREAMING_ROUTES
+        and "get_principal" not in route_dependencies(route)
     ]
 
     assert not unauthenticated, (
@@ -188,7 +201,9 @@ def test_project_scoped_routes_check_project_access() -> None:
     unguarded = [
         f"{method} {path}"
         for method, path, route in api_routes()
-        if "{project_id}" in path and not (route_dependencies(route) & guards)
+        if "{project_id}" in path
+        and (method, path) not in STREAMING_ROUTES
+        and not (route_dependencies(route) & guards)
     ]
 
     assert not unguarded, (
@@ -214,3 +229,54 @@ def test_access_guards_do_not_leak_orm_models() -> None:
         assert guard.__annotations__["return"] is AccessGrant, (
             f"{guard.__name__} возвращает не AccessGrant."
         )
+
+
+def test_streaming_routes_hold_no_request_scoped_session() -> None:
+    """У долгоживущего ответа нет request-scoped сессии в графе.
+
+    Yield-зависимость FastAPI освобождается только после завершения
+    ответа, поэтому медленное скачивание удерживало бы соединение с
+    PostgreSQL всё время передачи файла.
+    """
+    offenders = [
+        f"{method} {path}"
+        for method, path, route in api_routes()
+        if (method, path) in STREAMING_ROUTES and "get_db_session" in route_dependencies(route)
+    ]
+
+    assert not offenders, (
+        "Маршрут с долгоживущим ответом удерживает сессию базы: " + ", ".join(offenders)
+    )
+
+
+def test_streaming_registry_matches_the_application() -> None:
+    """Реестр streaming-маршрутов не расходится с приложением.
+
+    Реестр ведётся вручную, потому что по декоратору FastAPI нельзя
+    надёжно определить, вернёт ли обработчик `FileResponse`. Значит, он
+    обязан проверяться на существование перечисленных маршрутов.
+    """
+    actual = {(method, path) for method, path, _ in api_routes()}
+
+    missing = STREAMING_ROUTES - actual
+    assert not missing, f"В реестре перечислены несуществующие маршруты: {missing}"
+
+
+def test_streaming_routes_do_not_depend_on_request_scoped_services() -> None:
+    """В графе streaming-маршрута нет сервисов, построенных на сессии запроса."""
+    request_scoped = {
+        "get_task_attachments_service",
+        "get_principal",
+        "require_task_access",
+        "get_access_service",
+        "get_auth_service",
+    }
+    offenders = [
+        f"{method} {path}: {sorted(route_dependencies(route) & request_scoped)}"
+        for method, path, route in api_routes()
+        if (method, path) in STREAMING_ROUTES and route_dependencies(route) & request_scoped
+    ]
+
+    assert not offenders, (
+        "Долгоживущий ответ зависит от сервисов сессии запроса: " + ", ".join(offenders)
+    )

@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -12,6 +13,7 @@ from src.repositories.unit_of_work import UnitOfWork
 from src.schemas.document_links import DocumentLinkSchema
 from src.schemas.documents import DocumentDetailSchema
 from src.schemas.task_attachments import TaskAttachmentSchema
+from src.services.db_scope import TaskDocumentImportScope
 from src.services.document_links import DocumentLinksService
 from src.services.documents import DocumentsService
 from src.services.task_attachments import StoredAttachment, TaskAttachmentsService
@@ -54,15 +56,24 @@ def build_service():
     links.create_link.return_value = DocumentLinkSchema(id=12, document_id=11, task_id=8)
     unit_of_work = AsyncMock(spec=UnitOfWork)
     storage = AsyncMock(spec=TaskAttachmentStorage)
-    service = TaskDocumentImportService(
-        tasks_repository=tasks,
-        attachments_service=attachments,
-        documents_service=documents,
-        links_service=links,
+    db = TaskDocumentImportScope(
+        tasks=tasks,
+        attachments=attachments,
+        documents=documents,
+        links=links,
         unit_of_work=unit_of_work,
+    )
+
+    @asynccontextmanager
+    async def scope():
+        yield db
+
+    service = TaskDocumentImportService(
+        scope=scope,
         attachment_storage=storage,
         vision=DisabledVisionCapability(),
         extract_max_chars=350_000,
+        max_file_size=10 * 1024 * 1024,
     )
     return service, attachments, documents, links, unit_of_work, storage
 

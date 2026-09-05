@@ -21,10 +21,8 @@ from src.exceptions.tasks import (
 )
 from src.knowledge.extract import INDEXABLE_EXTENSIONS, extract_indexable_text
 from src.prompts.task_description import TASK_DESCRIPTION_REPHRASE_PROMPT
-from src.repositories.documents import DocumentsRepository
-from src.repositories.projects import ProjectsRepository
-from src.repositories.tasks import TasksRepository
 from src.schemas.tasks import TaskRephraseRequestSchema, TaskRephraseResultSchema
+from src.services.db_scope import TaskDescriptionScopeFactory
 from src.services.tasks import build_task_key
 
 logger = logging.getLogger(__name__)
@@ -50,16 +48,22 @@ class TaskDescriptionService:
     def __init__(
         self,
         *,
-        projects_repository: ProjectsRepository,
-        tasks_repository: TasksRepository,
-        documents_repository: DocumentsRepository,
+        scope: TaskDescriptionScopeFactory,
         llm_client: LlmClient,
         vision: VisionCapability,
         file_context_limit: int,
     ) -> None:
-        self.projects_repository = projects_repository
-        self.tasks_repository = tasks_repository
-        self.documents_repository = documents_repository
+        """Создаёт сервис переформулирования черновика задачи.
+
+        Args:
+            scope: Фабрика короткой области работы с базой. Сессия не
+                передаётся: она не должна оставаться открытой во время
+                вызова модели.
+            llm_client: Клиент chat completions.
+            vision: Способность распознавать изображения.
+            file_context_limit: Предел длины текста из приложенных файлов.
+        """
+        self.scope = scope
         self.llm_client = llm_client
         self.vision = vision
         self.file_context_limit = file_context_limit
@@ -163,17 +167,20 @@ class TaskDescriptionService:
         проверки ниже выполняются уже вне него, поэтому собственную ошибку
         сервиса не приходится пропускать через `except ... : raise`.
         """
+        # Короткая DB-фаза: снимок собирается и область закрывается до
+        # обращения к модели.
         try:
-            project = await self.projects_repository.get_by_id(project_id=project_id)
-            current_task = (
-                await self.tasks_repository.get_by_id(task_id=data.task_id)
-                if data.task_id is not None
-                else None
-            )
-            documents = await self.documents_repository.get_by_ids(
-                set(dict.fromkeys(data.document_ids))
-            )
-            related_tasks = await self.tasks_repository.get_by_project(project_id=project_id)
+            async with self.scope() as db:
+                project = await db.projects.get_by_id(project_id=project_id)
+                current_task = (
+                    await db.tasks.get_by_id(task_id=data.task_id)
+                    if data.task_id is not None
+                    else None
+                )
+                documents = await db.documents.get_by_ids(
+                    set(dict.fromkeys(data.document_ids))
+                )
+                related_tasks = await db.tasks.get_by_project(project_id=project_id)
         except (ProjectsRepositoryError, TasksRepositoryError, DocumentsRepositoryError) as error:
             logger.error(
                 "❌ Не удалось собрать контекст задачи в проекте id=%s.",

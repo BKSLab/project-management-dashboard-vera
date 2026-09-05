@@ -21,7 +21,6 @@ from src.dependencies.clients import (
     VisionCapabilityDep,
 )
 from src.dependencies.repositories import (
-    AnalyticsReportsRepositoryDep,
     ApiTokensRepositoryDep,
     DocumentLinksRepositoryDep,
     DocumentsRepositoryDep,
@@ -40,6 +39,13 @@ from src.dependencies.repositories import (
     UnitOfWorkDep,
     UsersRepositoryDep,
     WbsNodesRepositoryDep,
+)
+from src.dependencies.scopes import (
+    AnalyticsScopeDep,
+    ProjectAgentScopeDep,
+    TaskDescriptionScopeDep,
+    TaskDocumentImportScopeDep,
+    WbsSuggestionScopeDep,
 )
 from src.dependencies.settings import SettingsDep
 from src.dependencies.storage import AvatarStorageDep, TaskAttachmentStorageDep
@@ -294,66 +300,32 @@ WbsNodesServiceDep = Annotated[WbsNodesService, Depends(get_wbs_nodes_service)]
 
 
 def get_wbs_suggestion_service(
-    wbs_nodes_repository: WbsNodesRepositoryDep,
-    projects_repository: ProjectsRepositoryDep,
-    stages_repository: ProjectStagesRepositoryDep,
-    tasks_repository: TasksRepositoryDep,
-    activity_repository: TaskActivityRepositoryDep,
-    knowledge_events: KnowledgeEventsDep,
-    unit_of_work: UnitOfWorkDep,
+    scope: WbsSuggestionScopeDep,
     llm_client: LlmClientDep,
 ) -> WbsSuggestionService:
-    """Создаёт сервис предложения структуры ИСР."""
-    return WbsSuggestionService(
-        wbs_nodes_repository=wbs_nodes_repository,
-        projects_repository=projects_repository,
-        stages_repository=stages_repository,
-        tasks_repository=tasks_repository,
-        activity_repository=activity_repository,
-        knowledge_events=knowledge_events,
-        unit_of_work=unit_of_work,
-        llm_client=llm_client,
-    )
+    """Создаёт сервис предложения структуры ИСР.
+
+    Сервис получает фабрику короткой области, а не сессию запроса: между
+    чтением проекта и ответом модели соединение с базой удерживаться не
+    должно.
+    """
+    return WbsSuggestionService(scope=scope, llm_client=llm_client)
 
 
 WbsSuggestionServiceDep = Annotated[WbsSuggestionService, Depends(get_wbs_suggestion_service)]
 
 
 def get_analytics_service(
-    reports_repository: AnalyticsReportsRepositoryDep,
-    projects_repository: ProjectsRepositoryDep,
-    members_repository: ProjectMembersRepositoryDep,
-    stages_repository: ProjectStagesRepositoryDep,
-    tasks_repository: TasksRepositoryDep,
-    comments_repository: TaskCommentsRepositoryDep,
-    activity_repository: TaskActivityRepositoryDep,
-    dependencies_repository: TaskDependenciesRepositoryDep,
-    wbs_nodes_repository: WbsNodesRepositoryDep,
-    milestones_repository: MilestonesRepositoryDep,
-    stickers_repository: ProjectStickersRepositoryDep,
-    documents_repository: DocumentsRepositoryDep,
-    document_links_repository: DocumentLinksRepositoryDep,
-    unit_of_work: UnitOfWorkDep,
+    scope: AnalyticsScopeDep,
     llm_client: LlmClientDep,
 ) -> AnalyticsService:
-    """Создаёт сервис аналитического свода дашборда."""
-    return AnalyticsService(
-        reports_repository=reports_repository,
-        projects_repository=projects_repository,
-        members_repository=members_repository,
-        stages_repository=stages_repository,
-        tasks_repository=tasks_repository,
-        comments_repository=comments_repository,
-        activity_repository=activity_repository,
-        dependencies_repository=dependencies_repository,
-        wbs_nodes_repository=wbs_nodes_repository,
-        milestones_repository=milestones_repository,
-        stickers_repository=stickers_repository,
-        documents_repository=documents_repository,
-        document_links_repository=document_links_repository,
-        unit_of_work=unit_of_work,
-        llm_client=llm_client,
-    )
+    """Создаёт сервис аналитического свода дашборда.
+
+    Сервис получает фабрику короткой области: между сбором данных и
+    записью результата стоит вызов модели, и соединение с базой на это
+    время удерживаться не должно.
+    """
+    return AnalyticsService(scope=scope, llm_client=llm_client)
 
 
 AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)]
@@ -495,39 +467,23 @@ def build_project_agent_config(settings: Settings) -> ProjectAgentConfig:
 
 
 def get_project_agent_service(
-    stages_repository: ProjectStagesRepositoryDep,
-    tasks_repository: TasksRepositoryDep,
-    wbs_nodes_repository: WbsNodesRepositoryDep,
-    documents_repository: DocumentsRepositoryDep,
-    activity_repository: TaskActivityRepositoryDep,
-    jobs_repository: KnowledgeIndexJobsRepositoryDep,
-    unit_of_work: UnitOfWorkDep,
-    milestones_repository: MilestonesRepositoryDep,
-    calendar_service: CalendarServiceDep,
-    scenario_service: CalendarScenarioServiceDep,
+    scope: ProjectAgentScopeDep,
     llm_client: LlmClientDep,
     embedding_client: EmbeddingClientDep,
     qdrant_client: QdrantClientDep,
     settings: SettingsDep,
-    knowledge_events: KnowledgeEventsDep,
 ) -> ProjectAgentService:
-    """Создаёт Project Agent в рамках сессии доступного проекта."""
+    """Создаёт Project Agent.
+
+    Сервис получает фабрику короткой области: между сбором данных и
+    ответом модели соединение с базой удерживаться не должно.
+    """
     return ProjectAgentService(
-        stages_repository=stages_repository,
-        tasks_repository=tasks_repository,
-        wbs_nodes_repository=wbs_nodes_repository,
-        documents_repository=documents_repository,
-        activity_repository=activity_repository,
-        jobs_repository=jobs_repository,
-        unit_of_work=unit_of_work,
-        milestones_repository=milestones_repository,
-        calendar_service=calendar_service,
-        scenario_service=scenario_service,
+        scope=scope,
         llm_client=llm_client,
         embedding_client=embedding_client,
         qdrant_client=qdrant_client,
         config=build_project_agent_config(settings),
-        knowledge_events=knowledge_events,
     )
 
 
@@ -621,18 +577,18 @@ TaskAttachmentsServiceDep = Annotated[
 
 
 def get_task_description_service(
-    projects_repository: ProjectsRepositoryDep,
-    tasks_repository: TasksRepositoryDep,
-    documents_repository: DocumentsRepositoryDep,
+    scope: TaskDescriptionScopeDep,
     llm_client: LlmClientDep,
     vision: VisionCapabilityDep,
     settings: SettingsDep,
 ) -> TaskDescriptionService:
-    """Создаёт stateless-сервис переформулирования черновика задачи."""
+    """Создаёт сервис переформулирования черновика задачи.
+
+    Сервис получает фабрику короткой области: соединение с базой не
+    должно удерживаться во время вызова модели.
+    """
     return TaskDescriptionService(
-        projects_repository=projects_repository,
-        tasks_repository=tasks_repository,
-        documents_repository=documents_repository,
+        scope=scope,
         llm_client=llm_client,
         vision=vision,
         file_context_limit=settings.llm.task_rephrase_file_max_chars,
@@ -646,25 +602,22 @@ TaskDescriptionServiceDep = Annotated[
 
 
 def get_task_document_import_service(
-    tasks_repository: TasksRepositoryDep,
-    attachments_service: TaskAttachmentsServiceDep,
-    documents_service: DocumentsServiceDep,
-    links_service: DocumentLinksServiceDep,
-    unit_of_work: UnitOfWorkDep,
+    scope: TaskDocumentImportScopeDep,
     storage: TaskAttachmentStorageDep,
     vision: VisionCapabilityDep,
     settings: SettingsDep,
 ) -> TaskDocumentImportService:
-    """Создаёт составной импорт документа из формы задачи."""
+    """Создаёт составной импорт документа из формы задачи.
+
+    Сервис получает фабрику короткой области: между чтением задачи и
+    записью результата стоит распознавание файла.
+    """
     return TaskDocumentImportService(
-        tasks_repository=tasks_repository,
-        attachments_service=attachments_service,
-        documents_service=documents_service,
-        links_service=links_service,
-        unit_of_work=unit_of_work,
+        scope=scope,
         attachment_storage=storage,
         vision=vision,
         extract_max_chars=settings.knowledge.knowledge_extract_max_chars,
+        max_file_size=TaskAttachmentsService.MAX_FILE_SIZE,
     )
 
 

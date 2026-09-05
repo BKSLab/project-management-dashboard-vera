@@ -385,3 +385,103 @@ def test_no_dead_reraise_of_own_errors_remains() -> None:
                 )
 
     assert not offenders, "Мёртвые клаузы `except ...: raise`: " + ", ".join(offenders)
+
+
+# Сценарии с медленным внешним вызовом. Каждый обязан работать через
+# короткую область базы, а не через репозитории, живущие вместе с ним.
+EXTERNAL_CALL_SERVICES = {
+    "analytics.py": "AnalyticsService",
+    "project_agent.py": "ProjectAgentService",
+    "task_descriptions.py": "TaskDescriptionService",
+    "task_documents.py": "TaskDocumentImportService",
+    "wbs_suggestion.py": "WbsSuggestionService",
+    "attachment_download.py": "AttachmentDownloadService",
+}
+
+
+@pytest.mark.parametrize(
+    ("file_name", "class_name"),
+    sorted(EXTERNAL_CALL_SERVICES.items()),
+    ids=sorted(EXTERNAL_CALL_SERVICES.values()),
+)
+def test_service_with_external_call_holds_no_repositories(
+    file_name: str,
+    class_name: str,
+) -> None:
+    """Сервис с внешним вызовом не хранит репозитории как свои поля.
+
+    Хранимый репозиторий означает сессию, живущую столько же, сколько сам
+    сервис. Тогда соединение с PostgreSQL остаётся занятым и во время
+    ожидания модели, и во время передачи файла — ради чего короткая
+    область и вводилась.
+    """
+    tree = ast.parse((SRC / "services" / file_name).read_text(encoding="utf-8"))
+    service = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    init = next(
+        node
+        for node in service.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == "__init__"
+    )
+
+    stored: list[str] = []
+    for node in ast.walk(init):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+                and target.attr.endswith(("_repository", "unit_of_work"))
+            ):
+                stored.append(target.attr)
+
+    assert not stored, (
+        f"{class_name} хранит {stored}: сессия проживёт столько же, сколько сервис. "
+        "Работа с базой должна идти через короткую область."
+    )
+
+
+@pytest.mark.parametrize(
+    ("file_name", "class_name"),
+    sorted(EXTERNAL_CALL_SERVICES.items()),
+    ids=sorted(EXTERNAL_CALL_SERVICES.values()),
+)
+def test_service_with_external_call_receives_a_scope(
+    file_name: str,
+    class_name: str,
+) -> None:
+    """Такой сервис получает фабрику короткой области конструктором."""
+    tree = ast.parse((SRC / "services" / file_name).read_text(encoding="utf-8"))
+    service = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    init = next(
+        node
+        for node in service.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == "__init__"
+    )
+    arguments = {argument.arg for argument in init.args.args + init.args.kwonlyargs}
+
+    assert "scope" in arguments, f"{class_name} не получает фабрику короткой области."
+
+
+@pytest.mark.parametrize(
+    "file_name",
+    sorted(EXTERNAL_CALL_SERVICES),
+    ids=sorted(EXTERNAL_CALL_SERVICES),
+)
+def test_service_with_external_call_does_not_import_sqlalchemy(file_name: str) -> None:
+    """Сервис не знает о SQLAlchemy: реализация области живёт в DI-слое."""
+    source = (SRC / "services" / file_name).read_text(encoding="utf-8")
+
+    assert "sqlalchemy" not in source, (
+        f"{file_name} импортирует SQLAlchemy: реализация короткой области "
+        "принадлежит слою сборки зависимостей."
+    )

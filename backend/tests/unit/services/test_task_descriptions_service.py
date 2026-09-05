@@ -1,4 +1,5 @@
 import json
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -11,6 +12,7 @@ from src.repositories.documents import DocumentsRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
 from src.schemas.tasks import TaskRephraseRequestSchema, TaskRephraseResultSchema
+from src.services.db_scope import TaskDescriptionScope
 from src.services.task_descriptions import TaskDescriptionService, TaskRephraseFile
 
 
@@ -40,10 +42,14 @@ def build_service(*, file_context_limit: int = 5000):
     llm.get_structured_response.return_value = TaskRephraseResultSchema(
         description_md="Понятное описание задачи."
     )
+    db = TaskDescriptionScope(projects=projects, tasks=tasks, documents=documents)
+
+    @asynccontextmanager
+    async def scope():
+        yield db
+
     service = TaskDescriptionService(
-        projects_repository=projects,
-        tasks_repository=tasks,
-        documents_repository=documents,
+        scope=scope,
         llm_client=llm,
         vision=DisabledVisionCapability(),
         file_context_limit=file_context_limit,

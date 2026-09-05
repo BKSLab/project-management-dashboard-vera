@@ -21,12 +21,11 @@ from src.exceptions.task_documents import (
 from src.exceptions.tasks import TasksRepositoryError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.knowledge.extract import INDEXABLE_EXTENSIONS, extract_indexable_text
-from src.repositories.tasks import TasksRepository
-from src.repositories.unit_of_work import UnitOfWork
 from src.schemas.task_documents import TaskDocumentImportSchema
-from src.services.document_links import DocumentLinksService
-from src.services.documents import DocumentsService
-from src.services.task_attachments import TaskAttachmentsService
+from src.services.db_scope import (
+    TaskDocumentImportScope,
+    TaskDocumentImportScopeFactory,
+)
 from src.storage.task_attachments import TaskAttachmentStorage
 
 logger = logging.getLogger(__name__)
@@ -56,28 +55,28 @@ class TaskDocumentImportService:
     def __init__(
         self,
         *,
-        tasks_repository: TasksRepository,
-        attachments_service: TaskAttachmentsService,
-        documents_service: DocumentsService,
-        links_service: DocumentLinksService,
-        unit_of_work: UnitOfWork,
+        scope: TaskDocumentImportScopeFactory,
         attachment_storage: TaskAttachmentStorage,
         vision: VisionCapability,
         extract_max_chars: int,
+        max_file_size: int,
     ) -> None:
-        self.tasks_repository = tasks_repository
-        self.attachments_service = attachments_service
-        self.documents_service = documents_service
-        self.links_service = links_service
-        self.unit_of_work = unit_of_work
+        """Создаёт сервис импорта документа в задачу.
+
+        Args:
+            scope: Фабрика короткой области работы с базой. Между чтением
+                задачи и записью результата стоит распознавание файла,
+                поэтому соединение на это время удерживаться не должно.
+            attachment_storage: Хранилище файлов задач для компенсации.
+            vision: Способность распознавать изображения.
+            extract_max_chars: Предел длины извлекаемого текста.
+            max_file_size: Предел размера исходного файла.
+        """
+        self.scope = scope
         self.attachment_storage = attachment_storage
         self.vision = vision
         self.extract_max_chars = extract_max_chars
-
-    @property
-    def max_file_size(self) -> int:
-        """Предел размера исходного файла."""
-        return self.attachments_service.max_file_size
+        self.max_file_size = max_file_size
 
     async def import_file(
         self,
@@ -109,61 +108,67 @@ class TaskDocumentImportService:
             TaskDocumentStepFailedError: Если отказал вложенный шаг импорта.
             KnowledgeProviderError: Если vision-модель недоступна.
         """
-        task = await self._get_task(task_id)
+        # Первая короткая DB-фаза: читаем задачу и закрываем область до
+        # распознавания файла, которое может длиться сотни секунд.
+        async with self.scope() as db:
+            project_id = await self._get_project_id(db, task_id=task_id)
         safe_name = self._validate(file_name=file_name, content=content)
         extracted = await self._extract_text(safe_name=safe_name, content=content)
 
         storage_key: str | None = None
-        try:
+        # Вторая короткая DB-фаза: три записи одной транзакцией.
+        async with self.scope() as db:
+            try:
             # Три записи — один бизнес-факт, поэтому и транзакция одна:
             # вложенные сервисы не фиксируют свою часть сами.
-            stored = await self.attachments_service.save_in_transaction(
-                task_id=task_id,
-                file_name=safe_name,
-                content_type=content_type,
-                content=content,
-                index_for_knowledge=False,
-            )
-            storage_key = stored.storage_key
-            title = safe_name[:255]
-            document = await self.documents_service.create_document(
-                project_id=task.project_id,
-                title=title,
-                slug=None,
-                content_md=_document_markdown(title=title, content=extracted),
-                commit=False,
-            )
-            link = await self.links_service.create_link(
-                document_id=document.id,
-                task_id=task_id,
-                user_id=user_id,
-                commit=False,
-            )
-            await self.unit_of_work.commit()
-            return TaskDocumentImportSchema(
-                attachment=stored.attachment,
-                document=document,
-                link=link,
-            )
-        except BaseException as error:
-            # Откат снимает все записи разом; компенсировать нужно только
-            # то, что база откатить не может, — физический файл.
-            await self._rollback()
-            await self._remove_stored_file(storage_key)
-            if isinstance(error, NESTED_SERVICE_ERRORS):
-                raise TaskDocumentStepFailedError(error) from error
-            raise
+                stored = await db.attachments.save_in_transaction(
+                    task_id=task_id,
+                    file_name=safe_name,
+                    content_type=content_type,
+                    content=content,
+                    index_for_knowledge=False,
+                )
+                storage_key = stored.storage_key
+                title = safe_name[:255]
+                document = await db.documents.create_document(
+                    project_id=project_id,
+                    title=title,
+                    slug=None,
+                    content_md=_document_markdown(title=title, content=extracted),
+                    commit=False,
+                )
+                link = await db.links.create_link(
+                    document_id=document.id,
+                    task_id=task_id,
+                    user_id=user_id,
+                    commit=False,
+                )
+                await db.unit_of_work.commit()
+                return TaskDocumentImportSchema(
+                    attachment=stored.attachment,
+                    document=document,
+                    link=link,
+                )
+            except BaseException as error:
+                # Откат снимает все записи разом; компенсировать нужно
+                # только то, что база откатить не может, — файл на диске.
+                await self._rollback(db)
+                await self._remove_stored_file(storage_key)
+                if isinstance(error, NESTED_SERVICE_ERRORS):
+                    raise TaskDocumentStepFailedError(error) from error
+                raise
 
-    async def _get_task(self, task_id: int):
-        """Читает задачу импорта и переводит ошибку репозитория в свою."""
+    @staticmethod
+    async def _get_project_id(db: TaskDocumentImportScope, *, task_id: int) -> int:
+        """Возвращает проект задачи импорта, не поднимая ORM-модель выше."""
         try:
-            task = await self.tasks_repository.get_by_id(task_id=task_id)
+            task = await db.tasks.get_by_id(task_id=task_id)
         except TasksRepositoryError as error:
             logger.error("❌ Не удалось прочитать задачу id=%s.", task_id, exc_info=True)
             raise TaskDocumentStepFailedError(_as_service_error(error)) from error
         if task is None:
             raise TaskDocumentTaskNotFoundError(task_id=task_id)
-        return task
+        return task.project_id
 
     def _validate(self, *, file_name: str, content: bytes) -> str:
         """Проверяет файл до любых записей и возвращает безопасное имя."""
@@ -200,10 +205,11 @@ class TaskDocumentImportService:
             )
         return extracted
 
-    async def _rollback(self) -> None:
+    @staticmethod
+    async def _rollback(db: TaskDocumentImportScope) -> None:
         """Откатывает транзакцию импорта, не маскируя исходную ошибку."""
         try:
-            await self.unit_of_work.rollback()
+            await db.unit_of_work.rollback()
         except UnitOfWorkRepositoryError:
             logger.warning("⚠️ Не удалось откатить транзакцию импорта документа.", exc_info=True)
 

@@ -28,6 +28,7 @@ from src.exceptions.knowledge import (
     KnowledgeServiceError,
     ProjectAgentError,
 )
+from src.exceptions.projects import ProjectNotFoundError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.knowledge.documents import build_wbs_paths
 from src.knowledge.retrieval import reciprocal_rank_fusion
@@ -35,23 +36,15 @@ from src.prompts.project_agent import (
     PROJECT_AGENT_SYSTEM_PROMPT,
     PROJECT_AGENT_TOOL_SELECTION_PROMPT,
 )
-from src.repositories.documents import DocumentsRepository
-from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
-from src.repositories.milestones import MilestonesRepository
-from src.repositories.project_stages import ProjectStagesRepository
-from src.repositories.task_activity import TaskActivityRepository
-from src.repositories.tasks import ProjectTaskStatistics, TasksRepository
-from src.repositories.unit_of_work import UnitOfWork
-from src.repositories.wbs_nodes import WbsNodesRepository
+from src.repositories.tasks import ProjectTaskStatistics
 from src.schemas.knowledge import (
     KnowledgeAnswerSchema,
     KnowledgeChatMessageSchema,
     KnowledgeSourceSchema,
     KnowledgeStatusSchema,
 )
-from src.services.calendar import MAX_CALENDAR_RANGE_DAYS, CalendarService
-from src.services.calendar_scenarios import CalendarScenarioService
-from src.services.knowledge_events import KnowledgeEvents
+from src.services.calendar import MAX_CALENDAR_RANGE_DAYS
+from src.services.db_scope import ProjectAgentScope, ProjectAgentScopeFactory
 from src.services.tasks import build_task_key
 
 logger = logging.getLogger(__name__)
@@ -185,46 +178,53 @@ class ProjectAgentService:
     def __init__(
         self,
         *,
-        stages_repository: ProjectStagesRepository,
-        tasks_repository: TasksRepository,
-        wbs_nodes_repository: WbsNodesRepository,
-        documents_repository: DocumentsRepository,
-        activity_repository: TaskActivityRepository,
-        jobs_repository: KnowledgeIndexJobsRepository,
-        unit_of_work: UnitOfWork,
-        milestones_repository: MilestonesRepository,
-        calendar_service: CalendarService,
-        scenario_service: CalendarScenarioService,
+        scope: ProjectAgentScopeFactory,
         llm_client: LlmClient,
         embedding_client: EmbeddingClient,
         qdrant_client: ProjectQdrantClient,
         config: ProjectAgentConfig,
-        knowledge_events: KnowledgeEvents,
     ) -> None:
-        self.stages_repository = stages_repository
-        self.tasks_repository = tasks_repository
-        self.wbs_nodes_repository = wbs_nodes_repository
-        self.documents_repository = documents_repository
-        self.activity_repository = activity_repository
-        self.jobs_repository = jobs_repository
-        self.unit_of_work = unit_of_work
-        self.milestones_repository = milestones_repository
-        self.calendar_service = calendar_service
-        self.scenario_service = scenario_service
+        """Создаёт Project Agent.
+
+        Args:
+            scope: Фабрика короткой области работы с базой. Между сбором
+                данных и ответом модели соединение удерживаться не должно.
+            llm_client: Клиент chat completions.
+            embedding_client: Клиент API эмбеддингов.
+            qdrant_client: Клиент векторного индекса.
+            config: Настройки семантического поиска.
+        """
+        self.scope = scope
         self.llm_client = llm_client
         self.embedding_client = embedding_client
         self.qdrant_client = qdrant_client
         self.config = config
-        self.knowledge_events = knowledge_events
 
     async def ask(
         self,
         *,
-        project: Project,
+        project_id: int,
         question: str,
         history: list[KnowledgeChatMessageSchema],
     ) -> KnowledgeAnswerSchema:
-        """Формирует grounded-ответ внутри строго одной collection проекта."""
+        """Формирует grounded-ответ внутри строго одной collection проекта.
+
+        Сценарий разделён на фазы: короткое чтение базы, затем внешние
+        вызовы уже без открытого соединения.
+
+        Args:
+            project_id: Проект, в границах которого работает агент.
+            question: Вопрос пользователя.
+            history: Предыдущие сообщения диалога.
+
+        Returns:
+            Ответ агента вместе со списком источников.
+
+        Raises:
+            ProjectNotFoundError: Если проект не найден.
+            KnowledgeProviderError: Если внешний сервис недоступен.
+            ProjectAgentError: Если ответ не удалось сформировать.
+        """
         ask_started_at = perf_counter()
         phases_ms: dict[str, float | None] = {
             "planner": None,
@@ -234,6 +234,8 @@ class ProjectAgentService:
             "llm": None,
         }
         normalized_question = question.strip()
+        async with self.scope() as db:
+            project = await self._require_project(db, project_id=project_id)
         phase_started_at = perf_counter()
         try:
             try:
@@ -254,39 +256,44 @@ class ProjectAgentService:
         condensed_query = (tool_plan.search_query or "").strip()
         retrieval_query = condensed_query or normalized_question
         entity_type = tool_plan.entity_type
+        # Короткая DB-фаза: собирается весь срез, нужный для ответа, и
+        # соединение возвращается в пул до обращения к эмбеддингам,
+        # Qdrant и модели.
         try:
-            stages = await self.stages_repository.get_by_project(project.id)
-            phase_started_at = perf_counter()
-            try:
-                ranked_tasks = (
-                    await self.tasks_repository.search_ranked(
-                        project_id=project.id,
-                        search=retrieval_query,
-                        limit=MAX_RETRIEVED_TASKS,
+            async with self.scope() as db:
+                stages = await db.stages.get_by_project(project.id)
+                phase_started_at = perf_counter()
+                try:
+                    ranked_tasks = (
+                        await db.tasks.search_ranked(
+                            project_id=project.id,
+                            search=retrieval_query,
+                            limit=MAX_RETRIEVED_TASKS,
+                        )
+                        if entity_type in (None, "task")
+                        else []
                     )
-                    if entity_type in (None, "task")
-                    else []
-                )
-                ranked_documents = (
-                    await self.documents_repository.search_ranked(
-                        project_id=project.id,
-                        search=retrieval_query,
-                        limit=MAX_RETRIEVED_DOCUMENTS,
+                    ranked_documents = (
+                        await db.documents.search_ranked(
+                            project_id=project.id,
+                            search=retrieval_query,
+                            limit=MAX_RETRIEVED_DOCUMENTS,
+                        )
+                        if entity_type in (None, "document")
+                        else []
                     )
-                    if entity_type in (None, "document")
-                    else []
+                finally:
+                    phases_ms["ranked_fts"] = self._elapsed_ms(phase_started_at)
+                nodes = await db.wbs_nodes.get_by_project(project.id)
+                database_context = await self._load_structured_tools(
+                    db,
+                    project=project,
+                    stages=stages,
+                    ranked_tasks=ranked_tasks,
+                    ranked_documents=ranked_documents,
+                    nodes=nodes,
+                    tool_plan=tool_plan,
                 )
-            finally:
-                phases_ms["ranked_fts"] = self._elapsed_ms(phase_started_at)
-            nodes = await self.wbs_nodes_repository.get_by_project(project.id)
-            database_context = await self._load_structured_tools(
-                project=project,
-                stages=stages,
-                ranked_tasks=ranked_tasks,
-                ranked_documents=ranked_documents,
-                nodes=nodes,
-                tool_plan=tool_plan,
-            )
         except RepositoryError as error:
             raise ProjectAgentError(str(error)) from error
 
@@ -393,11 +400,20 @@ class ProjectAgentService:
         """Возвращает длительность фазы по monotonic clock в миллисекундах."""
         return round((perf_counter() - started_at) * 1000, 3)
 
+    @staticmethod
+    async def _require_project(db: ProjectAgentScope, *, project_id: int) -> Project:
+        """Возвращает проект области анализа или поднимает доменную ошибку."""
+        project = await db.projects.get_by_id(project_id=project_id)
+        if project is None:
+            raise ProjectNotFoundError(project_id=project_id)
+        return project
+
     async def get_status(self, project_id: int) -> KnowledgeStatusSchema:
         """Возвращает состояние очереди и доступность collection проекта."""
         try:
-            counts = await self.jobs_repository.get_status_counts(project_id)
-            last_error = await self.jobs_repository.get_last_error(project_id)
+            async with self.scope() as db:
+                counts = await db.jobs.get_status_counts(project_id)
+                last_error = await db.jobs.get_last_error(project_id)
         except KnowledgeIndexJobsRepositoryError as error:
             raise KnowledgeServiceError(str(error)) from error
 
@@ -433,10 +449,10 @@ class ProjectAgentService:
         try:
             # Постановка задания и её фиксация — один факт: владелец
             # транзакции здесь, а не внутри репозитория очереди.
-            await self.knowledge_events.reindex_project(project_id=project_id)
-            await self.unit_of_work.commit()
+            async with self.scope() as db:
+                await db.knowledge_events.reindex_project(project_id=project_id)
+                await db.unit_of_work.commit()
         except (KnowledgeEventsServiceError, UnitOfWorkRepositoryError) as error:
-            await self.unit_of_work.rollback()
             raise KnowledgeServiceError(str(error)) from error
 
     async def _select_tools(
@@ -470,6 +486,7 @@ class ProjectAgentService:
 
     async def _load_structured_tools(
         self,
+        db: ProjectAgentScope,
         *,
         project: Project,
         stages: list[Any],
@@ -505,7 +522,7 @@ class ProjectAgentService:
                 continue
             seen.add(key)
             if tool_call.name is StructuredToolName.PROJECT_STATISTICS:
-                context.statistics = await self.tasks_repository.get_project_statistics(
+                context.statistics = await db.tasks.get_project_statistics(
                     project_id=project_id,
                     today=current_date,
                 )
@@ -514,7 +531,7 @@ class ProjectAgentService:
                     stages_by_name.get(normalized_stage.casefold()) if normalized_stage else None
                 )
                 tasks = (
-                    await self.tasks_repository.get_by_stage_limited(
+                    await db.tasks.get_by_stage_limited(
                         project_id=project_id,
                         stage_id=stage.id,
                         limit=MAX_TOOL_TASKS,
@@ -524,19 +541,19 @@ class ProjectAgentService:
                 )
                 context.tasks_by_status.append((normalized_stage or "", stage, tasks))
             elif tool_call.name is StructuredToolName.OVERDUE_TASKS:
-                context.overdue_tasks = await self.tasks_repository.get_overdue_limited(
+                context.overdue_tasks = await db.tasks.get_overdue_limited(
                     project_id=project_id,
                     today=current_date,
                     limit=MAX_TOOL_TASKS,
                 )
             elif tool_call.name is StructuredToolName.PROJECT_STRUCTURE:
-                context.structure_counts = await self.tasks_repository.get_wbs_counts(project_id)
+                context.structure_counts = await db.tasks.get_wbs_counts(project_id)
             elif tool_call.name is StructuredToolName.RECENT_PROJECT_ACTIVITY:
-                context.activity = await self.activity_repository.get_recent_by_project(
+                context.activity = await db.activity.get_recent_by_project(
                     project_id,
                     limit=30,
                 )
-                activity_tasks = await self.tasks_repository.get_by_ids(
+                activity_tasks = await db.tasks.get_by_ids(
                     {item.task_id for item in context.activity}
                 )
                 context.activity_tasks = {task.id: task for task in activity_tasks}
@@ -554,14 +571,14 @@ class ProjectAgentService:
                     project=project,
                     current_date=current_date,
                 )
-                context.calendar_results[tool_call.name] = await self.calendar_service.get_range(
+                context.calendar_results[tool_call.name] = await db.calendar.get_range(
                     project_id=project_id,
                     date_from=date_from,
                     date_to=date_to,
                     today=current_date,
                 )
             elif tool_call.name is StructuredToolName.MILESTONES:
-                context.milestones = (await self.milestones_repository.get_by_project(project_id))[
+                context.milestones = (await db.milestones.get_by_project(project_id))[
                     :MAX_TOOL_TASKS
                 ]
             elif tool_call.name is StructuredToolName.PREVIEW_SCHEDULE_CHANGE:
@@ -571,7 +588,7 @@ class ProjectAgentService:
                         "error": "Для preview нужен ключ задачи текущего проекта."
                     }
                     continue
-                task = await self.tasks_repository.get_by_project_number(
+                task = await db.tasks.get_by_project_number(
                     project_id,
                     task_number,
                 )
@@ -582,7 +599,7 @@ class ProjectAgentService:
                 if start_date == task.start_date and due_date == task.due_date:
                     context.scenario_preview = {"error": "Для preview не передано изменение дат."}
                     continue
-                context.scenario_preview = await self.scenario_service.preview(
+                context.scenario_preview = await db.scenario.preview(
                     project_id,
                     [
                         {

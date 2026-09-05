@@ -9,6 +9,7 @@
 СУБД, а не сервиса.
 """
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
 
 import pytest
@@ -32,6 +33,7 @@ from src.repositories.projects import ProjectsRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
+from src.services.db_scope import TaskDocumentImportScope
 from src.services.document_links import DocumentLinksService
 from src.services.documents import DocumentsService
 from src.services.knowledge_events import KnowledgeEvents
@@ -75,15 +77,25 @@ def build_import_service(
         projects_repository=ProjectsRepository(session),
         members_repository=ProjectMembersRepository(session),
     )
-    return TaskDocumentImportService(
-        tasks_repository=TasksRepository(session),
-        attachments_service=attachments,
-        documents_service=documents,
-        links_service=links,
+    db = TaskDocumentImportScope(
+        tasks=TasksRepository(session),
+        attachments=attachments,
+        documents=documents,
+        links=links,
         unit_of_work=unit_of_work,
+    )
+
+    @asynccontextmanager
+    async def scope():
+        """Одна и та же сессия теста: тест проверяет атомарность, не пул."""
+        yield db
+
+    return TaskDocumentImportService(
+        scope=scope,
         attachment_storage=storage,
         vision=DisabledVisionCapability(),
         extract_max_chars=350_000,
+        max_file_size=10 * 1024 * 1024,
     )
 
 

@@ -1,4 +1,5 @@
 import json
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -22,6 +23,7 @@ from src.schemas.wbs_suggestion import (
     WbsSuggestedNodeSchema,
     WbsSuggestionSchema,
 )
+from src.services.db_scope import WbsSuggestionScope
 from src.services.knowledge_events import KnowledgeEvents
 from src.services.wbs_suggestion import WbsSuggestionService
 
@@ -95,22 +97,32 @@ def build_service(
     else:
         llm_client.get_structured_response.return_value = llm_output or WbsSuggestionSchema()
 
-    service = WbsSuggestionService(
-        wbs_nodes_repository=wbs_repository,
-        projects_repository=projects_repository,
-        stages_repository=stages_repository,
-        tasks_repository=tasks_repository,
-        activity_repository=activity_repository,
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    db = WbsSuggestionScope(
+        projects=projects_repository,
+        wbs_nodes=wbs_repository,
+        tasks=tasks_repository,
+        stages=stages_repository,
+        activity=activity_repository,
+        knowledge_events=knowledge_events,
         unit_of_work=unit_of_work,
-        llm_client=llm_client,
-        knowledge_events=AsyncMock(spec=KnowledgeEvents),
     )
+    opened_scopes: list[WbsSuggestionScope] = []
+
+    @asynccontextmanager
+    async def scope():
+        """Отдаёт ту же область: тест наблюдает за числом её открытий."""
+        opened_scopes.append(db)
+        yield db
+
+    service = WbsSuggestionService(scope=scope, llm_client=llm_client)
     return service, {
         "wbs": wbs_repository,
         "tasks": tasks_repository,
         "activity": activity_repository,
         "llm": llm_client,
         "unit_of_work": unit_of_work,
+        "scopes": opened_scopes,
     }
 
 

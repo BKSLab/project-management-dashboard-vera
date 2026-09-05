@@ -5,6 +5,7 @@
 глобальное состояние модулей.
 """
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -26,17 +27,16 @@ from src.dependencies.clients import (
     get_vision_capability,
 )
 from src.dependencies.http_client import get_knowledge_runtime
-from src.dependencies.repositories import (
-    get_project_stages_repository,
-    get_projects_repository,
-    get_tasks_repository,
-    get_wbs_nodes_repository,
-)
+from src.dependencies.scopes import get_wbs_suggestion_scope
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
+from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.tasks import TasksRepository
+from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.wbs_nodes import WbsNodesRepository
 from src.schemas.wbs_suggestion import WbsSuggestionSchema
+from src.services.db_scope import WbsSuggestionScope
+from src.services.knowledge_events import KnowledgeEvents
 
 SUGGESTION_PATH = "/api/v1/projects/1/wbs/suggestion"
 
@@ -76,14 +76,21 @@ def project_data() -> None:
     nodes = AsyncMock(spec=WbsNodesRepository)
     nodes.get_by_project.return_value = []
 
-    app.dependency_overrides.update(
-        {
-            get_projects_repository: lambda: projects,
-            get_project_stages_repository: lambda: stages,
-            get_tasks_repository: lambda: tasks,
-            get_wbs_nodes_repository: lambda: nodes,
-        }
+    db = WbsSuggestionScope(
+        projects=projects,
+        wbs_nodes=nodes,
+        tasks=tasks,
+        stages=stages,
+        activity=AsyncMock(spec=TaskActivityRepository),
+        knowledge_events=AsyncMock(spec=KnowledgeEvents),
+        unit_of_work=AsyncMock(spec=UnitOfWork),
     )
+
+    @asynccontextmanager
+    async def scope():
+        yield db
+
+    app.dependency_overrides[get_wbs_suggestion_scope] = lambda: scope
 
 
 @pytest.fixture

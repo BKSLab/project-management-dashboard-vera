@@ -6,13 +6,15 @@ import pytest
 from httpx import AsyncClient
 
 from main import app
+from src.dependencies.scopes import get_attachment_download_service
 from src.dependencies.services import get_task_attachments_service
 from src.exceptions.task_attachments import (
     TaskAttachmentNotFoundError,
     TaskAttachmentTooLargeError,
 )
 from src.schemas.task_attachments import TaskAttachmentSchema
-from src.services.task_attachments import TaskAttachmentContent, TaskAttachmentsService
+from src.services.attachment_download import AttachmentDownload, AttachmentDownloadService
+from src.services.task_attachments import TaskAttachmentsService
 
 
 def attachment_schema() -> TaskAttachmentSchema:
@@ -73,14 +75,15 @@ async def test_get_task_attachment_content_streams_inline_image(
 ) -> None:
     image_path = tmp_path / "photo.png"
     image_path.write_bytes(b"image")
-    service = AsyncMock(spec=TaskAttachmentsService)
-    service.get_attachment_content.return_value = TaskAttachmentContent(
+    # Подготовка выдачи живёт в отдельном сервисе: у маршрута нет сессии.
+    service = AsyncMock(spec=AttachmentDownloadService)
+    service.prepare.return_value = AttachmentDownload(
         path=image_path,
-        original_name="photo.png",
-        content_type="image/png",
+        media_type="image/png",
+        filename="photo.png",
         previewable=True,
     )
-    app.dependency_overrides[get_task_attachments_service] = lambda: service
+    app.dependency_overrides[get_attachment_download_service] = lambda: service
 
     response = await api_client.get("/api/v1/tasks/2/attachments/4/content")
 

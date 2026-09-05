@@ -283,39 +283,46 @@ async def search_project_knowledge(
     ] = 10,
 ) -> list[dict]:
     """Возвращает смысловые фрагменты базы знаний проекта."""
+    # Аутентификация и проверка доступа выполняются в короткой DB-области,
+    # и она закрывается до обращения к эмбеддингам и Qdrant: иначе
+    # соединение с PostgreSQL удерживалось бы всё время внешнего вызова.
     async with tool_context(context) as tools:
         if not tools.settings.knowledge.knowledge_enabled:
             raise ToolError("Семантический поиск отключён в конфигурации сервера.")
         project = await resolve_project(tools, project_key)
-        try:
-            vector = await tools.runtime.embedding_client.get_embedding(query.strip())
-            hits = await tools.runtime.qdrant_client.search(
-                project_id=project.id,
-                vector=vector,
-                limit=limit,
-                score_threshold=tools.settings.knowledge.qdrant_score_threshold,
-            )
-        except ClientError as error:
-            raise ToolError("Семантический поиск временно недоступен.") from error
+        project_id = project.id
+        runtime = tools.runtime
+        score_threshold = tools.settings.knowledge.qdrant_score_threshold
 
-        wanted = entity_type.strip().lower() if entity_type else None
-        results: list[dict] = []
-        for hit in hits:
-            payload = hit.payload
-            hit_type = str(payload.get("entity_type") or "")
-            if wanted and hit_type != wanted:
-                continue
-            results.append(
-                {
-                    "source": str(payload.get("source_id") or ""),
-                    "entity_type": hit_type,
-                    "task_key": payload.get("task_key"),
-                    "title": payload.get("title"),
-                    "score": round(float(hit.score), 3),
-                    "excerpt": shorten(str(payload.get("text") or "")),
-                }
-            )
-        return results
+    try:
+        vector = await runtime.embedding_client.get_embedding(query.strip())
+        hits = await runtime.qdrant_client.search(
+            project_id=project_id,
+            vector=vector,
+            limit=limit,
+            score_threshold=score_threshold,
+        )
+    except ClientError as error:
+        raise ToolError("Семантический поиск временно недоступен.") from error
+
+    wanted = entity_type.strip().lower() if entity_type else None
+    results: list[dict] = []
+    for hit in hits:
+        payload = hit.payload
+        hit_type = str(payload.get("entity_type") or "")
+        if wanted and hit_type != wanted:
+            continue
+        results.append(
+            {
+                "source": str(payload.get("source_id") or ""),
+                "entity_type": hit_type,
+                "task_key": payload.get("task_key"),
+                "title": payload.get("title"),
+                "score": round(float(hit.score), 3),
+                "excerpt": shorten(str(payload.get("text") or "")),
+            }
+        )
+    return results
 
 
 @mcp_server.tool(

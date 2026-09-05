@@ -40,20 +40,6 @@ from src.exceptions.tasks import TasksRepositoryError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.exceptions.wbs_nodes import WbsNodesRepositoryError
 from src.prompts.analytics import ANALYTICS_SYSTEM_PROMPT
-from src.repositories.analytics_reports import AnalyticsReportsRepository
-from src.repositories.document_links import DocumentLinksRepository
-from src.repositories.documents import DocumentsRepository
-from src.repositories.milestones import MilestonesRepository
-from src.repositories.project_members import ProjectMembersRepository
-from src.repositories.project_stages import ProjectStagesRepository
-from src.repositories.project_stickers import ProjectStickersRepository
-from src.repositories.projects import ProjectsRepository
-from src.repositories.task_activity import TaskActivityRepository
-from src.repositories.task_comments import TaskCommentsRepository
-from src.repositories.task_dependencies import TaskDependenciesRepository
-from src.repositories.tasks import TasksRepository
-from src.repositories.unit_of_work import UnitOfWork
-from src.repositories.wbs_nodes import WbsNodesRepository
 from src.schemas.analytics import (
     AnalyticsContextSchema,
     AnalyticsDraftSchema,
@@ -66,6 +52,7 @@ from src.schemas.analytics import (
     AnalyticsSignalsSchema,
     AnalyticsTaskRefSchema,
 )
+from src.services.db_scope import AnalyticsDbScope, AnalyticsDbScopeFactory
 from src.services.tasks import build_task_key
 from src.utils.deadlines import DUE_SOON_DAYS, is_task_due_soon, is_task_overdue
 
@@ -166,36 +153,19 @@ class AnalyticsService:
 
     def __init__(
         self,
-        reports_repository: AnalyticsReportsRepository,
-        projects_repository: ProjectsRepository,
-        members_repository: ProjectMembersRepository,
-        stages_repository: ProjectStagesRepository,
-        tasks_repository: TasksRepository,
-        comments_repository: TaskCommentsRepository,
-        activity_repository: TaskActivityRepository,
-        dependencies_repository: TaskDependenciesRepository,
-        wbs_nodes_repository: WbsNodesRepository,
-        milestones_repository: MilestonesRepository,
-        stickers_repository: ProjectStickersRepository,
-        documents_repository: DocumentsRepository,
-        document_links_repository: DocumentLinksRepository,
-        unit_of_work: UnitOfWork,
+        *,
+        scope: AnalyticsDbScopeFactory,
         llm_client: LlmClient,
     ):
-        self.reports_repository = reports_repository
-        self.projects_repository = projects_repository
-        self.members_repository = members_repository
-        self.stages_repository = stages_repository
-        self.tasks_repository = tasks_repository
-        self.comments_repository = comments_repository
-        self.activity_repository = activity_repository
-        self.dependencies_repository = dependencies_repository
-        self.wbs_nodes_repository = wbs_nodes_repository
-        self.milestones_repository = milestones_repository
-        self.stickers_repository = stickers_repository
-        self.documents_repository = documents_repository
-        self.document_links_repository = document_links_repository
-        self.unit_of_work = unit_of_work
+        """Создаёт сервис аналитического свода.
+
+        Args:
+            scope: Фабрика короткой области работы с базой. Между сбором
+                данных и записью результата стоит вызов модели, поэтому
+                соединение на это время удерживаться не должно.
+            llm_client: Клиент chat completions.
+        """
+        self.scope = scope
         self.llm_client = llm_client
 
     async def get_latest(
@@ -218,13 +188,14 @@ class AnalyticsService:
             AnalyticsServiceError: Если прочитать свод не удалось.
         """
         try:
-            allowed_ids = await self.members_repository.get_project_ids_for_user(user_id=user_id)
-            if project_id is not None:
-                if project_id not in allowed_ids:
-                    raise ProjectNotFoundError(project_id=project_id)
-                report = await self.reports_repository.get_latest_for_project(project_id=project_id)
-            else:
-                report = await self.reports_repository.get_latest_portfolio(user_id=user_id)
+            async with self.scope() as db:
+                allowed_ids = await db.members.get_project_ids_for_user(user_id=user_id)
+                if project_id is not None:
+                    if project_id not in allowed_ids:
+                        raise ProjectNotFoundError(project_id=project_id)
+                    report = await db.reports.get_latest_for_project(project_id=project_id)
+                else:
+                    report = await db.reports.get_latest_portfolio(user_id=user_id)
         except RepositoryErrors as error:
             logger.error("❌ Ошибка чтения аналитического свода.", exc_info=True)
             raise AnalyticsServiceError(str(error)) from error
@@ -261,11 +232,19 @@ class AnalyticsService:
         today = date.today()
         scope = AnalyticsScope.PROJECT if project_id is not None else AnalyticsScope.PORTFOLIO
 
+        # Первая короткая DB-фаза: собирается полный снимок области
+        # анализа, после чего соединение возвращается в пул.
         try:
-            projects = await self._resolve_projects(user_id=actor_id, project_id=project_id)
-            slices = [
-                await self._collect_project(project=project, scope=scope) for project in projects
-            ]
+            async with self.scope() as db:
+                projects = await self._resolve_projects(
+                    db,
+                    user_id=actor_id,
+                    project_id=project_id,
+                )
+                slices = [
+                    await self._collect_project(db, project=project, scope=scope)
+                    for project in projects
+                ]
         except RepositoryErrors as error:
             logger.error("❌ Ошибка сбора данных для аналитического свода.", exc_info=True)
             raise AnalyticsServiceError(str(error)) from error
@@ -295,21 +274,23 @@ class AnalyticsService:
         payload = _resolve_draft(draft=draft, slices=slices, today=today)
         duration_ms = round((perf_counter() - started_at) * 1000)
 
+        # Вторая короткая DB-фаза: результат сохраняется уже после того,
+        # как модель ответила.
         try:
-            report = await self.reports_repository.save(
-                data={
-                    "project_id": project_id,
-                    "created_by_user_id": actor_id,
-                    "created_by_display_name_snapshot": actor_name[:NAME_LIMIT],
-                    "llm_model": self.llm_client.model,
-                    "duration_ms": duration_ms,
-                    "payload": payload | {"signals": signals.model_dump(mode="json")},
-                    "context_summary": context.model_dump(mode="json"),
-                }
-            )
-            await self.unit_of_work.commit()
+            async with self.scope() as db:
+                report = await db.reports.save(
+                    data={
+                        "project_id": project_id,
+                        "created_by_user_id": actor_id,
+                        "created_by_display_name_snapshot": actor_name[:NAME_LIMIT],
+                        "llm_model": self.llm_client.model,
+                        "duration_ms": duration_ms,
+                        "payload": payload | {"signals": signals.model_dump(mode="json")},
+                        "context_summary": context.model_dump(mode="json"),
+                    }
+                )
+                await db.unit_of_work.commit()
         except RepositoryErrors as error:
-            await self.unit_of_work.rollback()
             logger.error("❌ Не удалось сохранить аналитический свод.", exc_info=True)
             raise AnalyticsServiceError(str(error)) from error
 
@@ -326,22 +307,28 @@ class AnalyticsService:
             project=slices[0].project if scope is AnalyticsScope.PROJECT else None,
         )
 
-    async def _resolve_projects(self, *, user_id: int, project_id: int | None) -> list[Project]:
+    @staticmethod
+    async def _resolve_projects(
+        db: AnalyticsDbScope,
+        *,
+        user_id: int,
+        project_id: int | None,
+    ) -> list[Project]:
         """Возвращает проекты области анализа с проверкой доступа."""
-        allowed_ids = await self.members_repository.get_project_ids_for_user(user_id=user_id)
+        allowed_ids = await db.members.get_project_ids_for_user(user_id=user_id)
         if project_id is not None:
             if project_id not in allowed_ids:
                 # Чужой проект неотличим от несуществующего: наличие чужих
                 # данных не подтверждается (см. правила доступа проекта).
                 raise ProjectNotFoundError(project_id=project_id)
-            project = await self.projects_repository.get_by_id(project_id=project_id)
+            project = await db.projects.get_by_id(project_id=project_id)
             if project is None:
                 raise ProjectNotFoundError(project_id=project_id)
             return [project]
 
         projects = [
             project
-            for project in await self.projects_repository.get_all()
+            for project in await db.projects.get_all()
             if project.id in allowed_ids
         ]
         if not projects:
@@ -350,20 +337,26 @@ class AnalyticsService:
             )
         return projects
 
-    async def _collect_project(self, *, project: Project, scope: AnalyticsScope) -> _ProjectSlice:
+    @staticmethod
+    async def _collect_project(
+        db: AnalyticsDbScope,
+        *,
+        project: Project,
+        scope: AnalyticsScope,
+    ) -> _ProjectSlice:
         """Загружает всё, что относится к одному проекту анализа."""
         limits = PROJECT_LIMITS if scope is AnalyticsScope.PROJECT else PORTFOLIO_LIMITS
-        stages = await self.stages_repository.get_by_project(project_id=project.id)
-        tasks = await self.tasks_repository.get_by_project(project_id=project.id)
-        activity = await self.activity_repository.get_recent_by_project(
+        stages = await db.stages.get_by_project(project_id=project.id)
+        tasks = await db.tasks.get_by_project(project_id=project.id)
+        activity = await db.activity.get_recent_by_project(
             project_id=project.id,
             limit=limits.activity,
         )
-        dependencies = await self.dependencies_repository.get_by_project(project_id=project.id)
-        nodes = await self.wbs_nodes_repository.get_by_project(project_id=project.id)
-        milestones = await self.milestones_repository.get_by_project(project_id=project.id)
-        stickers = await self.stickers_repository.list_by_project_id(project_id=project.id)
-        documents = await self.documents_repository.get_by_project(project_id=project.id)
+        dependencies = await db.dependencies.get_by_project(project_id=project.id)
+        nodes = await db.wbs_nodes.get_by_project(project_id=project.id)
+        milestones = await db.milestones.get_by_project(project_id=project.id)
+        stickers = await db.stickers.list_by_project_id(project_id=project.id)
+        documents = await db.documents.get_by_project(project_id=project.id)
 
         # Комментарии берём только к задачам, которые попадут в срез: у
         # проекта с сотнями закрытых задач остальные всё равно не пригодятся.
@@ -373,14 +366,14 @@ class AnalyticsService:
             limit=limits.tasks,
             today=date.today(),
         )
-        comments = await self.comments_repository.get_for_tasks(
+        comments = await db.comments.get_for_tasks(
             task_ids={task.id for task in selected_tasks}
         )
         comments_by_task: dict[int, list[TaskComment]] = {}
         for comment in comments:
             comments_by_task.setdefault(comment.task_id, []).append(comment)
 
-        links = await self.document_links_repository.get_for_documents(
+        links = await db.document_links.get_for_documents(
             document_ids={document.id for document in documents}
         )
         document_task_ids: dict[int, list[int]] = {}

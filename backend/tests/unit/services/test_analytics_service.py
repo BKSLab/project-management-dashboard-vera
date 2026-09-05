@@ -1,4 +1,5 @@
 import json
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -23,6 +24,7 @@ from src.schemas.analytics import (
     AnalyticsSeverity,
 )
 from src.services.analytics import AnalyticsService
+from src.services.db_scope import AnalyticsDbScope
 
 TODAY = date.today()
 USER_ID = 7
@@ -188,31 +190,36 @@ def build_service(
     # Имя модели сервис берёт у клиента, а не у глобальных настроек.
     llm_client.model = "test-model"
 
-    service = AnalyticsService(
-        reports_repository=reports_repository,
-        projects_repository=projects_repository,
-        members_repository=members_repository,
-        stages_repository=stages_repository,
-        tasks_repository=tasks_repository,
-        comments_repository=comments_repository,
-        activity_repository=activity_repository,
-        dependencies_repository=dependencies_repository,
-        wbs_nodes_repository=wbs_nodes_repository,
-        milestones_repository=milestones_repository,
-        stickers_repository=stickers_repository,
-        documents_repository=documents_repository,
-        document_links_repository=document_links_repository,
+    db = AnalyticsDbScope(
+        reports=reports_repository,
+        projects=projects_repository,
+        members=members_repository,
+        stages=stages_repository,
+        tasks=tasks_repository,
+        comments=comments_repository,
+        activity=activity_repository,
+        dependencies=dependencies_repository,
+        wbs_nodes=wbs_nodes_repository,
+        milestones=milestones_repository,
+        stickers=stickers_repository,
+        documents=documents_repository,
+        document_links=document_links_repository,
         unit_of_work=AsyncMock(),
-        llm_client=llm_client,
     )
-    return service, reports_repository
+
+    @asynccontextmanager
+    async def scope():
+        yield db
+
+    service = AnalyticsService(scope=scope, llm_client=llm_client)
+    return service, reports_repository, db
 
 
 @pytest.mark.asyncio
 async def test_generate_saves_report_with_resolved_task_links() -> None:
     stages = [stage(1, "В работе", False), stage(2, "Готово", True)]
     tasks = [task(11, stage_id=1, due_date=TODAY - timedelta(days=5))]
-    service, reports_repository = build_service(
+    service, reports_repository, _db = build_service(
         stages=stages,
         tasks=tasks,
         llm_response=draft(["PROJ-11"]),
@@ -237,7 +244,7 @@ async def test_generate_saves_report_with_resolved_task_links() -> None:
 async def test_generate_drops_task_keys_absent_in_scope() -> None:
     stages = [stage(1, "В работе", False)]
     tasks = [task(11, stage_id=1)]
-    service, reports_repository = build_service(
+    service, reports_repository, _db = build_service(
         stages=stages,
         tasks=tasks,
         llm_response=draft(["PROJ-999", "OTHER-1"]),
@@ -252,7 +259,7 @@ async def test_generate_drops_task_keys_absent_in_scope() -> None:
 @pytest.mark.asyncio
 async def test_generate_drops_unknown_project_key() -> None:
     stages = [stage(1, "В работе", False)]
-    service, reports_repository = build_service(stages=stages, tasks=[task(11, stage_id=1)])
+    service, reports_repository, _db = build_service(stages=stages, tasks=[task(11, stage_id=1)])
 
     await service.generate(**actor(), project_id=PROJECT_ID)
 
@@ -277,7 +284,7 @@ async def test_generate_counts_signals_from_database_not_from_model() -> None:
             status=ProjectMilestoneStatus.PLANNED,
         )
     ]
-    service, reports_repository = build_service(
+    service, reports_repository, _db = build_service(
         stages=stages,
         tasks=tasks,
         dependencies=dependencies,
@@ -307,7 +314,7 @@ async def test_generate_puts_overdue_tasks_first_in_model_context() -> None:
         task(12, stage_id=1, due_date=TODAY - timedelta(days=4)),
         task(13, stage_id=1, due_date=TODAY + timedelta(days=1)),
     ]
-    service, _ = build_service(stages=stages, tasks=tasks)
+    service, _, db = build_service(stages=stages, tasks=tasks)
 
     await service.generate(**actor(), project_id=PROJECT_ID)
 
@@ -324,7 +331,7 @@ async def test_generate_puts_overdue_tasks_first_in_model_context() -> None:
 async def test_generate_reports_context_boundaries_to_user() -> None:
     stages = [stage(1, "В работе", False)]
     tasks = [task(index, stage_id=1) for index in range(1, 121)]
-    service, reports_repository = build_service(
+    service, reports_repository, _db = build_service(
         projects=[project(), SimpleNamespace(**vars(project()) | {"id": 2, "key": "SECOND"})],
         stages=stages,
         tasks=tasks,
@@ -341,7 +348,7 @@ async def test_generate_reports_context_boundaries_to_user() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_raises_empty_scope_when_projects_have_no_tasks() -> None:
-    service, _ = build_service(stages=[stage(1, "В работе", False)], tasks=[])
+    service, _, db = build_service(stages=[stage(1, "В работе", False)], tasks=[])
 
     with pytest.raises(AnalyticsEmptyScopeError):
         await service.generate(**actor(), project_id=PROJECT_ID)
@@ -349,7 +356,7 @@ async def test_generate_raises_empty_scope_when_projects_have_no_tasks() -> None
 
 @pytest.mark.asyncio
 async def test_generate_raises_not_found_for_foreign_project() -> None:
-    service, _ = build_service(allowed_ids=set())
+    service, _, db = build_service(allowed_ids=set())
 
     with pytest.raises(ProjectNotFoundError):
         await service.generate(**actor(), project_id=PROJECT_ID)
@@ -357,8 +364,8 @@ async def test_generate_raises_not_found_for_foreign_project() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_raises_service_error_when_repository_fails() -> None:
-    service, _ = build_service()
-    service.projects_repository.get_by_id.side_effect = ProjectsRepositoryError("сбой")
+    service, _, db = build_service()
+    db.projects.get_by_id.side_effect = ProjectsRepositoryError("сбой")
 
     with pytest.raises(AnalyticsServiceError):
         await service.generate(**actor(), project_id=PROJECT_ID)
@@ -366,7 +373,7 @@ async def test_generate_raises_service_error_when_repository_fails() -> None:
 
 @pytest.mark.asyncio
 async def test_get_latest_returns_none_when_report_missing() -> None:
-    service, reports_repository = build_service()
+    service, reports_repository, _db = build_service()
     reports_repository.get_latest_for_project.return_value = None
 
     assert await service.get_latest(user_id=USER_ID, project_id=PROJECT_ID) is None
@@ -374,7 +381,7 @@ async def test_get_latest_returns_none_when_report_missing() -> None:
 
 @pytest.mark.asyncio
 async def test_get_latest_raises_not_found_for_foreign_project() -> None:
-    service, _ = build_service(allowed_ids=set())
+    service, _, db = build_service(allowed_ids=set())
 
     with pytest.raises(ProjectNotFoundError):
         await service.get_latest(user_id=USER_ID, project_id=PROJECT_ID)
@@ -382,7 +389,7 @@ async def test_get_latest_raises_not_found_for_foreign_project() -> None:
 
 @pytest.mark.asyncio
 async def test_get_latest_portfolio_report_is_selected_by_author() -> None:
-    service, reports_repository = build_service()
+    service, reports_repository, _db = build_service()
     reports_repository.get_latest_portfolio.return_value = None
 
     await service.get_latest(user_id=USER_ID, project_id=None)
@@ -404,7 +411,7 @@ async def test_generate_returns_saved_report_as_schema() -> None:
         context_summary={},
         created_at=datetime.now(UTC),
     )
-    service, _ = build_service(
+    service, _, db = build_service(
         stages=stages,
         tasks=[task(11, stage_id=1)],
         saved_report=saved,

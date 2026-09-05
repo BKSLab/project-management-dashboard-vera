@@ -24,12 +24,6 @@ from src.exceptions.wbs_nodes import (
 )
 from src.knowledge.documents import build_wbs_paths
 from src.prompts.wbs_suggestion import WBS_SUGGESTION_SYSTEM_PROMPT
-from src.repositories.project_stages import ProjectStagesRepository
-from src.repositories.projects import ProjectsRepository
-from src.repositories.task_activity import TaskActivityRepository
-from src.repositories.tasks import TasksRepository
-from src.repositories.unit_of_work import UnitOfWork
-from src.repositories.wbs_nodes import WbsNodesRepository
 from src.schemas.wbs_suggestion import (
     MAX_SUGGESTED_DEPTH,
     MAX_SUGGESTED_NODES,
@@ -38,7 +32,7 @@ from src.schemas.wbs_suggestion import (
     WbsSuggestionApplyResultSchema,
     WbsSuggestionSchema,
 )
-from src.services.knowledge_events import KnowledgeEvents
+from src.services.db_scope import WbsSuggestionScope, WbsSuggestionScopeFactory
 from src.services.tasks import build_task_key
 from src.services.wbs_nodes import POSITION_STEP
 
@@ -70,22 +64,19 @@ class WbsSuggestionService:
 
     def __init__(
         self,
-        wbs_nodes_repository: WbsNodesRepository,
-        projects_repository: ProjectsRepository,
-        stages_repository: ProjectStagesRepository,
-        tasks_repository: TasksRepository,
-        activity_repository: TaskActivityRepository,
-        unit_of_work: UnitOfWork,
+        *,
+        scope: WbsSuggestionScopeFactory,
         llm_client: LlmClient,
-        knowledge_events: KnowledgeEvents,
     ):
-        self.wbs_nodes_repository = wbs_nodes_repository
-        self.projects_repository = projects_repository
-        self.stages_repository = stages_repository
-        self.tasks_repository = tasks_repository
-        self.activity_repository = activity_repository
-        self.unit_of_work = unit_of_work
-        self.knowledge_events = knowledge_events
+        """Создаёт сервис предложения структуры ИСР.
+
+        Args:
+            scope: Фабрика короткой области работы с базой. Сессия не
+                передаётся: она не должна оставаться открытой во время
+                вызова модели.
+            llm_client: Клиент chat completions.
+        """
+        self.scope = scope
         self.llm_client = llm_client
 
     async def suggest(self, project_id: int) -> WbsSuggestionSchema:
@@ -107,11 +98,15 @@ class WbsSuggestionService:
             WbsNodesServiceError: Если подготовить данные не удалось.
         """
         started_at = perf_counter()
+        # Короткая DB-фаза: снимок собирается, и область закрывается до
+        # обращения к модели. Иначе соединение оставалось бы занятым всё
+        # время ожидания ответа.
         try:
-            project = await self._get_project(project_id=project_id)
-            nodes = await self.wbs_nodes_repository.get_by_project(project_id=project_id)
-            tasks = await self.tasks_repository.get_by_project(project_id=project_id)
-            stages = await self.stages_repository.get_by_project(project_id=project_id)
+            async with self.scope() as db:
+                project = await self._get_project(db, project_id=project_id)
+                nodes = await db.wbs_nodes.get_by_project(project_id=project_id)
+                tasks = await db.tasks.get_by_project(project_id=project_id)
+                stages = await db.stages.get_by_project(project_id=project_id)
         except RepositoryErrors as error:
             logger.error(
                 "❌ Ошибка подготовки данных для предложения ИСР проекта id=%s.",
@@ -179,85 +174,81 @@ class WbsSuggestionService:
             WbsSuggestionInvalidError: Если черновик не проходит проверку.
             WbsNodesServiceError: Если применить черновик не удалось.
         """
-        try:
-            project = await self._get_project(project_id=project_id)
-            existing_nodes = await self.wbs_nodes_repository.get_by_project(project_id=project_id)
-            tasks = await self.tasks_repository.get_by_project(project_id=project_id)
-        except RepositoryErrors as error:
-            logger.error(
-                "❌ Ошибка подготовки применения предложения ИСР проекта id=%s.",
-                project_id,
-                exc_info=True,
-            )
-            raise WbsNodesServiceError(str(error)) from error
-
         ordered_nodes = _validate_draft(nodes=nodes, assignments=assignments)
-        tasks_by_id = {task.id: task for task in tasks}
-        unknown = [item.task_id for item in assignments if item.task_id not in tasks_by_id]
-        if unknown:
-            raise WbsSuggestionInvalidError(
-                reason=f"задачи {unknown} не принадлежат проекту.",
-            )
 
+        # Применение к модели не обращается, поэтому чтение и запись идут
+        # в одной короткой области и одной транзакции.
         try:
-            root_position = _next_root_position(existing_nodes)
-            created_ids: dict[str, int] = {}
-            for index, draft in enumerate(ordered_nodes):
-                parent_id = (
-                    created_ids[draft.parent_temp_id] if draft.parent_temp_id is not None else None
-                )
-                position = (
-                    root_position + index * POSITION_STEP
-                    if parent_id is None
-                    else (index + 1) * POSITION_STEP
-                )
-                created = await self.wbs_nodes_repository.save(
-                    data={
-                        "project_id": project_id,
-                        "parent_id": parent_id,
-                        "title": draft.title.strip()[:TITLE_LIMIT],
-                        "position": position,
-                    }
-                )
-                created_ids[draft.temp_id] = created.id
+            async with self.scope() as db:
+                project = await self._get_project(db, project_id=project_id)
+                existing_nodes = await db.wbs_nodes.get_by_project(project_id=project_id)
+                tasks = await db.tasks.get_by_project(project_id=project_id)
+                tasks_by_id = {task.id: task for task in tasks}
+                unknown = [
+                    item.task_id for item in assignments if item.task_id not in tasks_by_id
+                ]
+                if unknown:
+                    raise WbsSuggestionInvalidError(
+                        reason=f"задачи {unknown} не принадлежат проекту.",
+                    )
+                root_position = _next_root_position(existing_nodes)
+                created_ids: dict[str, int] = {}
+                for index, draft in enumerate(ordered_nodes):
+                    parent_id = (
+                        created_ids[draft.parent_temp_id] if draft.parent_temp_id is not None else None
+                    )
+                    position = (
+                        root_position + index * POSITION_STEP
+                        if parent_id is None
+                        else (index + 1) * POSITION_STEP
+                    )
+                    created = await db.wbs_nodes.save(
+                        data={
+                            "project_id": project_id,
+                            "parent_id": parent_id,
+                            "title": draft.title.strip()[:TITLE_LIMIT],
+                            "position": position,
+                        }
+                    )
+                    created_ids[draft.temp_id] = created.id
 
-            nodes_by_temp_id = {draft.temp_id: draft for draft in ordered_nodes}
-            titles_by_id = {node.id: node.title for node in existing_nodes} | {
-                created_ids[temp_id]: draft.title for temp_id, draft in nodes_by_temp_id.items()
-            }
+                nodes_by_temp_id = {draft.temp_id: draft for draft in ordered_nodes}
+                titles_by_id = {node.id: node.title for node in existing_nodes} | {
+                    created_ids[temp_id]: draft.title for temp_id, draft in nodes_by_temp_id.items()
+                }
 
-            positions: dict[int, float] = {}
-            moved_task_ids: list[int] = []
-            for item in assignments:
-                task = tasks_by_id[item.task_id]
-                node_id = created_ids[item.node_temp_id]
-                if task.wbs_node_id == node_id:
-                    continue
-                positions[node_id] = positions.get(node_id, 0.0) + POSITION_STEP
-                await self.activity_repository.save(
-                    task_id=task.id,
-                    event_type=TaskActivityEventType.WBS_NODE_CHANGED,
-                    from_value=titles_by_id.get(task.wbs_node_id) if task.wbs_node_id else None,
-                    to_value=titles_by_id.get(node_id),
-                )
-                await self.tasks_repository.update(
-                    task=task,
-                    data={
-                        "wbs_node_id": node_id,
-                        "wbs_position": positions[node_id],
-                        "canvas_x": None,
-                        "canvas_y": None,
-                    },
-                )
-                moved_task_ids.append(task.id)
+                positions: dict[int, float] = {}
+                moved_task_ids: list[int] = []
+                for item in assignments:
+                    task = tasks_by_id[item.task_id]
+                    node_id = created_ids[item.node_temp_id]
+                    if task.wbs_node_id == node_id:
+                        continue
+                    positions[node_id] = positions.get(node_id, 0.0) + POSITION_STEP
+                    await db.activity.save(
+                        task_id=task.id,
+                        event_type=TaskActivityEventType.WBS_NODE_CHANGED,
+                        from_value=titles_by_id.get(task.wbs_node_id) if task.wbs_node_id else None,
+                        to_value=titles_by_id.get(node_id),
+                    )
+                    await db.tasks.update(
+                        task=task,
+                        data={
+                            "wbs_node_id": node_id,
+                            "wbs_position": positions[node_id],
+                            "canvas_x": None,
+                            "canvas_y": None,
+                        },
+                    )
+                    moved_task_ids.append(task.id)
 
-            if moved_task_ids:
-                await self.knowledge_events.upsert_many(
-                    project_id=project_id,
-                    entity_type=KnowledgeEntityType.TASK,
-                    entity_ids=moved_task_ids,
-                )
-            await self.unit_of_work.commit()
+                if moved_task_ids:
+                    await db.knowledge_events.upsert_many(
+                        project_id=project_id,
+                        entity_type=KnowledgeEntityType.TASK,
+                        entity_ids=moved_task_ids,
+                    )
+                await db.unit_of_work.commit()
         except RepositoryErrors as error:
             logger.error(
                 "❌ Ошибка применения предложения ИСР в проекте id=%s.",
@@ -277,9 +268,10 @@ class WbsSuggestionService:
             assigned_tasks=len(moved_task_ids),
         )
 
-    async def _get_project(self, project_id: int) -> Project:
+    @staticmethod
+    async def _get_project(db: WbsSuggestionScope, *, project_id: int) -> Project:
         """Возвращает проект или поднимает доменную ошибку."""
-        project = await self.projects_repository.get_by_id(project_id=project_id)
+        project = await db.projects.get_by_id(project_id=project_id)
         if project is None:
             raise ProjectNotFoundError(project_id=project_id)
         return project

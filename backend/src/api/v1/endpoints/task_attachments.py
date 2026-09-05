@@ -11,11 +11,14 @@ from src.api.v1.responses import (
     VALIDATION_RESPONSE,
 )
 from src.dependencies.access import require_task_access
-from src.dependencies.auth import require_write_scope
+from src.dependencies.auth import AuthorizationHeaderDep, SessionCookieDep, require_write_scope
+from src.dependencies.scopes import AttachmentDownloadServiceDep
 from src.dependencies.services import TaskAttachmentsServiceDep
 from src.exceptions.task_attachments import TaskAttachmentsServiceError
 from src.exceptions.tasks import TasksServiceError
 from src.schemas.task_attachments import TaskAttachmentSchema
+from src.services.attachment_download import DOWNLOAD_ERRORS
+from src.utils.api_tokens import extract_bearer_secret
 
 router = APIRouter(prefix="", tags=["task-attachments"])
 logger = logging.getLogger(__name__)
@@ -123,7 +126,6 @@ async def upload_task_attachment(
 
 @router.get(
     path="/tasks/{task_id}/attachments/{attachment_id}/content",
-    dependencies=[Depends(require_task_access)],
     status_code=status.HTTP_200_OK,
     summary="Открыть или скачать файл задачи",
     description="Показывает безопасное растровое изображение inline, остальные файлы скачивает.",
@@ -134,14 +136,24 @@ async def upload_task_attachment(
 async def get_task_attachment_content(
     task_id: Annotated[int, Path(gt=0, description="Идентификатор задачи канбана.")],
     attachment_id: Annotated[int, Path(gt=0, description="Идентификатор файла задачи.")],
-    service: TaskAttachmentsServiceDep,
+    service: AttachmentDownloadServiceDep,
+    session_cookie: SessionCookieDep = None,
+    authorization: AuthorizationHeaderDep = None,
 ) -> FileResponse:
     """Возвращает физическое содержимое файла.
+
+    Аутентификация, проверка доступа и чтение метаданных выполняются в
+    короткой области базы внутри сервиса. В графе зависимостей маршрута
+    нет ни `DbSessionDep`, ни построенных на ней зависимостей: иначе
+    медленное скачивание удерживало бы соединение с PostgreSQL всё время
+    передачи файла.
 
     Args:
         task_id: Идентификатор задачи.
         attachment_id: Идентификатор файла.
-        service: Сервис файлов задач.
+        service: Подготовка выдачи файла.
+        session_cookie: Значение cookie сессии.
+        authorization: Заголовок ``Authorization`` внешнего клиента.
 
     Returns:
         Потоковый файловый HTTP-ответ.
@@ -155,21 +167,26 @@ async def get_task_attachment_content(
         attachment_id,
     )
     try:
-        content = await service.get_attachment_content(
+        download = await service.prepare(
             task_id=task_id,
             attachment_id=attachment_id,
+            session_token=session_cookie,
+            bearer_secret=extract_bearer_secret(authorization),
         )
-        logger.info("✅ Содержимое файла id=%s подготовлено.", attachment_id)
-        return FileResponse(
-            path=content.path,
-            media_type=content.content_type,
-            filename=content.original_name,
-            content_disposition_type="inline" if content.previewable else "attachment",
-            headers={"X-Content-Type-Options": "nosniff"},
-        )
-    except TaskAttachmentsServiceError as error:
-        logger.exception("❌ Ошибка выдачи файла id=%s. Детали: %s", attachment_id, error)
+    except DOWNLOAD_ERRORS as error:
+        logger.info("ℹ️ Выдача файла id=%s отклонена: %s.", attachment_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+    logger.info("✅ Содержимое файла id=%s подготовлено.", attachment_id)
+    # Дальше начинается долгоживущая фаза: наружу уходят только
+    # неизменяемые значения, ни одной ссылки на состояние базы.
+    return FileResponse(
+        path=download.path,
+        media_type=download.media_type,
+        filename=download.filename,
+        content_disposition_type=download.disposition,
+        headers={"X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.delete(
