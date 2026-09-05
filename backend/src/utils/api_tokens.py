@@ -6,6 +6,7 @@ import secrets
 TOKEN_PREFIX = "tt_"
 TOKEN_ENTROPY_BYTES = 32
 DISPLAY_PREFIX_LENGTH = 8
+BEARER_SCHEME = "bearer"
 
 
 def generate_token_secret() -> str:
@@ -42,3 +43,24 @@ def build_display_prefix(secret: str) -> str:
         Первые символы секрета без случайной части.
     """
     return secret[:DISPLAY_PREFIX_LENGTH]
+
+
+def extract_bearer_secret(authorization: str | None) -> str | None:
+    """Достаёт секрет из заголовка ``Authorization: Bearer <token>``.
+
+    Разбор заголовка одинаков для HTTP и MCP, поэтому живёт в одном месте:
+    две реализации схемы предъявления однажды разойдутся по краевым случаям.
+
+    Args:
+        authorization: Значение заголовка ``Authorization`` или ``None``.
+
+    Returns:
+        Секрет токена либо ``None``, если предъявлена другая схема.
+    """
+    if not authorization:
+        return None
+    scheme, _, value = authorization.partition(" ")
+    if scheme.strip().lower() != BEARER_SCHEME:
+        return None
+    secret = value.strip()
+    return secret or None

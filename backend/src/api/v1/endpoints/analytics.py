@@ -1,9 +1,9 @@
 import logging
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.api.v1.responses import SERVER_ERROR_RESPONSE
-from src.dependencies.auth import CurrentUserDep
+from src.dependencies.auth import PrincipalDep, require_write_scope
 from src.dependencies.services import AnalyticsServiceDep
 from src.exceptions.analytics import AnalyticsServiceError
 from src.exceptions.knowledge import KnowledgeProviderError
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
     response_model=AnalyticsReportSchema | None,
 )
 async def get_analytics_report(
-    user: CurrentUserDep,
+    principal: PrincipalDep,
     service: AnalyticsServiceDep,
     project_id: int | None = Query(
         None,
@@ -39,7 +39,7 @@ async def get_analytics_report(
     """Получает последний сохранённый аналитический свод.
 
     Args:
-        user: Пользователь текущей сессии.
+        principal: Принципал текущего запроса.
         service: Сервис аналитических сводов.
         project_id: Проект анализа или ``None`` для всего портфеля.
 
@@ -51,7 +51,7 @@ async def get_analytics_report(
     """
     logger.info("🚀 Запрос GET /dashboard/analytics. Проект: %s.", project_id)
     try:
-        result = await service.get_latest(user_id=user.id, project_id=project_id)
+        result = await service.get_latest(user_id=principal.user_id, project_id=project_id)
         logger.info("✅ Свод получен: %s.", "есть" if result else "ещё не формировался")
         return result
     except (ProjectNotFoundError, AnalyticsServiceError) as error:
@@ -61,6 +61,7 @@ async def get_analytics_report(
 
 @router.post(
     path="",
+    dependencies=[Depends(require_write_scope)],
     status_code=status.HTTP_201_CREATED,
     summary="Сформировать аналитический свод",
     description=(
@@ -80,14 +81,14 @@ async def get_analytics_report(
 )
 async def create_analytics_report(
     payload: AnalyticsGenerateRequest,
-    user: CurrentUserDep,
+    principal: PrincipalDep,
     service: AnalyticsServiceDep,
 ) -> AnalyticsReportSchema:
     """Формирует новый аналитический свод дашборда.
 
     Args:
         payload: Область анализа.
-        user: Пользователь текущей сессии.
+        principal: Принципал текущего запроса.
         service: Сервис аналитических сводов.
 
     Returns:
@@ -99,7 +100,11 @@ async def create_analytics_report(
     """
     logger.info("🚀 Запрос POST /dashboard/analytics. Проект: %s.", payload.project_id)
     try:
-        result = await service.generate(user=user, project_id=payload.project_id)
+        result = await service.generate(
+            actor_id=principal.user_id,
+            actor_name=principal.full_name,
+            project_id=payload.project_id,
+        )
         logger.info(
             "✅ Свод id=%s сформирован: находок %s, рекомендаций %s.",
             result.id,

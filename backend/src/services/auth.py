@@ -1,38 +1,178 @@
-import logging
+"""Регистрация, вход и разрешение принципала запроса.
 
+Аутентификация целиком принадлежит сервисному слою: и HTTP, и MCP задают
+один и тот же вопрос «кто это и что ему можно», и ответ на него не должен
+зависеть от транспорта.
+"""
+
+import logging
+from dataclasses import dataclass
+
+from src.db.models.api_tokens import ApiTokenScope
 from src.db.models.users import User
+from src.exceptions.api_tokens import ApiTokensRepositoryError
 from src.exceptions.auth import (
     AuthServiceError,
     InactiveUserError,
     InvalidCredentialsError,
     InvalidInviteCodeError,
+    NotAuthenticatedError,
 )
 from src.exceptions.users import (
     UsernameAlreadyExistsRepositoryError,
     UsernameConflictError,
     UsersRepositoryError,
 )
+from src.repositories.api_tokens import ApiTokensRepository
 from src.repositories.users import UsersRepository
 from src.schemas.users import UserSchema, UserSummarySchema
+from src.utils.api_tokens import hash_token_secret
 from src.utils.security import hash_password, secrets_match, verify_password
-from src.utils.tokens import create_access_token
+from src.utils.tokens import create_access_token, decode_access_token
 
 logger = logging.getLogger(__name__)
 
 
-class AuthService:
-    """Сервис регистрации и входа."""
+@dataclass(frozen=True, slots=True)
+class Principal:
+    """Кто выполняет запрос и с какими правами.
 
-    def __init__(self, users_repository: UsersRepository, *, invite_code: str):
-        """Создаёт сервис регистрации и входа.
+    Наружу отдаются только безопасные поля идентичности: ORM-модель
+    пользователя не должна подниматься в транспортный слой.
+
+    Сессия из cookie всегда имеет полные права: ограничение скоупа введено
+    для внешних клиентов, а не для владельца, работающего в интерфейсе.
+
+    Attributes:
+        user_id: Идентификатор пользователя запроса.
+        username: Логин пользователя.
+        last_name: Фамилия.
+        first_name: Имя.
+        middle_name: Отчество, если оно указано.
+        scope: Права предъявленных учётных данных.
+        via_api_token: Предъявлен API-токен, а не сессия интерфейса.
+    """
+
+    user_id: int
+    username: str
+    last_name: str
+    first_name: str
+    middle_name: str | None
+    scope: ApiTokenScope
+    via_api_token: bool
+
+    @property
+    def can_write(self) -> bool:
+        """Разрешено ли этим учётным данным изменять данные."""
+        return self.scope is ApiTokenScope.WRITE
+
+    @property
+    def full_name(self) -> str:
+        """Полное имя с отчеством для снимков авторства."""
+        parts = (self.last_name, self.first_name, self.middle_name)
+        return " ".join(part for part in parts if part) or self.username
+
+    @property
+    def short_name(self) -> str:
+        """Имя без отчества для коротких подписей."""
+        parts = (self.last_name, self.first_name)
+        return " ".join(part for part in parts if part) or self.username
+
+
+class AuthService:
+    """Сервис регистрации, входа и разрешения принципала запроса."""
+
+    def __init__(
+        self,
+        users_repository: UsersRepository,
+        *,
+        tokens_repository: ApiTokensRepository,
+        invite_code: str,
+    ):
+        """Создаёт сервис аутентификации.
 
         Args:
             users_repository: Репозиторий пользователей.
+            tokens_repository: Репозиторий API-токенов.
             invite_code: Ожидаемый код приглашения. Передаётся значением:
                 сервис не должен знать о конфигурации приложения.
         """
         self.users_repository = users_repository
+        self.tokens_repository = tokens_repository
         self.invite_code = invite_code
+
+    async def resolve_principal(
+        self,
+        *,
+        session_token: str | None,
+        bearer_secret: str | None,
+    ) -> Principal:
+        """Определяет пользователя запроса по API-токену либо по сессии.
+
+        Единственная точка аутентификации приложения: и HTTP-эндпоинты, и
+        MCP-инструменты проходят через неё, поэтому правила прав не
+        дублируются и не расходятся между транспортами.
+
+        Токен побеждает cookie: иначе ограничение скоупа обходилось бы
+        предъявлением обоих способов сразу.
+
+        Args:
+            session_token: Значение cookie сессии, если оно предъявлено.
+            bearer_secret: Секрет из заголовка ``Authorization``.
+
+        Returns:
+            Принципал запроса вместе с его правами.
+
+        Raises:
+            NotAuthenticatedError: Если учётные данные отсутствуют или
+                недействительны. Отозванный, истёкший и выдуманный токен
+                неотличимы для клиента намеренно.
+            InactiveUserError: Если учётная запись отключена.
+            AuthServiceError: Если проверить учётные данные не удалось.
+        """
+        if bearer_secret is not None:
+            return await self._principal_from_token(secret=bearer_secret)
+        if not session_token:
+            raise NotAuthenticatedError()
+        user_id = decode_access_token(session_token)
+        if user_id is None:
+            raise NotAuthenticatedError()
+        user = await self._load_active_user(user_id)
+        return _to_principal(user, scope=ApiTokenScope.WRITE, via_api_token=False)
+
+    async def _principal_from_token(self, *, secret: str) -> Principal:
+        """Проверяет предъявленный секрет и собирает принципала."""
+        try:
+            token = await self.tokens_repository.get_active_by_hash(hash_token_secret(secret))
+        except ApiTokensRepositoryError as error:
+            logger.error("❌ Ошибка проверки токена доступа.", exc_info=True)
+            raise AuthServiceError(str(error)) from error
+
+        if token is None:
+            raise NotAuthenticatedError()
+
+        user = await self._load_active_user(token.user_id)
+        try:
+            await self.tokens_repository.touch_last_used(token)
+        except ApiTokensRepositoryError:
+            # Отметка использования — диагностика, а не условие доступа.
+            logger.warning("⚠️ Не удалось отметить использование токена id=%s.", token.id)
+        return _to_principal(user, scope=token.scope, via_api_token=True)
+
+    async def _load_active_user(self, user_id: int) -> User:
+        """Загружает пользователя и проверяет, что он не отключён."""
+        try:
+            user = await self.users_repository.get_by_id(user_id=user_id)
+        except UsersRepositoryError as error:
+            logger.error("❌ Ошибка загрузки пользователя сессии.", exc_info=True)
+            raise AuthServiceError(str(error)) from error
+
+        if user is None:
+            # Учётные данные ещё валидны, но пользователя уже удалили.
+            raise NotAuthenticatedError()
+        if not user.is_active:
+            raise InactiveUserError(user_id=user.id)
+        return user
 
     async def register(self, data: dict) -> UserSchema:
         """Регистрирует пользователя после проверки кода приглашения.
@@ -128,4 +268,17 @@ def to_user_summary(user: User) -> UserSummarySchema:
         first_name=user.first_name,
         middle_name=user.middle_name,
         has_avatar=user.avatar_key is not None,
+    )
+
+
+def _to_principal(user: User, *, scope: ApiTokenScope, via_api_token: bool) -> Principal:
+    """Собирает принципала из пользователя и прав предъявленных данных."""
+    return Principal(
+        user_id=user.id,
+        username=user.username,
+        last_name=user.last_name,
+        first_name=user.first_name,
+        middle_name=user.middle_name,
+        scope=scope,
+        via_api_token=via_api_token,
     )

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from src.api.v1.responses import NOT_FOUND_RESPONSE, SERVER_ERROR_RESPONSE, VALIDATION_RESPONSE
 from src.db.models.tasks import TaskPriority
-from src.dependencies.access import get_accessible_project
+from src.dependencies.access import require_project_access
 from src.dependencies.services import CalendarServiceDep
 from src.exceptions.calendar import CalendarServiceError
 from src.exceptions.projects import ProjectNotFoundError
@@ -20,7 +20,7 @@ CalendarErrors = (CalendarServiceError, ProjectNotFoundError)
 
 @router.get(
     path="/projects/{project_id}/calendar",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить временной диапазон проекта",
     description="Возвращает компактные задачи с дедлайнами и справочники календаря.",
@@ -68,7 +68,7 @@ async def get_project_calendar(
 
 @router.get(
     path="/projects/{project_id}/calendar/unscheduled",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить задачи проекта без срока",
     description="Возвращает курсорную страницу задач без start_date и due_date.",

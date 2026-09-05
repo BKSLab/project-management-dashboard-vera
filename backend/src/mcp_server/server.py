@@ -67,7 +67,7 @@ async def list_projects(context: Context) -> list[dict]:
     async with tool_context(context) as tools:
         try:
             allowed = await ProjectMembersRepository(tools.session).get_project_ids_for_user(
-                user_id=tools.user.id
+                user_id=tools.principal.user_id
             )
             projects = await ProjectsRepository(tools.session).get_all()
         except ApplicationError as error:

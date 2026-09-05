@@ -4,7 +4,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from src.api.v1.responses import NOT_FOUND_RESPONSE, SERVER_ERROR_RESPONSE, VALIDATION_RESPONSE
-from src.dependencies.access import get_accessible_comment, get_accessible_task
+from src.dependencies.access import require_comment_access, require_task_access
+from src.dependencies.auth import require_write_scope
 from src.dependencies.services import TaskCommentsServiceDep
 from src.exceptions.task_comments import TaskCommentsServiceError
 from src.exceptions.tasks import TasksServiceError
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @router.get(
     path="/tasks/{task_id}/comments",
-    dependencies=[Depends(get_accessible_task)],
+    dependencies=[Depends(require_task_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить комментарии задачи",
     description="Возвращает комментарии задачи в хронологическом порядке.",
@@ -55,7 +56,7 @@ async def get_comments(
 
 @router.post(
     path="/tasks/{task_id}/comments",
-    dependencies=[Depends(get_accessible_task)],
+    dependencies=[Depends(require_write_scope), Depends(require_task_access)],
     status_code=status.HTTP_201_CREATED,
     summary="Добавить комментарий к задаче",
     description="Добавляет комментарий и фиксирует событие в истории задачи.",
@@ -100,7 +101,7 @@ async def add_comment(
 
 @router.delete(
     path="/comments/{comment_id}",
-    dependencies=[Depends(get_accessible_comment)],
+    dependencies=[Depends(require_write_scope), Depends(require_comment_access)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить комментарий задачи",
     description="Удаляет комментарий по его идентификатору.",

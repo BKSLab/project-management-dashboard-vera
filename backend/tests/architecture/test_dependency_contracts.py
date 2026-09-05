@@ -177,3 +177,86 @@ def test_client_does_not_create_its_own_transport(path: Path) -> None:
         f"{path.relative_to(SRC.parent)} создаёт сетевой клиент в строках {created}. "
         "Transport создаёт lifespan и передаёт конструктором."
     )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [SRC / "dependencies" / "auth.py", SRC / "dependencies" / "access.py"],
+    ids=["auth", "access"],
+)
+def test_auth_and_access_adapters_do_not_touch_data(path: Path) -> None:
+    """Auth и access зависимости не обращаются к данным.
+
+    Им разрешено единственное исключение — перевод ошибки сервиса в
+    `HTTPException`. Всё остальное, включая правила доступа и чтение
+    репозиториев, принадлежит сервисному слою.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    forbidden_prefixes = ("src.repositories", "src.db")
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            if node.module.startswith(forbidden_prefixes):
+                offenders.append(f"{node.module}:{node.lineno}")
+        elif isinstance(node, ast.Import):
+            offenders.extend(
+                f"{alias.name}:{node.lineno}"
+                for alias in node.names
+                if alias.name.startswith(forbidden_prefixes)
+            )
+
+    assert not offenders, (
+        f"{path.relative_to(SRC.parent)} обращается к слою данных: {offenders}. "
+        "Правила доступа принадлежат сервису."
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [SRC / "dependencies" / "auth.py", SRC / "dependencies" / "access.py"],
+    ids=["auth", "access"],
+)
+def test_required_dependencies_have_no_none_default(path: Path) -> None:
+    """Обязательная зависимость не может отсутствовать молча.
+
+    `= None` у репозитория или сервиса превращает ошибку сборки графа в
+    падение по `AttributeError` где-то ниже.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+            continue
+        args = node.args
+        defaults = dict(
+            zip(args.args[len(args.args) - len(args.defaults) :], args.defaults, strict=True)
+        )
+        for argument, default in defaults.items():
+            annotation = ast.unparse(argument.annotation) if argument.annotation else ""
+            is_none_default = isinstance(default, ast.Constant) and default.value is None
+            looks_required = annotation.endswith(("ServiceDep", "RepositoryDep"))
+            if is_none_default and looks_required:
+                offenders.append(f"{node.name}({argument.arg}) в строке {node.lineno}")
+
+    assert not offenders, (
+        f"{path.relative_to(SRC.parent)}: обязательные зависимости объявлены "
+        f"необязательными: {offenders}"
+    )
+
+
+def test_endpoints_never_receive_orm_models_from_access_guards() -> None:
+    """Guard доступа не поднимает персистентную модель в эндпоинт."""
+    source = (SRC / "dependencies" / "access.py").read_text(encoding="utf-8")
+    removed_aliases = (
+        "AccessibleProjectDep",
+        "OwnedProjectDep",
+        "AccessibleTaskDep",
+        "AccessibleStageDep",
+        "AccessibleDocumentDep",
+    )
+
+    present = [alias for alias in removed_aliases if alias in source]
+    assert not present, (
+        f"Возвращены ORM-алиасы доступа: {present}. "
+        "Эндпоинт работает с идентификатором пути и разрешением."
+    )

@@ -1,6 +1,5 @@
 """Проверки аутентификации и разрешения сущностей в MCP-инструментах."""
 
-from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,13 +9,14 @@ from mcp.server.mcpserver.exceptions import ToolError
 from src.clients.vision import DisabledVisionCapability
 from src.core.settings import get_settings
 from src.db.models.api_tokens import ApiTokenScope
-from src.db.models.project_members import ProjectMember, ProjectRole
 from src.db.models.projects import Project
 from src.db.models.tasks import Task
 from src.db.models.users import User
-from src.dependencies.auth import AuthenticatedPrincipal
+from src.exceptions.access import ResourceNotAvailableError
 from src.mcp_server import context as ctx
 from src.mcp_server.context import ToolContext, _authorization_header, resolve_project, resolve_task
+from src.services.access import AccessGrant, AccessService
+from src.services.auth import Principal
 
 
 class FakeContext:
@@ -55,8 +55,12 @@ def _runtime() -> SimpleNamespace:
 
 def _tools() -> ToolContext:
     return ToolContext(
-        principal=AuthenticatedPrincipal(
-            user=_user(),
+        principal=Principal(
+            user_id=1,
+            username="tester",
+            last_name="Тестов",
+            first_name="Тест",
+            middle_name=None,
             scope=ApiTokenScope.READ,
             via_api_token=True,
         ),
@@ -64,6 +68,27 @@ def _tools() -> ToolContext:
         runtime=_runtime(),
         settings=get_settings(),
     )
+
+
+def _allowing_access_service() -> AsyncMock:
+    """Сервис доступа, подтверждающий участие пользователя в проекте."""
+    service = AsyncMock(spec=AccessService)
+    service.ensure_project_access.return_value = AccessGrant(
+        project_id=1,
+        resource_id=1,
+        is_owner=True,
+    )
+    return service
+
+
+def _denying_access_service() -> AsyncMock:
+    """Сервис доступа, для которого проект недоступен пользователю."""
+    service = AsyncMock(spec=AccessService)
+    service.ensure_project_access.side_effect = ResourceNotAvailableError(
+        resource="Проект",
+        resource_id=1,
+    )
+    return service
 
 
 @pytest.mark.parametrize(
@@ -95,15 +120,10 @@ async def test_resolve_project_rejects_foreign_project(monkeypatch: pytest.Monke
         async def get_by_key(self, key: str) -> Project:
             return _project()
 
-    class Members:
-        def __init__(self, session):
-            pass
-
-        async def get(self, *, project_id: int, user_id: int) -> None:
-            return None
+    access = _denying_access_service()
 
     monkeypatch.setattr(ctx, "ProjectsRepository", Projects)
-    monkeypatch.setattr(ctx, "ProjectMembersRepository", Members)
+    monkeypatch.setattr(ctx, "build_access_service", lambda session: access)
 
     with pytest.raises(ToolError) as error:
         await resolve_project(_tools(), "PROJ")
@@ -141,15 +161,10 @@ async def test_resolve_project_allows_member(monkeypatch: pytest.MonkeyPatch) ->
         async def get_by_key(self, key: str) -> Project:
             return _project()
 
-    class Members:
-        def __init__(self, session):
-            pass
-
-        async def get(self, *, project_id: int, user_id: int) -> ProjectMember:
-            return ProjectMember(project_id=project_id, user_id=user_id, role=ProjectRole.OWNER)
+    access = _allowing_access_service()
 
     monkeypatch.setattr(ctx, "ProjectsRepository", Projects)
-    monkeypatch.setattr(ctx, "ProjectMembersRepository", Members)
+    monkeypatch.setattr(ctx, "build_access_service", lambda session: access)
 
     project = await resolve_project(_tools(), "proj")
 
@@ -173,12 +188,7 @@ async def test_resolve_task_rejects_unknown_number(monkeypatch: pytest.MonkeyPat
         async def get_by_key(self, key: str) -> Project:
             return _project()
 
-    class Members:
-        def __init__(self, session):
-            pass
-
-        async def get(self, *, project_id: int, user_id: int) -> ProjectMember:
-            return ProjectMember(project_id=project_id, user_id=user_id, role=ProjectRole.OWNER)
+    access = _allowing_access_service()
 
     class Tasks:
         def __init__(self, session):
@@ -188,7 +198,7 @@ async def test_resolve_task_rejects_unknown_number(monkeypatch: pytest.MonkeyPat
             return [Task(id=1, project_id=project_id, stage_id=1, number=1, title="Есть")]
 
     monkeypatch.setattr(ctx, "ProjectsRepository", Projects)
-    monkeypatch.setattr(ctx, "ProjectMembersRepository", Members)
+    monkeypatch.setattr(ctx, "build_access_service", lambda session: access)
     monkeypatch.setattr(ctx, "TasksRepository", Tasks)
 
     with pytest.raises(ToolError) as error:
@@ -208,12 +218,7 @@ async def test_resolve_task_checks_project_access_first(monkeypatch: pytest.Monk
         async def get_by_key(self, key: str) -> Project:
             return _project()
 
-    class Members:
-        def __init__(self, session):
-            pass
-
-        async def get(self, *, project_id: int, user_id: int) -> None:
-            return None
+    access = _denying_access_service()
 
     class Tasks:
         def __init__(self, session):
@@ -224,7 +229,7 @@ async def test_resolve_task_checks_project_access_first(monkeypatch: pytest.Monk
             return []
 
     monkeypatch.setattr(ctx, "ProjectsRepository", Projects)
-    monkeypatch.setattr(ctx, "ProjectMembersRepository", Members)
+    monkeypatch.setattr(ctx, "build_access_service", lambda session: access)
     monkeypatch.setattr(ctx, "TasksRepository", Tasks)
 
     with pytest.raises(ToolError) as error:
@@ -234,10 +239,15 @@ async def test_resolve_task_checks_project_access_first(monkeypatch: pytest.Monk
     assert touched == []
 
 
-def test_tool_context_exposes_user() -> None:
-    """Инструмент получает пользователя, а не только принципала."""
+def test_tool_context_exposes_principal_without_orm_model() -> None:
+    """Инструмент получает принципала, а не ORM-модель пользователя.
+
+    Транспорт не должен видеть persistence-модель: наружу поднимаются
+    только безопасные поля идентичности.
+    """
     tools = _tools()
 
-    assert tools.user.id == 1
+    assert tools.principal.user_id == 1
+    assert tools.principal.username == "tester"
     assert tools.principal.via_api_token is True
-    assert isinstance(datetime.now(UTC), datetime)
+    assert not hasattr(tools, "user")

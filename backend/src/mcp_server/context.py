@@ -11,27 +11,24 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-from fastapi import HTTPException
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.app_state import RUNTIME_STATE_KEY, SETTINGS_STATE_KEY
 from src.core.settings import Settings
-from src.db.models.api_tokens import ApiTokenScope
-from src.db.models.project_members import ProjectMember
 from src.db.models.projects import Project
 from src.db.models.tasks import Task
-from src.db.models.users import User
 from src.db.session import async_session_factory
-from src.dependencies.auth import AuthenticatedPrincipal, get_principal
+from src.exceptions.access import AccessServiceError
+from src.exceptions.auth import AuthServiceError
 from src.exceptions.base import ApplicationError
 from src.knowledge.runtime import KnowledgeRuntime
-from src.repositories.api_tokens import ApiTokensRepository
-from src.repositories.project_members import ProjectMembersRepository
+from src.mcp_server.services import build_access_service, build_auth_service
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
-from src.repositories.users import UsersRepository
+from src.services.auth import Principal
+from src.utils.api_tokens import extract_bearer_secret
 
 logger = logging.getLogger(__name__)
 
@@ -50,15 +47,10 @@ class ToolContext:
     lifespan: у MCP и HTTP один набор ресурсов, а инструмент не ищет их сам.
     """
 
-    principal: AuthenticatedPrincipal
+    principal: Principal
     session: AsyncSession
     runtime: KnowledgeRuntime
     settings: Settings
-
-    @property
-    def user(self) -> User:
-        """Возвращает пользователя, от имени которого работает инструмент."""
-        return self.principal.user
 
 
 @asynccontextmanager
@@ -81,19 +73,17 @@ async def tool_context(
     runtime, settings = _app_resources(context)
     async with async_session_factory() as session:
         try:
-            principal = await get_principal(
-                session_cookie=None,
-                authorization=authorization,
-                users_repository=UsersRepository(session),
-                tokens_repository=ApiTokensRepository(session),
+            principal = await build_auth_service(session, settings).resolve_principal(
+                session_token=None,
+                bearer_secret=extract_bearer_secret(authorization),
             )
-        except HTTPException as error:
+        except AuthServiceError as error:
             # Клиенту не сообщается, чем именно плох токен: отозванный,
             # истёкший и выдуманный неотличимы.
             logger.info("ℹ️ MCP-вызов отклонён на аутентификации: %s.", error.status_code)
             raise ToolError(NOT_AUTHENTICATED) from error
 
-        if require_write and principal.scope is not ApiTokenScope.WRITE:
+        if require_write and not principal.can_write:
             raise ToolError(READ_ONLY_TOKEN)
         yield ToolContext(
             principal=principal,
@@ -159,20 +149,19 @@ async def resolve_task(tools: ToolContext, task_key: str) -> tuple[Task, Project
     return task, project
 
 
-async def _ensure_member(tools: ToolContext, project_id: int) -> ProjectMember:
-    """Проверяет участие пользователя в проекте тем же правилом, что и HTTP-слой."""
+async def _ensure_member(tools: ToolContext, project_id: int) -> None:
+    """Проверяет участие пользователя в проекте тем же сервисом, что и HTTP-слой.
+
+    Отсутствие доступа и отсутствие проекта неразличимы: иначе перебором
+    выяснялось бы существование чужих проектов.
+    """
     try:
-        membership = await ProjectMembersRepository(tools.session).get(
+        await build_access_service(tools.session).ensure_project_access(
             project_id=project_id,
-            user_id=tools.user.id,
+            user_id=tools.principal.user_id,
         )
-    except ApplicationError as error:
-        raise ToolError("Не удалось проверить доступ к проекту.") from error
-    if membership is None:
-        # Отсутствие доступа и отсутствие проекта неразличимы: иначе перебором
-        # выяснялось бы существование чужих проектов.
-        raise ToolError(PROJECT_NOT_AVAILABLE)
-    return membership
+    except AccessServiceError as error:
+        raise ToolError(PROJECT_NOT_AVAILABLE) from error
 
 
 def _app_resources(context: Context) -> tuple[KnowledgeRuntime, Settings]:

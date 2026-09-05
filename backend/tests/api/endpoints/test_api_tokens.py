@@ -1,5 +1,6 @@
 """Проверки HTTP-контракта управления токенами доступа."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -7,11 +8,11 @@ from httpx import AsyncClient
 
 from main import app
 from src.db.models.api_tokens import ApiToken, ApiTokenScope
-from src.db.models.users import User
 from src.dependencies.auth import get_principal, require_session
 from src.dependencies.services import get_api_tokens_service
 from src.exceptions.api_tokens import ApiTokenLimitExceededError, ApiTokenNotFoundError
 from src.schemas.api_tokens import ApiTokenCreatedSchema, ApiTokenSchema
+from src.services.auth import Principal
 
 TOKENS_URL = "/api/v1/users/me/tokens"
 
@@ -63,10 +64,10 @@ class FakeTokensService:
 
 
 @pytest.fixture
-def session_user(current_user: User):
+def session_user(current_principal: Principal):
     """Пускает запросы как из интерфейса и подменяет сервис токенов."""
     service = FakeTokensService()
-    app.dependency_overrides[require_session] = lambda: current_user
+    app.dependency_overrides[require_session] = lambda: current_principal
     app.dependency_overrides[get_api_tokens_service] = lambda: service
     yield service
     app.dependency_overrides.pop(require_session, None)
@@ -137,13 +138,13 @@ async def test_create_token_maps_limit_error(
 async def test_revoke_token(
     api_client: AsyncClient,
     session_user: FakeTokensService,
-    current_user: User,
+    current_principal: Principal,
 ) -> None:
     """Отзыв выполняется от имени владельца."""
     response = await api_client.delete(f"{TOKENS_URL}/5")
 
     assert response.status_code == 204
-    assert session_user.revoked == (5, current_user.id)
+    assert session_user.revoked == (5, current_principal.user_id)
 
 
 async def test_revoke_unknown_token_returns_404(
@@ -168,18 +169,12 @@ async def test_revoke_unknown_token_returns_404(
 )
 async def test_api_token_cannot_manage_tokens(
     api_client: AsyncClient,
-    current_user: User,
+    current_principal: Principal,
     method: str,
     url: str,
 ) -> None:
     """Скомпрометированный токен не может выпустить себе замену или отозвать чужие."""
-    from src.dependencies.auth import AuthenticatedPrincipal
-
-    principal = AuthenticatedPrincipal(
-        user=current_user,
-        scope=ApiTokenScope.WRITE,
-        via_api_token=True,
-    )
+    principal = replace(current_principal, scope=ApiTokenScope.WRITE, via_api_token=True)
     app.dependency_overrides[get_principal] = lambda: principal
     app.dependency_overrides[get_api_tokens_service] = lambda: FakeTokensService()
     try:

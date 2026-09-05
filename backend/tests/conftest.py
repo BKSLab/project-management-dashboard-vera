@@ -10,22 +10,19 @@ from testcontainers.postgres import PostgresContainer
 
 from main import app
 from src.db.models import Base
-from src.db.models.documents import Document
-from src.db.models.project_stages import ProjectStage
-from src.db.models.projects import Project
-from src.db.models.task_comments import TaskComment
-from src.db.models.tasks import Task
-from src.db.models.users import User
+from src.db.models.api_tokens import ApiTokenScope
 from src.dependencies.access import (
-    get_accessible_comment,
-    get_accessible_document,
-    get_accessible_link,
-    get_accessible_project,
-    get_accessible_stage,
-    get_accessible_task,
-    get_owned_project,
+    require_comment_access,
+    require_document_access,
+    require_link_access,
+    require_project_access,
+    require_project_ownership,
+    require_stage_access,
+    require_task_access,
 )
-from src.dependencies.auth import get_current_user
+from src.dependencies.auth import get_principal
+from src.services.access import AccessGrant
+from src.services.auth import Principal
 
 
 @pytest.fixture(scope="session")
@@ -71,36 +68,37 @@ async def db_session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest.fixture
-def current_user() -> User:
-    """Пользователь, от имени которого идут API-тесты."""
-    return User(
-        id=1,
+def current_principal() -> Principal:
+    """Принципал, от имени которого идут API-тесты."""
+    return Principal(
+        user_id=1,
         username="tester",
-        password_hash="hash",
         last_name="Тестов",
         first_name="Тест",
-        is_active=True,
+        middle_name=None,
+        scope=ApiTokenScope.WRITE,
+        via_api_token=False,
     )
 
 
 @pytest.fixture(autouse=True)
-def authenticate(current_user: User) -> Generator[None, None, None]:
-    """Подменяет сессию и разрешение доступа во всех API-тестах.
+def authenticate(current_principal: Principal) -> Generator[None, None, None]:
+    """Подменяет аутентификацию и разрешение доступа во всех API-тестах.
 
     Проверки самой авторизации живут в отдельных тестах, а остальным нужно
     проверять поведение эндпоинтов, а не стену входа.
     """
-    project = Project(id=1, owner_id=current_user.id, key="TEST", name="Тест", color="#58a6ff")
+    grant = AccessGrant(project_id=1, resource_id=1, is_owner=True)
     app.dependency_overrides.update(
         {
-            get_current_user: lambda: current_user,
-            get_accessible_project: lambda: project,
-            get_owned_project: lambda: project,
-            get_accessible_task: lambda: Task(id=1, project_id=project.id),
-            get_accessible_stage: lambda: ProjectStage(id=1, project_id=project.id),
-            get_accessible_document: lambda: Document(id=1, project_id=project.id),
-            get_accessible_comment: lambda: TaskComment(id=1, task_id=1),
-            get_accessible_link: lambda: None,
+            get_principal: lambda: current_principal,
+            require_project_access: lambda: grant,
+            require_project_ownership: lambda: grant,
+            require_task_access: lambda: grant,
+            require_stage_access: lambda: grant,
+            require_document_access: lambda: grant,
+            require_comment_access: lambda: grant,
+            require_link_access: lambda: grant,
         }
     )
     yield

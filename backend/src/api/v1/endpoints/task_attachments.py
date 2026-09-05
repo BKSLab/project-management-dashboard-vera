@@ -10,7 +10,8 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
-from src.dependencies.access import get_accessible_task
+from src.dependencies.access import require_task_access
+from src.dependencies.auth import require_write_scope
 from src.dependencies.services import TaskAttachmentsServiceDep
 from src.exceptions.task_attachments import TaskAttachmentsServiceError
 from src.exceptions.tasks import TasksServiceError
@@ -31,7 +32,7 @@ UNSUPPORTED_TYPE_RESPONSE = {
 
 @router.get(
     path="/tasks/{task_id}/attachments",
-    dependencies=[Depends(get_accessible_task)],
+    dependencies=[Depends(require_task_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить файлы задачи",
     description="Возвращает метаданные всех файлов задачи в хронологическом порядке.",
@@ -68,7 +69,7 @@ async def get_task_attachments(
 
 @router.post(
     path="/tasks/{task_id}/attachments",
-    dependencies=[Depends(get_accessible_task)],
+    dependencies=[Depends(require_write_scope), Depends(require_task_access)],
     status_code=status.HTTP_201_CREATED,
     summary="Прикрепить файл к задаче",
     description="Проверяет и сохраняет один multipart-файл размером до 10 МБ.",
@@ -122,7 +123,7 @@ async def upload_task_attachment(
 
 @router.get(
     path="/tasks/{task_id}/attachments/{attachment_id}/content",
-    dependencies=[Depends(get_accessible_task)],
+    dependencies=[Depends(require_task_access)],
     status_code=status.HTTP_200_OK,
     summary="Открыть или скачать файл задачи",
     description="Показывает безопасное растровое изображение inline, остальные файлы скачивает.",
@@ -173,7 +174,7 @@ async def get_task_attachment_content(
 
 @router.delete(
     path="/tasks/{task_id}/attachments/{attachment_id}",
-    dependencies=[Depends(get_accessible_task)],
+    dependencies=[Depends(require_write_scope), Depends(require_task_access)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить файл задачи",
     description="Удаляет метаданные и физическое содержимое файла.",

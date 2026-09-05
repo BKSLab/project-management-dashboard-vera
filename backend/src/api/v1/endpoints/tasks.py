@@ -10,8 +10,8 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
-from src.dependencies.access import get_accessible_project, get_accessible_task
-from src.dependencies.auth import CurrentUserDep
+from src.dependencies.access import require_project_access, require_task_access
+from src.dependencies.auth import PrincipalDep, require_write_scope
 from src.dependencies.services import (
     DocumentLinksServiceDep,
     TaskDescriptionServiceDep,
@@ -48,7 +48,7 @@ TaskErrors = (
 
 @router.get(
     path="/projects/{project_id}/tasks",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить задачи проекта",
     description="Возвращает задачи проекта с фильтром по стадии и поиском по тексту и номеру.",
@@ -104,7 +104,7 @@ async def get_tasks(
 
 @router.post(
     path="/projects/{project_id}/tasks",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_201_CREATED,
     summary="Создать задачу",
     description="Создаёт задачу в проекте и выдаёт ей сквозной номер вида KEY-42.",
@@ -121,7 +121,7 @@ async def get_tasks(
 async def create_task(
     project_id: Annotated[int, Path(gt=0, description="Идентификатор проекта.")],
     data: TaskCreateSchema,
-    user: CurrentUserDep,
+    principal: PrincipalDep,
     service: TasksServiceDep,
 ) -> TaskSchema:
     """Создаёт задачу проекта.
@@ -142,7 +142,7 @@ async def create_task(
         result = await service.create_task(
             project_id=project_id,
             data=data.model_dump(),
-            created_by_user_id=user.id,
+            created_by_user_id=principal.user_id,
         )
         logger.info("✅ Задача создана. id=%s, ключ=%s.", result.id, result.key)
         return result
@@ -153,7 +153,7 @@ async def create_task(
 
 @router.post(
     path="/projects/{project_id}/tasks/rephrase",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Переформулировать описание задачи",
     description=(
@@ -223,7 +223,7 @@ async def rephrase_task_description(
 
 @router.get(
     path="/tasks/{task_id}",
-    dependencies=[Depends(get_accessible_task)],
+    dependencies=[Depends(require_task_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить задачу",
     description="Возвращает карточку задачи по идентификатору.",
@@ -260,7 +260,7 @@ async def get_task(
 
 @router.patch(
     path="/tasks/{task_id}",
-    dependencies=[Depends(get_accessible_task)],
+    dependencies=[Depends(require_write_scope), Depends(require_task_access)],
     status_code=status.HTTP_200_OK,
     summary="Изменить задачу",
     description="Частично обновляет поля задачи и фиксирует значимые изменения в истории.",
@@ -272,7 +272,7 @@ async def get_task(
 async def update_task(
     task_id: Annotated[int, Path(gt=0, description="Идентификатор задачи.")],
     data: TaskUpdateSchema,
-    user: CurrentUserDep,
+    principal: PrincipalDep,
     service: TasksServiceDep,
 ) -> TaskSchema:
     """Обновляет задачу.
@@ -293,7 +293,7 @@ async def update_task(
         result = await service.update_task(
             task_id=task_id,
             data=data.model_dump(exclude_unset=True),
-            updated_by_user_id=user.id,
+            updated_by_user_id=principal.user_id,
         )
         logger.info("✅ Задача id=%s обновлена.", task_id)
         return result
@@ -304,7 +304,7 @@ async def update_task(
 
 @router.post(
     path="/tasks/{task_id}/baseline",
-    dependencies=[Depends(get_accessible_task)],
+    dependencies=[Depends(require_write_scope), Depends(require_task_access)],
     status_code=status.HTTP_200_OK,
     summary="Зафиксировать baseline задачи",
     description="Копирует текущие плановые даты в отдельный утверждённый baseline.",
@@ -327,7 +327,7 @@ async def fix_task_baseline(
 
 @router.patch(
     path="/tasks/{task_id}/move",
-    dependencies=[Depends(get_accessible_task)],
+    dependencies=[Depends(require_write_scope), Depends(require_task_access)],
     status_code=status.HTTP_200_OK,
     summary="Переместить задачу",
     description="Переносит задачу в другую стадию доски с сохранением позиции.",
@@ -375,7 +375,7 @@ async def move_task(
 
 @router.delete(
     path="/tasks/{task_id}",
-    dependencies=[Depends(get_accessible_task)],
+    dependencies=[Depends(require_write_scope), Depends(require_task_access)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить задачу",
     description="Удаляет задачу вместе с комментариями, историей и файлами.",
@@ -410,7 +410,7 @@ async def delete_task(
 
 @router.get(
     path="/tasks/{task_id}/links",
-    dependencies=[Depends(get_accessible_task)],
+    dependencies=[Depends(require_task_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить документы задачи",
     description="Возвращает документы, связанные с задачей.",

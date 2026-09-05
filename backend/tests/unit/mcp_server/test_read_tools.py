@@ -17,8 +17,7 @@ from src.db.models.project_stages import ProjectStage
 from src.db.models.projects import Project, ProjectStatus
 from src.db.models.task_comments import TaskComment
 from src.db.models.tasks import Task, TaskPriority
-from src.db.models.users import User
-from src.dependencies.auth import AuthenticatedPrincipal
+from src.exceptions.access import ResourceNotAvailableError
 from src.mcp_server import server as srv
 from src.mcp_server.context import ToolContext
 from src.schemas.calendar import (
@@ -29,6 +28,8 @@ from src.schemas.calendar import (
     CalendarTaskSchema,
     UnscheduledTasksPageSchema,
 )
+from src.services.access import AccessGrant, AccessService
+from src.services.auth import Principal
 
 VISIBLE = Project(
     id=1,
@@ -75,6 +76,19 @@ TASKS = [
 ]
 
 
+def _access_service(*, member_project_ids: set[int]) -> AsyncMock:
+    """Сервис доступа, пускающий только в перечисленные проекты."""
+    service = AsyncMock(spec=AccessService)
+
+    async def ensure(*, project_id: int, user_id: int) -> AccessGrant:
+        if project_id not in member_project_ids:
+            raise ResourceNotAvailableError(resource="Проект", resource_id=project_id)
+        return AccessGrant(project_id=project_id, resource_id=project_id, is_owner=True)
+
+    service.ensure_project_access.side_effect = ensure
+    return service
+
+
 class FakeContext:
     """Контекст вызова MCP с заголовком токена."""
 
@@ -93,15 +107,12 @@ def _runtime() -> SimpleNamespace:
 
 def _tools(scope: ApiTokenScope = ApiTokenScope.READ) -> ToolContext:
     return ToolContext(
-        principal=AuthenticatedPrincipal(
-            user=User(
-                id=1,
-                username="tester",
-                password_hash="hash",
-                last_name="Тестов",
-                first_name="Тест",
-                is_active=True,
-            ),
+        principal=Principal(
+            user_id=1,
+            username="tester",
+            last_name="Тестов",
+            first_name="Тест",
+            middle_name=None,
             scope=scope,
             via_api_token=True,
         ),
@@ -264,6 +275,12 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
     for module in (srv, __import__("src.mcp_server.context", fromlist=["x"])):
         monkeypatch.setattr(module, "ProjectsRepository", Projects, raising=False)
         monkeypatch.setattr(module, "ProjectMembersRepository", Members, raising=False)
+        monkeypatch.setattr(
+            module,
+            "build_access_service",
+            lambda session: _access_service(member_project_ids={1}),
+            raising=False,
+        )
         monkeypatch.setattr(module, "TasksRepository", Tasks, raising=False)
     monkeypatch.setattr(srv, "ProjectStagesRepository", Stages)
     monkeypatch.setattr(srv, "TaskCommentsRepository", Comments)

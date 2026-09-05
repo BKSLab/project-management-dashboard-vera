@@ -71,7 +71,7 @@ async def test_create_sticker_uses_authenticated_user(api_client: AsyncClient) -
     assert response.status_code == 201
     call = service.create_sticker.await_args.kwargs
     assert call["project_id"] == 1
-    assert call["current_user"].username == "tester"
+    assert call["author_username"] == "tester"
     assert call["data"].task_ids == [11]
     assert call["data"].canvas_x == 298.5
     assert call["data"].canvas_y == 42.0

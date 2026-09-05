@@ -1,14 +1,14 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 
 from src.api.v1.responses import (
     NOT_FOUND_RESPONSE,
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
-from src.dependencies.auth import CurrentUserDep
+from src.dependencies.auth import PrincipalDep, require_write_scope
 from src.dependencies.services import UsersServiceDep
 from src.exceptions.auth import AuthServiceError
 from src.exceptions.users import UsersServiceError
@@ -25,6 +25,7 @@ UNAUTHORIZED_RESPONSE = {
 
 @router.patch(
     path="/me",
+    dependencies=[Depends(require_write_scope)],
     status_code=status.HTTP_200_OK,
     summary="Изменить профиль",
     description="Обновляет ФИО и контакты текущего пользователя.",
@@ -39,14 +40,14 @@ UNAUTHORIZED_RESPONSE = {
 )
 async def update_me(
     data: UserUpdateSchema,
-    user: CurrentUserDep,
+    principal: PrincipalDep,
     service: UsersServiceDep,
 ) -> UserSchema:
     """Обновляет профиль текущего пользователя.
 
     Args:
         data: Изменяемые поля профиля.
-        user: Пользователь текущей сессии.
+        principal: Принципал текущего запроса.
         service: Сервис профиля.
 
     Returns:
@@ -55,13 +56,13 @@ async def update_me(
     Raises:
         HTTPException: Если обновить профиль не удалось.
     """
-    logger.info("🚀 Запрос PATCH /users/me. Пользователь: %s.", user.username)
+    logger.info("🚀 Запрос PATCH /users/me. Пользователь: %s.", principal.username)
     try:
         result = await service.update_profile(
-            user_id=user.id,
+            user_id=principal.user_id,
             data=data.model_dump(exclude_unset=True),
         )
-        logger.info("✅ Профиль пользователя %s обновлён.", user.username)
+        logger.info("✅ Профиль пользователя %s обновлён.", principal.username)
         return result
     except UsersServiceError as error:
         logger.exception("❌ Ошибка PATCH /users/me. Детали: %s", error)
@@ -70,6 +71,7 @@ async def update_me(
 
 @router.post(
     path="/me/password",
+    dependencies=[Depends(require_write_scope)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Сменить пароль",
     description="Меняет пароль после проверки текущего. Новый пароль вводится дважды.",
@@ -84,14 +86,14 @@ async def update_me(
 )
 async def change_password(
     data: PasswordChangeSchema,
-    user: CurrentUserDep,
+    principal: PrincipalDep,
     service: UsersServiceDep,
 ) -> None:
     """Меняет пароль текущего пользователя.
 
     Args:
         data: Текущий и новый пароль.
-        user: Пользователь текущей сессии.
+        principal: Принципал текущего запроса.
         service: Сервис профиля.
 
     Returns:
@@ -100,14 +102,14 @@ async def change_password(
     Raises:
         HTTPException: Если текущий пароль неверен или сменить не удалось.
     """
-    logger.info("🚀 Запрос POST /users/me/password. Пользователь: %s.", user.username)
+    logger.info("🚀 Запрос POST /users/me/password. Пользователь: %s.", principal.username)
     try:
         await service.change_password(
-            user_id=user.id,
+            user_id=principal.user_id,
             current_password=data.current_password,
             new_password=data.password,
         )
-        logger.info("✅ Пароль пользователя %s изменён.", user.username)
+        logger.info("✅ Пароль пользователя %s изменён.", principal.username)
     except (UsersServiceError, AuthServiceError) as error:
         logger.warning("⚠️ Ошибка POST /users/me/password. Детали: %s", error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
@@ -115,6 +117,7 @@ async def change_password(
 
 @router.post(
     path="/me/avatar",
+    dependencies=[Depends(require_write_scope)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Загрузить фотографию",
     description="Сохраняет фотографию профиля: JPEG, PNG или WebP до 5 МБ.",
@@ -128,14 +131,14 @@ async def change_password(
     },
 )
 async def upload_avatar(
-    user: CurrentUserDep,
+    principal: PrincipalDep,
     service: UsersServiceDep,
     file: Annotated[UploadFile, File(description="Файл изображения до 5 МБ.")],
 ) -> None:
     """Загружает фотографию профиля.
 
     Args:
-        user: Пользователь текущей сессии.
+        principal: Принципал текущего запроса.
         service: Сервис профиля.
         file: Загружаемый файл изображения.
 
@@ -148,11 +151,11 @@ async def upload_avatar(
     logger.info("🚀 Запрос POST /users/me/avatar. Файл: %r.", file.filename)
     try:
         await service.set_avatar(
-            user_id=user.id,
+            user_id=principal.user_id,
             content_type=file.content_type or "",
             content=await file.read(),
         )
-        logger.info("✅ Фотография пользователя %s загружена.", user.username)
+        logger.info("✅ Фотография пользователя %s загружена.", principal.username)
     except UsersServiceError as error:
         logger.warning("⚠️ Ошибка POST /users/me/avatar. Детали: %s", error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
@@ -172,11 +175,11 @@ async def upload_avatar(
     },
     response_class=Response,
 )
-async def get_avatar(user: CurrentUserDep, service: UsersServiceDep) -> Response:
+async def get_avatar(principal: PrincipalDep, service: UsersServiceDep) -> Response:
     """Отдаёт фотографию профиля.
 
     Args:
-        user: Пользователь текущей сессии.
+        principal: Принципал текущего запроса.
         service: Сервис профиля.
 
     Returns:
@@ -185,9 +188,9 @@ async def get_avatar(user: CurrentUserDep, service: UsersServiceDep) -> Response
     Raises:
         HTTPException: Если фотографии нет или прочитать её не удалось.
     """
-    logger.info("🚀 Запрос GET /users/me/avatar. Пользователь: %s.", user.username)
+    logger.info("🚀 Запрос GET /users/me/avatar. Пользователь: %s.", principal.username)
     try:
-        content, content_type = await service.get_avatar(user_id=user.id)
+        content, content_type = await service.get_avatar(user_id=principal.user_id)
         # Фотография меняется редко, но приватна: кэшируем только в браузере.
         return Response(
             content=content,
@@ -201,6 +204,7 @@ async def get_avatar(user: CurrentUserDep, service: UsersServiceDep) -> Response
 
 @router.delete(
     path="/me/avatar",
+    dependencies=[Depends(require_write_scope)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить фотографию",
     description="Удаляет фотографию профиля текущего пользователя.",
@@ -212,11 +216,11 @@ async def get_avatar(user: CurrentUserDep, service: UsersServiceDep) -> Response
         500: SERVER_ERROR_RESPONSE,
     },
 )
-async def delete_avatar(user: CurrentUserDep, service: UsersServiceDep) -> None:
+async def delete_avatar(principal: PrincipalDep, service: UsersServiceDep) -> None:
     """Удаляет фотографию профиля.
 
     Args:
-        user: Пользователь текущей сессии.
+        principal: Принципал текущего запроса.
         service: Сервис профиля.
 
     Returns:
@@ -225,10 +229,10 @@ async def delete_avatar(user: CurrentUserDep, service: UsersServiceDep) -> None:
     Raises:
         HTTPException: Если фотографии нет или удалить её не удалось.
     """
-    logger.info("🚀 Запрос DELETE /users/me/avatar. Пользователь: %s.", user.username)
+    logger.info("🚀 Запрос DELETE /users/me/avatar. Пользователь: %s.", principal.username)
     try:
-        await service.delete_avatar(user_id=user.id)
-        logger.info("✅ Фотография пользователя %s удалена.", user.username)
+        await service.delete_avatar(user_id=principal.user_id)
+        logger.info("✅ Фотография пользователя %s удалена.", principal.username)
     except UsersServiceError as error:
         logger.warning("⚠️ Ошибка DELETE /users/me/avatar. Детали: %s", error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error

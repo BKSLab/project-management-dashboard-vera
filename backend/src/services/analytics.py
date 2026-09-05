@@ -18,7 +18,6 @@ from src.db.models.task_activity import TaskActivity
 from src.db.models.task_comments import TaskComment
 from src.db.models.task_dependencies import TaskDependency
 from src.db.models.tasks import Task
-from src.db.models.users import User
 from src.db.models.wbs_nodes import WbsNode
 from src.exceptions.analytics import (
     AnalyticsEmptyScopeError,
@@ -233,11 +232,18 @@ class AnalyticsService:
             return None
         return _to_report_schema(report=report, project=report.project)
 
-    async def generate(self, *, user: User, project_id: int | None) -> AnalyticsReportSchema:
+    async def generate(
+        self,
+        *,
+        actor_id: int,
+        actor_name: str,
+        project_id: int | None,
+    ) -> AnalyticsReportSchema:
         """Формирует новый аналитический свод по проекту или всему портфелю.
 
         Args:
-            user: Пользователь, запросивший анализ.
+            actor_id: Идентификатор пользователя, запросившего анализ.
+            actor_name: Имя автора на момент формирования свода.
             project_id: Проект анализа; ``None`` — весь портфель пользователя.
 
         Returns:
@@ -255,7 +261,7 @@ class AnalyticsService:
         scope = AnalyticsScope.PROJECT if project_id is not None else AnalyticsScope.PORTFOLIO
 
         try:
-            projects = await self._resolve_projects(user_id=user.id, project_id=project_id)
+            projects = await self._resolve_projects(user_id=actor_id, project_id=project_id)
             slices = [
                 await self._collect_project(project=project, scope=scope) for project in projects
             ]
@@ -291,8 +297,8 @@ class AnalyticsService:
             report = await self.reports_repository.save(
                 data={
                     "project_id": project_id,
-                    "created_by_user_id": user.id,
-                    "created_by_display_name_snapshot": _display_name(user),
+                    "created_by_user_id": actor_id,
+                    "created_by_display_name_snapshot": actor_name[:NAME_LIMIT],
                     "llm_model": self.llm_client.model,
                     "duration_ms": duration_ms,
                     "payload": payload | {"signals": signals.model_dump(mode="json")},
@@ -937,11 +943,3 @@ def _to_report_schema(report: AnalyticsReport, project: Project | None) -> Analy
         signals=payload.get("signals", {}),
         context=report.context_summary or {},
     )
-
-
-def _display_name(user: User) -> str:
-    """Фиксирует понятное имя автора запроса на момент формирования свода."""
-    full_name = " ".join(
-        part for part in (user.last_name, user.first_name, user.middle_name) if part
-    )
-    return (full_name or user.username)[:NAME_LIMIT]

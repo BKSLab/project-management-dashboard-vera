@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
 
 from src.api.v1.responses import (
     CONFLICT_RESPONSE,
@@ -9,7 +9,12 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
-from src.dependencies.access import AccessibleProjectDep, OwnedProjectDep
+from src.dependencies.access import (
+    ProjectIdPath,
+    require_project_access,
+    require_project_ownership,
+)
+from src.dependencies.auth import require_write_scope
 from src.dependencies.services import ProjectMembersServiceDep
 from src.exceptions.projects import ProjectsServiceError
 from src.exceptions.users import UsersServiceError
@@ -21,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 @router.get(
     path="/projects/{project_id}/members",
+    dependencies=[Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить команду проекта",
     description="Возвращает только пользователей, уже входящих в команду проекта.",
@@ -29,20 +35,21 @@ logger = logging.getLogger(__name__)
     response_model=list[ProjectMemberSchema],
 )
 async def get_project_members(
-    project: AccessibleProjectDep,
+    project_id: ProjectIdPath,
     service: ProjectMembersServiceDep,
 ) -> list[ProjectMemberSchema]:
     """Возвращает команду доступного пользователю проекта."""
-    logger.info("🚀 Запрос GET /projects/%s/members.", project.id)
+    logger.info("🚀 Запрос GET /projects/%s/members.", project_id)
     try:
-        return await service.get_member_list(project_id=project.id)
+        return await service.get_member_list(project_id=project_id)
     except ProjectsServiceError as error:
-        logger.exception("❌ Ошибка GET /projects/%s/members.", project.id)
+        logger.exception("❌ Ошибка GET /projects/%s/members.", project_id)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.get(
     path="/projects/{project_id}/members/{user_id}/avatar",
+    dependencies=[Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить фотографию участника проекта",
     description="Отдаёт фотографию только текущего участника доступного проекта.",
@@ -51,21 +58,21 @@ async def get_project_members(
     response_class=Response,
 )
 async def get_project_member_avatar(
-    project: AccessibleProjectDep,
+    project_id: ProjectIdPath,
     user_id: Annotated[int, Path(gt=0, description="Идентификатор участника.")],
     service: ProjectMembersServiceDep,
 ) -> Response:
     """Не раскрывает фотографии и существование пользователей вне команды."""
-    logger.info("🚀 Запрос GET /projects/%s/members/%s/avatar.", project.id, user_id)
+    logger.info("🚀 Запрос GET /projects/%s/members/%s/avatar.", project_id, user_id)
     try:
         content, content_type = await service.get_member_avatar(
-            project_id=project.id,
+            project_id=project_id,
             user_id=user_id,
         )
         logger.info(
             "✅ Фотография участника id=%s проекта id=%s получена.",
             user_id,
-            project.id,
+            project_id,
         )
         return Response(
             content=content,
@@ -76,7 +83,7 @@ async def get_project_member_avatar(
         logger.info(
             "ℹ️ Фотография участника id=%s проекта id=%s недоступна: %s",
             user_id,
-            project.id,
+            project_id,
             error,
         )
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
@@ -84,6 +91,7 @@ async def get_project_member_avatar(
 
 @router.post(
     path="/projects/{project_id}/members",
+    dependencies=[Depends(require_project_ownership), Depends(require_write_scope)],
     status_code=status.HTTP_201_CREATED,
     summary="Добавить участника проекта",
     description="Сразу добавляет пользователя по точному логину без поиска и приглашения.",
@@ -97,21 +105,22 @@ async def get_project_member_avatar(
     response_model=ProjectMemberSchema,
 )
 async def add_project_member(
-    project: OwnedProjectDep,
+    project_id: ProjectIdPath,
     data: ProjectMemberCreateSchema,
     service: ProjectMembersServiceDep,
 ) -> ProjectMemberSchema:
     """Добавляет пользователя в команду; операция доступна только владельцу."""
-    logger.info("🚀 Запрос POST /projects/%s/members.", project.id)
+    logger.info("🚀 Запрос POST /projects/%s/members.", project_id)
     try:
-        return await service.add_member(project_id=project.id, username=data.username)
+        return await service.add_member(project_id=project_id, username=data.username)
     except ProjectsServiceError as error:
-        logger.exception("❌ Ошибка POST /projects/%s/members.", project.id)
+        logger.exception("❌ Ошибка POST /projects/%s/members.", project_id)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.delete(
     path="/projects/{project_id}/members/{user_id}",
+    dependencies=[Depends(require_project_ownership), Depends(require_write_scope)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить участника проекта",
     description="Удаляет участника и его ролевые назначения. Владельца удалить нельзя.",
@@ -124,14 +133,14 @@ async def add_project_member(
     },
 )
 async def remove_project_member(
-    project: OwnedProjectDep,
+    project_id: ProjectIdPath,
     user_id: Annotated[int, Path(gt=0, description="Идентификатор пользователя.")],
     service: ProjectMembersServiceDep,
 ) -> None:
     """Удаляет участника из команды; операция доступна только владельцу."""
-    logger.info("🚀 Запрос DELETE /projects/%s/members/%s.", project.id, user_id)
+    logger.info("🚀 Запрос DELETE /projects/%s/members/%s.", project_id, user_id)
     try:
-        await service.remove_member(project_id=project.id, user_id=user_id)
+        await service.remove_member(project_id=project_id, user_id=user_id)
     except ProjectsServiceError as error:
-        logger.exception("❌ Ошибка DELETE /projects/%s/members/%s.", project.id, user_id)
+        logger.exception("❌ Ошибка DELETE /projects/%s/members/%s.", project_id, user_id)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error

@@ -1,7 +1,6 @@
 import logging
 
 from src.db.models.project_stickers import ProjectSticker
-from src.db.models.users import User
 from src.exceptions.project_stickers import (
     ProjectStickerNotFoundError,
     ProjectStickerRevisionConflictError,
@@ -61,7 +60,9 @@ class ProjectStickersService:
         *,
         project_id: int,
         data: ProjectStickerCreateSchema,
-        current_user: User,
+        author_id: int,
+        author_username: str,
+        author_display_name: str,
     ) -> ProjectStickerSchema:
         """Создаёт стикер с неизменяемым снимком автора."""
         try:
@@ -73,9 +74,9 @@ class ProjectStickersService:
                     "color": data.color,
                     "canvas_x": data.canvas_x,
                     "canvas_y": data.canvas_y,
-                    "created_by_user_id": current_user.id,
-                    "created_by_username_snapshot": current_user.username,
-                    "created_by_display_name_snapshot": _display_name(current_user),
+                    "created_by_user_id": author_id,
+                    "created_by_username_snapshot": author_username,
+                    "created_by_display_name_snapshot": author_display_name,
                 },
                 task_ids=data.task_ids,
             )
@@ -205,14 +206,6 @@ class ProjectStickersService:
         found = {task.id for task in tasks}
         if found != requested:
             raise ProjectStickerTaskMismatchError(requested - found)
-
-
-def _display_name(user: User) -> str:
-    """Фиксирует понятное имя автора для fallback после выхода из команды."""
-    return (
-        " ".join(part for part in (user.last_name, user.first_name, user.middle_name) if part)
-        or user.username
-    )
 
 
 def _to_sticker_schema(sticker: ProjectSticker) -> ProjectStickerSchema:

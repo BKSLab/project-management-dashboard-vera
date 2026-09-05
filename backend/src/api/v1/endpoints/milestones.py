@@ -4,7 +4,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from src.api.v1.responses import NOT_FOUND_RESPONSE, SERVER_ERROR_RESPONSE, VALIDATION_RESPONSE
-from src.dependencies.access import get_accessible_project
+from src.dependencies.access import require_project_access
+from src.dependencies.auth import require_write_scope
 from src.dependencies.services import MilestonesServiceDep
 from src.exceptions.milestones import MilestonesServiceError
 from src.exceptions.projects import ProjectsServiceError
@@ -19,7 +20,7 @@ MilestoneErrors = (MilestonesServiceError, ProjectsServiceError, WbsNodesService
 
 @router.get(
     "/projects/{project_id}/milestones",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access)],
     response_model=list[MilestoneSchema],
     responses={404: NOT_FOUND_RESPONSE, 500: SERVER_ERROR_RESPONSE},
     summary="Получить вехи проекта",
@@ -37,7 +38,7 @@ async def list_milestones(
 
 @router.post(
     "/projects/{project_id}/milestones",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     response_model=MilestoneSchema,
     status_code=status.HTTP_201_CREATED,
     responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
@@ -58,7 +59,7 @@ async def create_milestone(
 
 @router.patch(
     "/projects/{project_id}/milestones/{milestone_id}",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     response_model=MilestoneSchema,
     responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
     summary="Изменить веху проекта",
@@ -82,7 +83,7 @@ async def update_milestone(
 
 @router.delete(
     "/projects/{project_id}/milestones/{milestone_id}",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_204_NO_CONTENT,
     responses={404: NOT_FOUND_RESPONSE, 500: SERVER_ERROR_RESPONSE},
     summary="Удалить веху проекта",

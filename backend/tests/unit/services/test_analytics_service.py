@@ -29,15 +29,12 @@ USER_ID = 7
 PROJECT_ID = 1
 
 
-def user() -> SimpleNamespace:
-    """Возвращает дублёр пользователя, запросившего анализ."""
-    return SimpleNamespace(
-        id=USER_ID,
-        username="tester",
-        last_name="Тестов",
-        first_name="Тест",
-        middle_name=None,
-    )
+ACTOR_NAME = "Тестов Тест"
+
+
+def actor() -> dict:
+    """Возвращает автора анализа значениями, а не ORM-моделью."""
+    return {"actor_id": USER_ID, "actor_name": ACTOR_NAME}
 
 
 def project() -> SimpleNamespace:
@@ -221,7 +218,7 @@ async def test_generate_saves_report_with_resolved_task_links() -> None:
         llm_response=draft(["PROJ-11"]),
     )
 
-    await service.generate(user=user(), project_id=PROJECT_ID)
+    await service.generate(**actor(), project_id=PROJECT_ID)
 
     payload = reports_repository.save.call_args.kwargs["data"]["payload"]
     assert payload["findings"][0]["tasks"] == [
@@ -246,7 +243,7 @@ async def test_generate_drops_task_keys_absent_in_scope() -> None:
         llm_response=draft(["PROJ-999", "OTHER-1"]),
     )
 
-    await service.generate(user=user(), project_id=PROJECT_ID)
+    await service.generate(**actor(), project_id=PROJECT_ID)
 
     payload = reports_repository.save.call_args.kwargs["data"]["payload"]
     assert payload["findings"][0]["tasks"] == []
@@ -257,7 +254,7 @@ async def test_generate_drops_unknown_project_key() -> None:
     stages = [stage(1, "В работе", False)]
     service, reports_repository = build_service(stages=stages, tasks=[task(11, stage_id=1)])
 
-    await service.generate(user=user(), project_id=PROJECT_ID)
+    await service.generate(**actor(), project_id=PROJECT_ID)
 
     payload = reports_repository.save.call_args.kwargs["data"]["payload"]
     assert payload["recommendations"][0]["project_key"] is None
@@ -287,7 +284,7 @@ async def test_generate_counts_signals_from_database_not_from_model() -> None:
         milestones=milestones,
     )
 
-    await service.generate(user=user(), project_id=PROJECT_ID)
+    await service.generate(**actor(), project_id=PROJECT_ID)
 
     signals = reports_repository.save.call_args.kwargs["data"]["payload"]["signals"]
     assert signals["total_tasks"] == 4
@@ -312,7 +309,7 @@ async def test_generate_puts_overdue_tasks_first_in_model_context() -> None:
     ]
     service, _ = build_service(stages=stages, tasks=tasks)
 
-    await service.generate(user=user(), project_id=PROJECT_ID)
+    await service.generate(**actor(), project_id=PROJECT_ID)
 
     llm_client = service.llm_client
     content = json.loads(llm_client.get_structured_response.call_args.kwargs["content"])
@@ -333,7 +330,7 @@ async def test_generate_reports_context_boundaries_to_user() -> None:
         tasks=tasks,
     )
 
-    await service.generate(user=user(), project_id=None)
+    await service.generate(**actor(), project_id=None)
 
     context = reports_repository.save.call_args.kwargs["data"]["context_summary"]
     assert context["tasks_total"] == 240
@@ -347,7 +344,7 @@ async def test_generate_raises_empty_scope_when_projects_have_no_tasks() -> None
     service, _ = build_service(stages=[stage(1, "В работе", False)], tasks=[])
 
     with pytest.raises(AnalyticsEmptyScopeError):
-        await service.generate(user=user(), project_id=PROJECT_ID)
+        await service.generate(**actor(), project_id=PROJECT_ID)
 
 
 @pytest.mark.asyncio
@@ -355,7 +352,7 @@ async def test_generate_raises_not_found_for_foreign_project() -> None:
     service, _ = build_service(allowed_ids=set())
 
     with pytest.raises(ProjectNotFoundError):
-        await service.generate(user=user(), project_id=PROJECT_ID)
+        await service.generate(**actor(), project_id=PROJECT_ID)
 
 
 @pytest.mark.asyncio
@@ -364,7 +361,7 @@ async def test_generate_raises_service_error_when_repository_fails() -> None:
     service.projects_repository.get_by_id.side_effect = ProjectsRepositoryError("сбой")
 
     with pytest.raises(AnalyticsServiceError):
-        await service.generate(user=user(), project_id=PROJECT_ID)
+        await service.generate(**actor(), project_id=PROJECT_ID)
 
 
 @pytest.mark.asyncio
@@ -413,7 +410,7 @@ async def test_generate_returns_saved_report_as_schema() -> None:
         saved_report=saved,
     )
 
-    result = await service.generate(user=user(), project_id=PROJECT_ID)
+    result = await service.generate(**actor(), project_id=PROJECT_ID)
 
     assert result.id == 42
     assert result.scope is AnalyticsScope.PROJECT

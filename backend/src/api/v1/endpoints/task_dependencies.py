@@ -4,7 +4,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from src.api.v1.responses import NOT_FOUND_RESPONSE, SERVER_ERROR_RESPONSE, VALIDATION_RESPONSE
-from src.dependencies.access import get_accessible_project
+from src.dependencies.access import require_project_access
+from src.dependencies.auth import require_write_scope
 from src.dependencies.services import TaskDependenciesServiceDep
 from src.exceptions.projects import ProjectsServiceError
 from src.exceptions.task_dependencies import TaskDependenciesServiceError
@@ -19,7 +20,7 @@ DependencyErrors = (TaskDependenciesServiceError, ProjectsServiceError, TasksSer
 
 @router.get(
     "/projects/{project_id}/task-dependencies",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access)],
     response_model=list[TaskDependencySchema],
     responses={404: NOT_FOUND_RESPONSE, 500: SERVER_ERROR_RESPONSE},
     summary="Получить зависимости задач проекта",
@@ -37,7 +38,7 @@ async def list_task_dependencies(
 
 @router.post(
     "/projects/{project_id}/task-dependencies",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     response_model=TaskDependencySchema,
     status_code=status.HTTP_201_CREATED,
     responses={
@@ -67,7 +68,7 @@ async def create_task_dependency(
 
 @router.delete(
     "/projects/{project_id}/task-dependencies/{dependency_id}",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_204_NO_CONTENT,
     responses={404: NOT_FOUND_RESPONSE, 500: SERVER_ERROR_RESPONSE},
     summary="Удалить зависимость задач",

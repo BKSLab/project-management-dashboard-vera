@@ -18,6 +18,7 @@ from src.db.models.project_members import ProjectMember, ProjectRole
 from src.db.models.projects import Project
 from src.db.models.tasks import Task
 from src.db.models.users import User
+from src.dependencies.auth import get_principal
 from src.dependencies.repositories import (
     get_api_tokens_repository,
     get_documents_repository,
@@ -26,6 +27,7 @@ from src.dependencies.repositories import (
     get_tasks_repository,
     get_users_repository,
 )
+from src.services.auth import Principal
 from src.utils.api_tokens import hash_token_secret
 
 OWNER_ID = 1
@@ -249,14 +251,25 @@ async def test_token_cannot_manage_tokens(
     assert response.status_code == 403
 
 
+def _principal() -> Principal:
+    """Принципал запроса с полными правами сессии интерфейса."""
+    return Principal(
+        user_id=OWNER_ID,
+        username="characterization",
+        last_name="Тестов",
+        first_name="Тест",
+        middle_name=None,
+        scope=ApiTokenScope.WRITE,
+        via_api_token=False,
+    )
+
+
 @pytest.fixture
 def foreign_objects(anonymous: None) -> None:
     """Все объекты существуют, но принадлежат проекту без участия пользователя."""
-    from src.dependencies.auth import get_current_user
-
     app.dependency_overrides.update(
         {
-            get_current_user: lambda: _user(),
+            get_principal: lambda: _principal(),
             get_project_members_repository: lambda: FakeMembersRepository(set()),
             get_projects_repository: lambda: FakeProjectsRepository(),
             get_tasks_repository: lambda: FakeTasksRepository(),

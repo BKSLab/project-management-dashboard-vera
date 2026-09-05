@@ -8,12 +8,11 @@ from src.api.v1.responses import (
     VALIDATION_RESPONSE,
 )
 from src.core.settings import get_settings
-from src.dependencies.auth import CurrentUserDep
-from src.dependencies.services import AuthServiceDep
+from src.dependencies.auth import PrincipalDep
+from src.dependencies.services import AuthServiceDep, UsersServiceDep
 from src.exceptions.auth import AuthServiceError
 from src.exceptions.users import UsersServiceError
 from src.schemas.users import UserLoginSchema, UserRegisterSchema, UserSchema
-from src.services.auth import to_user_schema
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -167,14 +166,25 @@ async def logout(response: Response) -> None:
     responses={401: UNAUTHORIZED_RESPONSE, 500: SERVER_ERROR_RESPONSE},
     response_model=UserSchema,
 )
-async def get_me(user: CurrentUserDep) -> UserSchema:
+async def get_me(principal: PrincipalDep, service: UsersServiceDep) -> UserSchema:
     """Возвращает пользователя текущей сессии.
 
+    Карточка собирается сервисом пользователей: транспорт знает принципала,
+    но не персистентную модель и не её преобразование в схему.
+
     Args:
-        user: Пользователь, разрешённый зависимостью сессии.
+        principal: Принципал, разрешённый зависимостью сессии.
+        service: Сервис профиля пользователя.
 
     Returns:
         Карточка пользователя.
+
+    Raises:
+        HTTPException: Если получить карточку не удалось.
     """
-    logger.info("🚀 Запрос GET /auth/me. Пользователь: %s.", user.username)
-    return to_user_schema(user)
+    logger.info("🚀 Запрос GET /auth/me. Пользователь: %s.", principal.username)
+    try:
+        return await service.get_user(user_id=principal.user_id)
+    except UsersServiceError as error:
+        logger.exception("❌ Ошибка GET /auth/me. Детали: %s", error)
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error

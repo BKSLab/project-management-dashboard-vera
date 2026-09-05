@@ -1,183 +1,135 @@
-"""Разрешение доступа к объектам проекта.
+"""HTTP-адаптер проверки доступа к объектам проекта.
 
-Проверка вынесена в Depends-слой по правилу из `FASTAPI_PATTERNS.md`: это
-единственное место, где зависимость сама поднимает `HTTPException`, потому
-что над ней нет эндпоинта, который сделал бы это за неё.
+Слой достаёт идентификатор из пути, вызывает `AccessService` и переводит его
+доменную ошибку в HTTP-ответ. Ни правил доступа, ни обращений к репозиториям
+здесь нет: они принадлежат сервису и одинаковы для HTTP и MCP.
 
-Задачи, стадии, документы и разделы ИСР принадлежат проекту, поэтому любой
-доступ сводится к вопросу «состоит ли пользователь в проекте объекта».
 Чужой объект отдаёт 404, а не 403: пользователь не должен узнавать, что
 объект с таким идентификатором вообще существует.
 """
 
-import logging
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Path, status
+from fastapi import Depends, HTTPException, Path
 
-from src.db.models.document_links import DocumentLink
-from src.db.models.documents import Document
-from src.db.models.project_members import ProjectRole
-from src.db.models.project_stages import ProjectStage
-from src.db.models.projects import Project
-from src.db.models.task_comments import TaskComment
-from src.db.models.tasks import Task
-from src.dependencies.auth import CurrentUserDep
-from src.dependencies.repositories import (
-    DocumentLinksRepositoryDep,
-    DocumentsRepositoryDep,
-    ProjectMembersRepositoryDep,
-    ProjectsRepositoryDep,
-    ProjectStagesRepositoryDep,
-    TaskCommentsRepositoryDep,
-    TasksRepositoryDep,
-)
-from src.exceptions.base import ApplicationError
+from src.dependencies.auth import PrincipalDep
+from src.dependencies.services import AccessServiceDep
+from src.exceptions.access import AccessServiceError
+from src.services.access import AccessGrant
 
-logger = logging.getLogger(__name__)
-
-NOT_FOUND = HTTPException(
-    status_code=status.HTTP_404_NOT_FOUND,
-    detail="Объект не найден.",
-)
-OWNER_REQUIRED = HTTPException(
-    status_code=status.HTTP_403_FORBIDDEN,
-    detail="Действие доступно только владельцу проекта.",
-)
+ProjectIdPath = Annotated[int, Path(gt=0, description="Идентификатор проекта.")]
+TaskIdPath = Annotated[int, Path(gt=0, description="Идентификатор задачи.")]
+StageIdPath = Annotated[int, Path(gt=0, description="Идентификатор стадии.")]
+DocumentIdPath = Annotated[int, Path(gt=0, description="Идентификатор документа.")]
+CommentIdPath = Annotated[int, Path(gt=0, description="Идентификатор комментария.")]
+LinkIdPath = Annotated[int, Path(gt=0, description="Идентификатор связи.")]
 
 
-async def _authorize(
-    members_repository: ProjectMembersRepositoryDep,
-    project_id: int,
-    user_id: int,
-    require_owner: bool = False,
-) -> None:
-    """Проверяет участие пользователя в проекте."""
+def _as_http_error(error: AccessServiceError) -> HTTPException:
+    """Переводит доменную ошибку доступа в транспортный ответ."""
+    return HTTPException(status_code=error.status_code, detail=error.detail)
+
+
+async def require_project_access(
+    project_id: ProjectIdPath,
+    principal: PrincipalDep,
+    service: AccessServiceDep,
+) -> AccessGrant:
+    """Разрешает работу с проектом, в котором состоит пользователь."""
     try:
-        membership = await members_repository.get(project_id=project_id, user_id=user_id)
-    except ApplicationError as error:
-        logger.error("❌ Ошибка проверки доступа к проекту id=%s.", project_id, exc_info=True)
-        raise HTTPException(status_code=500, detail="Ошибка проверки доступа.") from error
-
-    if membership is None:
-        logger.info(
-            "ℹ️ Пользователь id=%s обратился к недоступному проекту id=%s.",
-            user_id,
-            project_id,
+        return await service.ensure_project_access(
+            project_id=project_id,
+            user_id=principal.user_id,
         )
-        raise NOT_FOUND
-    if require_owner and membership.role is not ProjectRole.OWNER:
-        raise OWNER_REQUIRED
+    except AccessServiceError as error:
+        raise _as_http_error(error) from error
 
 
-async def get_accessible_project(
-    project_id: Annotated[int, Path(gt=0, description="Идентификатор проекта.")],
-    user: CurrentUserDep,
-    members_repository: ProjectMembersRepositoryDep,
-    projects_repository: ProjectsRepositoryDep,
-) -> Project:
-    """Возвращает проект, к которому у пользователя есть доступ."""
-    await _authorize(members_repository, project_id, user.id)
-    project = await projects_repository.get_by_id(project_id=project_id)
-    if project is None:
-        raise NOT_FOUND
-    return project
+async def require_project_ownership(
+    project_id: ProjectIdPath,
+    principal: PrincipalDep,
+    service: AccessServiceDep,
+) -> AccessGrant:
+    """Разрешает действие, доступное только владельцу проекта."""
+    try:
+        return await service.ensure_project_ownership(
+            project_id=project_id,
+            user_id=principal.user_id,
+        )
+    except AccessServiceError as error:
+        raise _as_http_error(error) from error
 
 
-async def get_owned_project(
-    project_id: Annotated[int, Path(gt=0, description="Идентификатор проекта.")],
-    user: CurrentUserDep,
-    members_repository: ProjectMembersRepositoryDep,
-    projects_repository: ProjectsRepositoryDep,
-) -> Project:
-    """Возвращает проект, которым пользователь владеет."""
-    await _authorize(members_repository, project_id, user.id, require_owner=True)
-    project = await projects_repository.get_by_id(project_id=project_id)
-    if project is None:
-        raise NOT_FOUND
-    return project
+async def require_task_access(
+    task_id: TaskIdPath,
+    principal: PrincipalDep,
+    service: AccessServiceDep,
+) -> AccessGrant:
+    """Разрешает работу с задачей из доступного пользователю проекта."""
+    try:
+        return await service.ensure_task_access(task_id=task_id, user_id=principal.user_id)
+    except AccessServiceError as error:
+        raise _as_http_error(error) from error
 
 
-async def get_accessible_task(
-    task_id: Annotated[int, Path(gt=0, description="Идентификатор задачи.")],
-    user: CurrentUserDep,
-    members_repository: ProjectMembersRepositoryDep,
-    tasks_repository: TasksRepositoryDep,
-) -> Task:
-    """Возвращает задачу из доступного пользователю проекта."""
-    task = await tasks_repository.get_by_id(task_id=task_id)
-    if task is None:
-        raise NOT_FOUND
-    await _authorize(members_repository, task.project_id, user.id)
-    return task
+async def require_stage_access(
+    stage_id: StageIdPath,
+    principal: PrincipalDep,
+    service: AccessServiceDep,
+) -> AccessGrant:
+    """Разрешает работу со стадией из доступного пользователю проекта."""
+    try:
+        return await service.ensure_stage_access(stage_id=stage_id, user_id=principal.user_id)
+    except AccessServiceError as error:
+        raise _as_http_error(error) from error
 
 
-async def get_accessible_stage(
-    stage_id: Annotated[int, Path(gt=0, description="Идентификатор стадии.")],
-    user: CurrentUserDep,
-    members_repository: ProjectMembersRepositoryDep,
-    stages_repository: ProjectStagesRepositoryDep,
-) -> ProjectStage:
-    """Возвращает стадию из доступного пользователю проекта."""
-    stage = await stages_repository.get_by_id(stage_id=stage_id)
-    if stage is None:
-        raise NOT_FOUND
-    await _authorize(members_repository, stage.project_id, user.id)
-    return stage
+async def require_document_access(
+    document_id: DocumentIdPath,
+    principal: PrincipalDep,
+    service: AccessServiceDep,
+) -> AccessGrant:
+    """Разрешает работу с документом из доступного пользователю проекта."""
+    try:
+        return await service.ensure_document_access(
+            document_id=document_id,
+            user_id=principal.user_id,
+        )
+    except AccessServiceError as error:
+        raise _as_http_error(error) from error
 
 
-async def get_accessible_document(
-    document_id: Annotated[int, Path(gt=0, description="Идентификатор документа.")],
-    user: CurrentUserDep,
-    members_repository: ProjectMembersRepositoryDep,
-    documents_repository: DocumentsRepositoryDep,
-) -> Document:
-    """Возвращает документ из доступного пользователю проекта."""
-    document = await documents_repository.get_by_id(document_id=document_id)
-    if document is None:
-        raise NOT_FOUND
-    await _authorize(members_repository, document.project_id, user.id)
-    return document
+async def require_comment_access(
+    comment_id: CommentIdPath,
+    principal: PrincipalDep,
+    service: AccessServiceDep,
+) -> AccessGrant:
+    """Разрешает работу с комментарием из доступного пользователю проекта."""
+    try:
+        return await service.ensure_comment_access(
+            comment_id=comment_id,
+            user_id=principal.user_id,
+        )
+    except AccessServiceError as error:
+        raise _as_http_error(error) from error
 
 
-async def get_accessible_comment(
-    comment_id: Annotated[int, Path(gt=0, description="Идентификатор комментария.")],
-    user: CurrentUserDep,
-    members_repository: ProjectMembersRepositoryDep,
-    comments_repository: TaskCommentsRepositoryDep,
-    tasks_repository: TasksRepositoryDep,
-) -> TaskComment:
-    """Возвращает комментарий из доступного пользователю проекта."""
-    comment = await comments_repository.get_by_id(comment_id=comment_id)
-    if comment is None:
-        raise NOT_FOUND
-    task = await tasks_repository.get_by_id(task_id=comment.task_id)
-    if task is None:
-        raise NOT_FOUND
-    await _authorize(members_repository, task.project_id, user.id)
-    return comment
+async def require_link_access(
+    link_id: LinkIdPath,
+    principal: PrincipalDep,
+    service: AccessServiceDep,
+) -> AccessGrant:
+    """Разрешает работу со связью документа из доступного проекта."""
+    try:
+        return await service.ensure_link_access(link_id=link_id, user_id=principal.user_id)
+    except AccessServiceError as error:
+        raise _as_http_error(error) from error
 
 
-async def get_accessible_link(
-    link_id: Annotated[int, Path(gt=0, description="Идентификатор связи.")],
-    user: CurrentUserDep,
-    members_repository: ProjectMembersRepositoryDep,
-    links_repository: DocumentLinksRepositoryDep,
-    documents_repository: DocumentsRepositoryDep,
-) -> DocumentLink:
-    """Возвращает связь документа из доступного пользователю проекта."""
-    link = await links_repository.get_by_id(link_id=link_id)
-    if link is None:
-        raise NOT_FOUND
-    document = await documents_repository.get_by_id(document_id=link.document_id)
-    if document is None:
-        raise NOT_FOUND
-    await _authorize(members_repository, document.project_id, user.id)
-    return link
-
-
-AccessibleProjectDep = Annotated[Project, Depends(get_accessible_project)]
-OwnedProjectDep = Annotated[Project, Depends(get_owned_project)]
-AccessibleTaskDep = Annotated[Task, Depends(get_accessible_task)]
-AccessibleStageDep = Annotated[ProjectStage, Depends(get_accessible_stage)]
-AccessibleDocumentDep = Annotated[Document, Depends(get_accessible_document)]
+ProjectAccessDep = Annotated[AccessGrant, Depends(require_project_access)]
+ProjectOwnershipDep = Annotated[AccessGrant, Depends(require_project_ownership)]
+TaskAccessDep = Annotated[AccessGrant, Depends(require_task_access)]
+StageAccessDep = Annotated[AccessGrant, Depends(require_stage_access)]
+DocumentAccessDep = Annotated[AccessGrant, Depends(require_document_access)]
+CommentAccessDep = Annotated[AccessGrant, Depends(require_comment_access)]
+LinkAccessDep = Annotated[AccessGrant, Depends(require_link_access)]

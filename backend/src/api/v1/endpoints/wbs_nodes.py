@@ -9,7 +9,8 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
-from src.dependencies.access import get_accessible_project
+from src.dependencies.access import require_project_access
+from src.dependencies.auth import require_write_scope
 from src.dependencies.services import WbsNodesServiceDep, WbsSuggestionServiceDep
 from src.exceptions.knowledge import KnowledgeServiceError
 from src.exceptions.projects import ProjectsServiceError
@@ -46,7 +47,7 @@ TaskIdPath = Annotated[int, Path(gt=0, description="Идентификатор �
 
 @router.get(
     path="",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить структуру ИСР",
     description=(
@@ -91,7 +92,7 @@ async def get_structure(
 
 @router.post(
     path="/nodes",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_201_CREATED,
     summary="Создать раздел ИСР",
     description="Создаёт структурный раздел в конце выбранного уровня.",
@@ -144,7 +145,7 @@ async def create_node(
 
 @router.patch(
     path="/nodes/{node_id}",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Переименовать раздел ИСР",
     description="Изменяет название структурного раздела.",
@@ -199,7 +200,7 @@ async def update_node(
 
 @router.post(
     path="/nodes/{node_id}/move",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Переместить раздел ИСР",
     description=("Меняет родителя и порядок раздела. Позицию внутри уровня рассчитывает backend."),
@@ -261,7 +262,7 @@ async def move_node(
 
 @router.delete(
     path="/nodes/{node_id}",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Удалить раздел ИСР",
     description=(
@@ -312,7 +313,7 @@ async def delete_node(
 
 @router.post(
     path="/tasks/{task_id}/assign",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Назначить задачу в раздел",
     description="Помещает задачу проекта в указанный раздел ИСР.",
@@ -373,7 +374,7 @@ async def assign_task(
 
 @router.post(
     path="/suggestion",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Предложить структуру ИСР",
     description=(
@@ -427,7 +428,7 @@ async def suggest_structure(
 
 @router.post(
     path="/suggestion/apply",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Применить предложенную структуру ИСР",
     description=(
@@ -491,7 +492,7 @@ async def apply_suggestion(
 
 @router.post(
     path="/tasks/{task_id}/placement",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Разместить задачу в структуре или на холсте",
     description=(
@@ -559,7 +560,7 @@ async def place_task(
 
 @router.delete(
     path="/tasks/{task_id}/assignment",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Убрать задачу из структуры",
     description="Снимает привязку задачи к разделу. Сама задача остаётся в проекте.",

@@ -8,7 +8,7 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
-from src.dependencies.auth import SessionUserDep
+from src.dependencies.auth import SessionPrincipalDep
 from src.dependencies.services import ApiTokensServiceDep
 from src.exceptions.api_tokens import ApiTokensServiceError
 from src.schemas.api_tokens import (
@@ -41,14 +41,14 @@ FORBIDDEN_RESPONSE = {
     response_model=list[ApiTokenSchema],
 )
 async def list_tokens(
-    user: SessionUserDep,
+    principal: SessionPrincipalDep,
     service: ApiTokensServiceDep,
 ) -> list[ApiTokenSchema]:
     """Возвращает токены доступа текущего пользователя."""
     try:
-        return await service.list_tokens(user.id)
+        return await service.list_tokens(principal.user_id)
     except ApiTokensServiceError as error:
-        logger.exception("❌ Не удалось получить токены пользователя id=%s.", user.id)
+        logger.exception("❌ Не удалось получить токены пользователя id=%s.", principal.user_id)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
@@ -71,15 +71,15 @@ async def list_tokens(
     response_model=ApiTokenCreatedSchema,
 )
 async def create_token(
-    user: SessionUserDep,
+    principal: SessionPrincipalDep,
     data: ApiTokenCreateSchema,
     service: ApiTokensServiceDep,
 ) -> ApiTokenCreatedSchema:
     """Выпускает новый токен доступа."""
     try:
-        return await service.issue_token(user_id=user.id, data=data)
+        return await service.issue_token(user_id=principal.user_id, data=data)
     except ApiTokensServiceError as error:
-        logger.exception("❌ Не удалось выпустить токен пользователю id=%s.", user.id)
+        logger.exception("❌ Не удалось выпустить токен пользователю id=%s.", principal.user_id)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
@@ -97,13 +97,13 @@ async def create_token(
     },
 )
 async def revoke_token(
-    user: SessionUserDep,
+    principal: SessionPrincipalDep,
     token_id: Annotated[int, Path(gt=0, description="Идентификатор токена.")],
     service: ApiTokensServiceDep,
 ) -> None:
     """Отзывает токен доступа текущего пользователя."""
     try:
-        await service.revoke_token(token_id=token_id, user_id=user.id)
+        await service.revoke_token(token_id=token_id, user_id=principal.user_id)
     except ApiTokensServiceError as error:
         logger.exception("❌ Не удалось отозвать токен id=%s.", token_id)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error

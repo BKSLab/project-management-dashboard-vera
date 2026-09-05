@@ -8,8 +8,12 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
-from src.dependencies.access import AccessibleProjectDep, OwnedProjectDep, get_accessible_project
-from src.dependencies.auth import CurrentUserDep
+from src.dependencies.access import (
+    ProjectIdPath,
+    require_project_access,
+    require_project_ownership,
+)
+from src.dependencies.auth import PrincipalDep, require_write_scope
 from src.dependencies.services import ProjectsServiceDep
 from src.exceptions.projects import ProjectsServiceError
 from src.schemas.projects import (
@@ -33,7 +37,7 @@ logger = logging.getLogger(__name__)
     responses={500: SERVER_ERROR_RESPONSE},
     response_model=list[ProjectSchema],
 )
-async def get_projects(user: CurrentUserDep, service: ProjectsServiceDep) -> list[ProjectSchema]:
+async def get_projects(principal: PrincipalDep, service: ProjectsServiceDep) -> list[ProjectSchema]:
     """Получает список проектов.
 
     Args:
@@ -47,7 +51,7 @@ async def get_projects(user: CurrentUserDep, service: ProjectsServiceDep) -> lis
     """
     logger.info("🚀 Запрос GET /projects.")
     try:
-        result = await service.get_project_list(user_id=user.id)
+        result = await service.get_project_list(user_id=principal.user_id)
         logger.info("✅ Проекты получены. Найдено: %s.", len(result))
         return result
     except ProjectsServiceError as error:
@@ -57,6 +61,7 @@ async def get_projects(user: CurrentUserDep, service: ProjectsServiceDep) -> lis
 
 @router.post(
     path="",
+    dependencies=[Depends(require_write_scope)],
     status_code=status.HTTP_201_CREATED,
     summary="Создать проект",
     description="Создаёт проект и наполняет его стадиями канбана по умолчанию.",
@@ -71,7 +76,7 @@ async def get_projects(user: CurrentUserDep, service: ProjectsServiceDep) -> lis
 )
 async def create_project(
     data: ProjectCreateSchema,
-    user: CurrentUserDep,
+    principal: PrincipalDep,
     service: ProjectsServiceDep,
 ) -> ProjectSchema:
     """Создаёт проект.
@@ -88,7 +93,7 @@ async def create_project(
     """
     logger.info("🚀 Запрос POST /projects. Код: %s.", data.key)
     try:
-        result = await service.create_project(data=data.model_dump(), owner_id=user.id)
+        result = await service.create_project(data=data.model_dump(), owner_id=principal.user_id)
         logger.info("✅ Проект создан. id=%s.", result.id)
         return result
     except ProjectsServiceError as error:
@@ -98,7 +103,7 @@ async def create_project(
 
 @router.get(
     path="/{project_id}",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить проект",
     description="Возвращает карточку проекта по идентификатору.",
@@ -108,7 +113,7 @@ async def create_project(
     response_model=ProjectSchema,
 )
 async def get_project(
-    project: AccessibleProjectDep,
+    project_id: ProjectIdPath,
     service: ProjectsServiceDep,
 ) -> ProjectSchema:
     """Получает проект по идентификатору.
@@ -123,19 +128,19 @@ async def get_project(
     Raises:
         HTTPException: Если проект не найден или получить его не удалось.
     """
-    logger.info("🚀 Запрос GET /projects/%s.", project.id)
+    logger.info("🚀 Запрос GET /projects/%s.", project_id)
     try:
-        result = await service.get_project(project_id=project.id)
-        logger.info("✅ Проект id=%s получен.", project.id)
+        result = await service.get_project(project_id=project_id)
+        logger.info("✅ Проект id=%s получен.", project_id)
         return result
     except ProjectsServiceError as error:
-        logger.exception("❌ Ошибка GET /projects/%s. Детали: %s", project.id, error)
+        logger.exception("❌ Ошибка GET /projects/%s. Детали: %s", project_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.get(
     path="/{project_id}/stats",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить показатели проекта",
     description="Возвращает прогресс, сроки и распределение задач по стадиям проекта.",
@@ -145,7 +150,7 @@ async def get_project(
     response_model=ProjectStatsSchema,
 )
 async def get_project_stats(
-    project: AccessibleProjectDep,
+    project_id: ProjectIdPath,
     service: ProjectsServiceDep,
 ) -> ProjectStatsSchema:
     """Получает показатели проекта.
@@ -160,19 +165,19 @@ async def get_project_stats(
     Raises:
         HTTPException: Если проект не найден или собрать показатели не удалось.
     """
-    logger.info("🚀 Запрос GET /projects/%s/stats.", project.id)
+    logger.info("🚀 Запрос GET /projects/%s/stats.", project_id)
     try:
-        result = await service.get_project_stats(project_id=project.id)
-        logger.info("✅ Показатели проекта id=%s собраны.", project.id)
+        result = await service.get_project_stats(project_id=project_id)
+        logger.info("✅ Показатели проекта id=%s собраны.", project_id)
         return result
     except ProjectsServiceError as error:
-        logger.exception("❌ Ошибка GET /projects/%s/stats. Детали: %s", project.id, error)
+        logger.exception("❌ Ошибка GET /projects/%s/stats. Детали: %s", project_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.patch(
     path="/{project_id}",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access), Depends(require_write_scope)],
     status_code=status.HTTP_200_OK,
     summary="Изменить проект",
     description="Частично обновляет поля проекта.",
@@ -187,7 +192,7 @@ async def get_project_stats(
     response_model=ProjectSchema,
 )
 async def update_project(
-    project: AccessibleProjectDep,
+    project_id: ProjectIdPath,
     data: ProjectUpdateSchema,
     service: ProjectsServiceDep,
 ) -> ProjectSchema:
@@ -204,22 +209,22 @@ async def update_project(
     Raises:
         HTTPException: Если проект не найден или обновить его не удалось.
     """
-    logger.info("🚀 Запрос PATCH /projects/%s.", project.id)
+    logger.info("🚀 Запрос PATCH /projects/%s.", project_id)
     try:
         result = await service.update_project(
-            project_id=project.id,
+            project_id=project_id,
             data=data.model_dump(exclude_unset=True),
         )
-        logger.info("✅ Проект id=%s обновлён.", project.id)
+        logger.info("✅ Проект id=%s обновлён.", project_id)
         return result
     except ProjectsServiceError as error:
-        logger.exception("❌ Ошибка PATCH /projects/%s. Детали: %s", project.id, error)
+        logger.exception("❌ Ошибка PATCH /projects/%s. Детали: %s", project_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.delete(
     path="/{project_id}",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_ownership), Depends(require_write_scope)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить проект",
     description="Удаляет проект вместе с задачами, стадиями, структурой и документами.",
@@ -228,7 +233,7 @@ async def update_project(
     responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
 )
 async def delete_project(
-    project: OwnedProjectDep,
+    project_id: ProjectIdPath,
     service: ProjectsServiceDep,
 ) -> None:
     """Удаляет проект.
@@ -243,10 +248,10 @@ async def delete_project(
     Raises:
         HTTPException: Если проект не найден или удалить его не удалось.
     """
-    logger.info("🚀 Запрос DELETE /projects/%s.", project.id)
+    logger.info("🚀 Запрос DELETE /projects/%s.", project_id)
     try:
-        await service.delete_project(project_id=project.id)
-        logger.info("✅ Проект id=%s удалён.", project.id)
+        await service.delete_project(project_id=project_id)
+        logger.info("✅ Проект id=%s удалён.", project_id)
     except ProjectsServiceError as error:
-        logger.exception("❌ Ошибка DELETE /projects/%s. Детали: %s", project.id, error)
+        logger.exception("❌ Ошибка DELETE /projects/%s. Детали: %s", project_id, error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error

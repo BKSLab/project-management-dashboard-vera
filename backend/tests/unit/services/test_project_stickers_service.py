@@ -89,7 +89,9 @@ async def test_create_stamps_authenticated_author_and_commits() -> None:
     result = await service(repository, tasks_repository, unit_of_work).create_sticker(
         project_id=1,
         data=ProjectStickerCreateSchema(body="  Согласовать API  ", task_ids=[11]),
-        current_user=user(),
+        author_id=user().id,
+        author_username=user().username,
+        author_display_name="Иванова Вера Петровна",
     )
 
     assert result.id == 4
@@ -114,7 +116,9 @@ async def test_create_rejects_task_from_another_project() -> None:
         await service(repository, tasks_repository).create_sticker(
             project_id=1,
             data=ProjectStickerCreateSchema(body="Текст", task_ids=[99]),
-            current_user=user(),
+            author_id=user().id,
+        author_username=user().username,
+        author_display_name="Иванова Вера Петровна",
         )
 
     repository.create.assert_not_awaited()

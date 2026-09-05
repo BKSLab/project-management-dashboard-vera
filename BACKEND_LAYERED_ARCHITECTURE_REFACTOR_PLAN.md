@@ -18,7 +18,7 @@
 |---|---|---|---|
 | 0. Safety net | ✅ выполнен | 633 passed | `stage-0` |
 | 1. Client/config dependencies | ✅ выполнен | 791 passed | `stage-1` |
-| 2. Auth/access в сервисы, write scope | ⬜ | — | — |
+| 2. Auth/access в сервисы, write scope | ✅ выполнен | 882 passed | `stage-2` |
 | 3. Exception boundaries | ⬜ | — | — |
 | 4. Транзакционные границы | ⬜ | — | — |
 | 5. Атомарный импорт документа | ⬜ | — | — |
@@ -719,7 +719,25 @@ MCP-транспорт видит тот же контейнер клиенто�
 - unit tests сервисов создают их только с явными mocks (`AsyncMock(spec=...)`);
 - AST-test запрещает `get_settings()` и `get_knowledge_runtime()` в `services/**`.
 
-### Этап 2. Перенести auth/access в сервисный слой и включить write scope
+### Этап 2. Перенести auth/access в сервисный слой и включить write scope — ✅ выполнен
+
+Результат: появились `services/access.py` с `AccessService` и `AccessGrant`,
+`exceptions/access.py`, transport-neutral `Principal` в `services/auth.py`;
+`AuthService` владеет разрешением принципала для обоих транспортов.
+`dependencies/auth.py` и `dependencies/access.py` больше не импортируют ни
+репозитории, ни модели БД — они только переводят доменную ошибку в
+`HTTPException`. ORM-алиасы `AccessibleProjectDep`, `OwnedProjectDep` и
+прочие удалены: эндпоинт работает с идентификатором пути.
+
+**Закрыта дыра P0:** все **47 доменных мутаций** требуют `require_write_scope`;
+4 read-only POST и 2 session-only маршрута его не имеют по явному решению.
+Раньше READ-токен проходил через `CurrentUserDep` и мог вызвать любую мутацию.
+
+MCP перешёл на тот же сервисный контракт: `mcp_server/context.py` не ловит
+`HTTPException` и не собирает репозитории аутентификации сам, а `ToolContext`
+несёт `Principal` вместо ORM-модели пользователя.
+
+Итог: `882 passed`, `ruff All checks passed`.
 
 Нормативное основание: [PAT-ARCH], [PAT-DI], специальное правило auth adapter —
 [PAT-AUTH]. Полный route graph должен защищаться по [PAT-TEST].

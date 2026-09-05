@@ -17,11 +17,13 @@ from src.db.models.project_stages import ProjectStage
 from src.db.models.projects import Project, ProjectStatus
 from src.db.models.tasks import Task, TaskPriority
 from src.db.models.users import User
-from src.dependencies.auth import AuthenticatedPrincipal
+from src.exceptions.access import ResourceNotAvailableError
 from src.exceptions.tasks import TaskNotFoundError
 from src.mcp_server import context as ctx
 from src.mcp_server import write_tools as wt
 from src.mcp_server.context import READ_ONLY_TOKEN, ToolContext
+from src.services.access import AccessGrant, AccessService
+from src.services.auth import Principal
 
 PROJECT = Project(
     id=1,
@@ -36,6 +38,19 @@ STAGES = [
     ProjectStage(id=2, project_id=1, name="Готово", is_done_stage=True, order_index=1),
 ]
 TASK = Task(id=10, project_id=1, stage_id=1, number=142, title="Настроить вход")
+
+
+def _access_service(*, member_project_ids: set[int]) -> AsyncMock:
+    """Сервис доступа, пускающий только в перечисленные проекты."""
+    service = AsyncMock(spec=AccessService)
+
+    async def ensure(*, project_id: int, user_id: int) -> AccessGrant:
+        if project_id not in member_project_ids:
+            raise ResourceNotAvailableError(resource="Проект", resource_id=project_id)
+        return AccessGrant(project_id=project_id, resource_id=project_id, is_owner=True)
+
+    service.ensure_project_access.side_effect = ensure
+    return service
 
 
 class FakeContext:
@@ -143,15 +158,12 @@ def _runtime() -> SimpleNamespace:
 
 def _tools(scope: ApiTokenScope = ApiTokenScope.WRITE) -> ToolContext:
     return ToolContext(
-        principal=AuthenticatedPrincipal(
-            user=User(
-                id=1,
-                username="tester",
-                password_hash="hash",
-                last_name="Тестов",
-                first_name="Тест",
-                is_active=True,
-            ),
+        principal=Principal(
+            user_id=1,
+            username="tester",
+            last_name="Тестов",
+            first_name="Тест",
+            middle_name=None,
             scope=scope,
             via_api_token=True,
         ),
@@ -245,7 +257,11 @@ def tracker(monkeypatch: pytest.MonkeyPatch):
         lambda session, settings: tasks_service.milestones_service,
     )
     monkeypatch.setattr(ctx, "ProjectsRepository", Projects)
-    monkeypatch.setattr(ctx, "ProjectMembersRepository", Members)
+    monkeypatch.setattr(
+        ctx,
+        "build_access_service",
+        lambda session: _access_service(member_project_ids={1}),
+    )
     monkeypatch.setattr(ctx, "TasksRepository", Tasks)
     return tasks_service, comments_service
 

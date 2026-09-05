@@ -43,6 +43,7 @@ from src.dependencies.repositories import (
 )
 from src.dependencies.settings import SettingsDep
 from src.dependencies.storage import AvatarStorageDep, TaskAttachmentStorageDep
+from src.services.access import AccessService
 from src.services.analytics import AnalyticsService
 from src.services.api_tokens import ApiTokensService
 from src.services.auth import AuthService
@@ -86,16 +87,40 @@ KnowledgeEventsDep = Annotated[KnowledgeEvents, Depends(get_knowledge_events)]
 
 def get_auth_service(
     users_repository: UsersRepositoryDep,
+    tokens_repository: ApiTokensRepositoryDep,
     settings: SettingsDep,
 ) -> AuthService:
-    """Создаёт сервис регистрации и входа."""
+    """Создаёт сервис регистрации, входа и разрешения принципала."""
     return AuthService(
         users_repository=users_repository,
+        tokens_repository=tokens_repository,
         invite_code=settings.auth.registration_invite_code.get_secret_value(),
     )
 
 
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+
+
+def get_access_service(
+    members_repository: ProjectMembersRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    stages_repository: ProjectStagesRepositoryDep,
+    documents_repository: DocumentsRepositoryDep,
+    comments_repository: TaskCommentsRepositoryDep,
+    links_repository: DocumentLinksRepositoryDep,
+) -> AccessService:
+    """Создаёт сервис разрешения доступа к объектам проекта."""
+    return AccessService(
+        members_repository=members_repository,
+        tasks_repository=tasks_repository,
+        stages_repository=stages_repository,
+        documents_repository=documents_repository,
+        comments_repository=comments_repository,
+        links_repository=links_repository,
+    )
+
+
+AccessServiceDep = Annotated[AccessService, Depends(get_access_service)]
 
 
 def get_api_tokens_service(

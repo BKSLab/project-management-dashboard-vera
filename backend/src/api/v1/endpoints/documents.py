@@ -9,7 +9,8 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
-from src.dependencies.access import get_accessible_document, get_accessible_project
+from src.dependencies.access import require_document_access, require_project_access
+from src.dependencies.auth import require_write_scope
 from src.dependencies.services import DocumentLinksServiceDep, DocumentsServiceDep
 from src.exceptions.document_links import DocumentLinksServiceError
 from src.exceptions.documents import DocumentsServiceError
@@ -30,7 +31,7 @@ DocumentErrors = (DocumentsServiceError, ProjectsServiceError)
 
 @router.get(
     path="/projects/{project_id}/documents",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить документы проекта",
     description="Возвращает документы проекта с опциональным полнотекстовым поиском.",
@@ -72,7 +73,7 @@ async def get_documents(
 
 @router.post(
     path="/projects/{project_id}/documents",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_201_CREATED,
     summary="Создать документ проекта",
     description="Создаёт документ, подбирая свободный slug внутри проекта.",
@@ -121,7 +122,7 @@ async def create_document(
 
 @router.get(
     path="/documents/{document_id}",
-    dependencies=[Depends(get_accessible_document)],
+    dependencies=[Depends(require_document_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить документ",
     description="Возвращает документ с Markdown-содержимым.",
@@ -158,7 +159,7 @@ async def get_document(
 
 @router.patch(
     path="/documents/{document_id}",
-    dependencies=[Depends(get_accessible_document)],
+    dependencies=[Depends(require_write_scope), Depends(require_document_access)],
     status_code=status.HTTP_200_OK,
     summary="Изменить документ",
     description="Частично обновляет заголовок и содержимое документа.",
@@ -205,7 +206,7 @@ async def update_document(
 
 @router.delete(
     path="/documents/{document_id}",
-    dependencies=[Depends(get_accessible_document)],
+    dependencies=[Depends(require_write_scope), Depends(require_document_access)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить документ",
     description="Удаляет документ и его связи с задачами.",
@@ -240,7 +241,7 @@ async def delete_document(
 
 @router.get(
     path="/documents/{document_id}/links",
-    dependencies=[Depends(get_accessible_document)],
+    dependencies=[Depends(require_document_access)],
     status_code=status.HTTP_200_OK,
     summary="Получить задачи документа",
     description="Возвращает задачи, связанные с документом.",

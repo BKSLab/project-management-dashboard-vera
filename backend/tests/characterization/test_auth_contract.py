@@ -12,12 +12,13 @@ from httpx import AsyncClient
 
 from main import app
 from src.core.settings import get_settings
-from src.db.models.users import User
-from src.dependencies.auth import get_current_user
-from src.dependencies.services import get_auth_service
+from src.db.models.api_tokens import ApiTokenScope
+from src.dependencies.auth import get_principal
+from src.dependencies.services import get_auth_service, get_users_service
 from src.exceptions.auth import InvalidCredentialsError, InvalidInviteCodeError
 from src.exceptions.users import UsernameConflictError
 from src.schemas.users import UserSchema
+from src.services.auth import Principal
 
 COOKIE_NAME = get_settings().auth.session_cookie_name
 
@@ -46,6 +47,13 @@ def _user_schema() -> UserSchema:
         has_avatar=False,
         created_at=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
     )
+
+
+class FakeUsersService:
+    """Сервис профиля, отдающий карточку без обращения к базе."""
+
+    async def get_user(self, user_id: int) -> UserSchema:
+        return _user_schema()
 
 
 class FakeAuthService:
@@ -207,15 +215,16 @@ async def test_me_returns_safe_user_fields(
     anonymous: None,
 ) -> None:
     """Карточка текущего пользователя не содержит секретов."""
-    app.dependency_overrides[get_current_user] = lambda: User(
-        id=7,
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        user_id=7,
         username="characterization",
-        password_hash="секрет",
         last_name="Тестов",
         first_name="Тест",
-        is_active=True,
-        created_at=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+        middle_name=None,
+        scope=ApiTokenScope.WRITE,
+        via_api_token=False,
     )
+    app.dependency_overrides[get_users_service] = lambda: FakeUsersService()
 
     response = await raw_client.get("/api/v1/auth/me")
 
@@ -234,4 +243,3 @@ async def test_me_returns_safe_user_fields(
         "created_at",
     }
     assert "password_hash" not in body
-    assert "секрет" not in response.text

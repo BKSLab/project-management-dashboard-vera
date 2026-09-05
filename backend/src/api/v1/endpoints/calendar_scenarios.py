@@ -9,7 +9,8 @@ from src.api.v1.responses import (
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
-from src.dependencies.access import get_accessible_project
+from src.dependencies.access import require_project_access
+from src.dependencies.auth import require_write_scope
 from src.dependencies.services import CalendarScenarioServiceDep
 from src.exceptions.calendar import CalendarServiceError
 from src.exceptions.projects import ProjectNotFoundError
@@ -29,7 +30,7 @@ ScenarioErrors = (CalendarServiceError, ProjectNotFoundError, TasksServiceError)
 
 @router.post(
     "/projects/{project_id}/calendar/scenarios/preview",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_project_access)],
     response_model=ScenarioPreviewResponseSchema,
     responses={
         404: NOT_FOUND_RESPONSE,
@@ -57,7 +58,7 @@ async def preview_calendar_scenario(
 
 @router.post(
     "/projects/{project_id}/calendar/scenarios/apply",
-    dependencies=[Depends(get_accessible_project)],
+    dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     response_model=ScenarioApplyResponseSchema,
     responses={
         404: NOT_FOUND_RESPONSE,

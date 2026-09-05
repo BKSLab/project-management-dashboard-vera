@@ -89,7 +89,7 @@ async def create_task(
             created = await build_tasks_service(tools.session, tools.settings).create_task(
                 project_id=project.id,
                 data=payload,
-                created_by_user_id=tools.user.id,
+                created_by_user_id=tools.principal.user_id,
             )
         except ApplicationError as error:
             raise ToolError(_domain_message(error, "Не удалось создать задачу.")) from error
@@ -409,9 +409,7 @@ def _parse_date(value: str) -> date:
 
 def _default_author(tools: ToolContext) -> str:
     """Возвращает подпись автора по имени владельца токена."""
-    user = tools.user
-    parts = [user.last_name, user.first_name]
-    return " ".join(part for part in parts if part) or user.username
+    return tools.principal.short_name
 
 
 def _domain_message(error: ApplicationError, fallback: str) -> str:
