@@ -4,13 +4,18 @@
 идентификаторы: агент оперирует тем же, что видит человек в интерфейсе.
 Длинные тексты обрезаются с явной пометкой, иначе один вызов инструмента
 способен занять весь контекст вызывающей модели.
+
+На вход принимаются DTO сервисного слоя, а не ORM-модели: представление
+не должно зависеть от того, как данные хранятся.
 """
 
-from src.db.models.project_stages import ProjectStage
-from src.db.models.projects import Project
-from src.db.models.task_comments import TaskComment
-from src.db.models.tasks import Task
-from src.services.tasks import build_task_key
+from src.services.project_query import (
+    CommentDto,
+    ProjectOverviewDto,
+    ProjectSummaryDto,
+    TaskDetailsDto,
+    TaskSummaryDto,
+)
 
 TEXT_LIMIT = 2000
 TRUNCATION_NOTE = "… (текст обрезан)"
@@ -33,76 +38,63 @@ def shorten(text: str | None, limit: int = TEXT_LIMIT) -> str | None:
     return f"{text[:limit]}{TRUNCATION_NOTE}"
 
 
-def project_summary(project: Project) -> dict:
+def project_summary(project: ProjectSummaryDto) -> dict:
     """Возвращает краткую карточку проекта для списка."""
     return {
-        "project_key": project.key,
+        "project_key": project.project_key,
         "name": project.name,
-        "status": project.status.value,
+        "status": project.status,
         "start_date": project.start_date.isoformat() if project.start_date else None,
         "due_date": project.due_date.isoformat() if project.due_date else None,
     }
 
 
-def project_detail(
-    project: Project,
-    *,
-    stages: list[ProjectStage],
-    task_counts: dict[int, int],
-    total_tasks: int,
-) -> dict:
+def project_detail(overview: ProjectOverviewDto) -> dict:
     """Возвращает подробную карточку проекта со стадиями."""
     return {
-        **project_summary(project),
-        "description": shorten(project.description_md),
-        "total_tasks": total_tasks,
+        **project_summary(overview.summary),
+        "description": shorten(overview.description),
+        "total_tasks": overview.total_tasks,
         "stages": [
             {
                 "name": stage.name,
                 "is_done_stage": stage.is_done_stage,
-                "task_count": task_counts.get(stage.id, 0),
+                "task_count": stage.task_count,
             }
-            for stage in stages
+            for stage in overview.stages
         ],
     }
 
 
-def task_summary(task: Task, *, project: Project, stage: ProjectStage | None) -> dict:
+def task_summary(task: TaskSummaryDto) -> dict:
     """Возвращает краткую карточку задачи для списка."""
     return {
-        "task_key": build_task_key(project.key, task.number),
+        "task_key": task.task_key,
         "title": task.title,
-        "stage": stage.name if stage else None,
-        "is_done": bool(stage and stage.is_done_stage),
-        "priority": task.priority.value,
+        "stage": task.stage,
+        "is_done": task.is_done,
+        "priority": task.priority,
         "assignee": task.assignee,
         "due_date": task.due_date.isoformat() if task.due_date else None,
     }
 
 
-def task_detail(
-    task: Task,
-    *,
-    project: Project,
-    stage: ProjectStage | None,
-    wbs_path: str | None = None,
-    comment_count: int = 0,
-) -> dict:
+def task_detail(details: TaskDetailsDto) -> dict:
     """Возвращает подробную карточку задачи."""
     return {
-        **task_summary(task, project=project, stage=stage),
-        "role": task.role.value if task.role else None,
-        "wbs_path": wbs_path,
-        "description": shorten(task.description_md),
-        "comment_count": comment_count,
+        **task_summary(details.summary),
+        "role": details.role,
+        "wbs_path": details.wbs_path,
+        "description": shorten(details.description),
+        "comment_count": details.comment_count,
     }
 
 
-def comment_item(comment: TaskComment, *, task_key: str) -> dict:
+def comment_item(comment: CommentDto) -> dict:
     """Возвращает комментарий задачи."""
     return {
-        "task_key": task_key,
-        "author": comment.author_name,
+        "task_key": comment.task_key,
+        "author": comment.author,
         "created_at": comment.created_at.isoformat(),
-        "body": shorten(comment.body_md),
+        "body": shorten(comment.body),
     }

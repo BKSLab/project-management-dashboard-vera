@@ -40,14 +40,24 @@ COMPOSITION_MODULES = {
 }
 
 # Модули, которые ещё собирают репозитории сами. Исключение временное и
-# снимается вместе с соответствующим этапом: MCP переходит на сервисный
-# слой, worker получает зависимости конструктором.
+# снимается вместе с соответствующим этапом: worker получает зависимости
+# конструктором.
 PENDING_REPOSITORY_BUILDERS = {
+    SRC / "knowledge" / "worker.py",
+}
+
+# Транспорт MCP: инструмент вызывает сервис ровно так же, как эндпоинт.
+MCP_TRANSPORT_MODULES = (
     SRC / "mcp_server" / "context.py",
     SRC / "mcp_server" / "server.py",
     SRC / "mcp_server" / "write_tools.py",
-    SRC / "knowledge" / "worker.py",
-}
+    SRC / "mcp_server" / "presenters.py",
+)
+
+# Перечисления, которые пока объявлены в моделях и используются как
+# значения контракта. Это зафиксированное расхождение (см. проверку
+# перечислений задачи ниже), а не разрешение ходить в слой данных.
+MODEL_ENUM_MODULES = ("src.db.models.project_milestones",)
 
 
 def endpoint_files() -> list[Path]:
@@ -114,6 +124,54 @@ def test_endpoint_does_not_construct_services(path: Path) -> None:
     ]
 
     assert not offenders, f"{path.name} создаёт зависимость напрямую: {offenders}"
+
+
+@pytest.mark.parametrize("path", MCP_TRANSPORT_MODULES, ids=lambda path: path.name)
+def test_mcp_tool_does_not_import_the_data_layer(path: Path) -> None:
+    """Инструмент MCP не знает слоя данных — как и HTTP-эндпоинт.
+
+    Пока инструмент собирал репозитории сам, правила доступа и выборки
+    существовали в MCP отдельной копией и молча расходились с HTTP.
+    """
+    offenders = [
+        f"{module}:{lineno}"
+        for module, lineno in imported_modules(path)
+        if module.startswith(DATA_LAYER_PREFIXES) and module not in MODEL_ENUM_MODULES
+    ]
+
+    assert not offenders, f"{path.name} импортирует слой данных: {offenders}"
+
+
+@pytest.mark.parametrize("path", MCP_TRANSPORT_MODULES, ids=lambda path: path.name)
+def test_mcp_tool_does_not_construct_services(path: Path) -> None:
+    """Инструмент получает готовые сервисы из контекста вызова.
+
+    Сборка внутри обработчика вернула бы MCP собственный граф
+    зависимостей, который нельзя подменить в тесте.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    offenders = [
+        f"{node.func.id}:{node.lineno}"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id.endswith(("Service", "Repository"))
+    ]
+
+    assert not offenders, f"{path.name} создаёт зависимость напрямую: {offenders}"
+
+
+def test_mcp_tool_context_does_not_expose_a_session() -> None:
+    """В контексте инструмента нет сессии базы данных.
+
+    Наличие сессии сделало бы границу необязательной: обработчик мог бы
+    обойти сервис, и проверка импортов этого бы не заметила.
+    """
+    from src.mcp_server.context import ToolContext
+
+    assert "session" not in ToolContext.__annotations__, (
+        "ToolContext снова отдаёт сессию: инструмент сможет ходить в базу мимо сервисов."
+    )
 
 
 @pytest.mark.parametrize(

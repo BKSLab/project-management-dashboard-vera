@@ -11,3 +11,6 @@ RUNTIME_STATE_KEY = "knowledge_runtime"
 
 SETTINGS_STATE_KEY = "app_settings"
 """Настройки приложения, прочитанные один раз при старте."""
+
+SESSION_FACTORY_STATE_KEY = "session_factory"
+"""Фабрика сессий PostgreSQL, созданная composition root."""

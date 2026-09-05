@@ -24,7 +24,7 @@
 | 5. Атомарный импорт документа | ✅ выполнен | 1037 passed | `stage-5` |
 | 6. Короткие DB scopes | ✅ выполнен | 1071 passed | `stage-6` |
 | 7. Очистка endpoints | ✅ выполнен | 1171 passed | `stage-7` |
-| 8. MCP на сервисы | ⬜ | — | — |
+| 8. MCP на сервисы | ✅ выполнен | 1204 passed | `stage-8` |
 | 9. DI knowledge worker | ⬜ | — | — |
 | 10. Архитектурные тесты | ⬜ | — | — |
 
@@ -1086,7 +1086,7 @@ transport-зависимость. `get_settings()` из эндпоинта уб�
 - registration вызывает один публичный service use case;
 - AST boundary test проходит для всех 22 endpoint-модулей.
 
-### Этап 8. Перевести MCP на application services
+### Этап 8. Перевести MCP на application services — ✅ выполнен
 
 Нормативное основание: транспортная граница [PAT-ARCH], constructor-injected
 use cases [PAT-SERVICE] и архитектурные guards [PAT-TEST].
@@ -1117,6 +1117,34 @@ use cases [PAT-SERVICE] и архитектурные guards [PAT-TEST].
 - AST test запрещает `src.repositories`, `src.db` и `sqlalchemy` в `context.py`, `server.py`, `write_tools.py`, `presenters.py`;
 - semantic client test подтверждает закрытый DB scope;
 - одинаковые auth/access scenarios дают эквивалентный результат HTTP и MCP.
+
+**Результат.** Инструменты MCP больше не собирают репозитории: `ToolContext`
+содержит принципала и `ToolServices`, но не `AsyncSession`, поэтому обойти
+сервисный слой из обработчика физически нельзя. Read-сценарии проекта сведены
+в transport-neutral `ProjectQueryService` (`src/services/project_query.py`),
+который работает через `ProjectQueryScope` и отдаёт DTO; `presenters.py`
+принимает эти DTO вместо ORM-моделей. `_project_stages` и
+`_project_member_user_id` заменены на `query.resolve_stage` и
+`members.resolve_member_user_id` — правило «исполнитель только из команды
+проекта» теперь одно на оба канала. Семантический поиск обращается к
+эмбеддингам и Qdrant после закрытия DB-области.
+
+Побочно найдено и исправлено: `ProjectQueryService` ловил широкий
+`ApplicationError`, из-за чего `ProjectNotFoundError` из `_require_project`
+превращался в 500-подобную сервисную ошибку вместо «не найдено»; перехват
+сужен до `RepositoryError`. `write_tools.py` брал `TaskPriority` из модели
+базы — переведён на `src/schemas/enums.py`.
+
+MCP-модули убраны из `PENDING_REPOSITORY_BUILDERS`; вместо них добавлены
+guards `test_mcp_tool_does_not_import_the_data_layer`,
+`test_mcp_tool_does_not_construct_services` и
+`test_mcp_tool_context_does_not_expose_a_session`. Тесты этапа:
+`tests/unit/mcp_server/**` (85) переписаны на service doubles с `spec`,
+`tests/unit/mcp_server/test_semantic_search.py` доказывает закрытую
+DB-область в момент внешнего вызова, `tests/characterization/
+test_channel_equivalence.py` — эквивалентность HTTP и MCP на сценариях
+доступа, `tests/characterization/test_mcp_contract.py` — неизменность имён
+инструментов, обязательных аргументов и ключей JSON.
 
 ### Этап 9. Инъецировать зависимости knowledge worker
 

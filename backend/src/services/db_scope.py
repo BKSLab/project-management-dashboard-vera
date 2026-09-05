@@ -137,3 +137,19 @@ class TaskDocumentImportScope:
 TaskDocumentImportScopeFactory = Callable[
     [], AbstractAsyncContextManager[TaskDocumentImportScope]
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectQueryScope:
+    """Одна короткая область read-сценариев проекта."""
+
+    projects: ProjectsRepository
+    members: ProjectMembersRepository
+    stages: ProjectStagesRepository
+    tasks: TasksRepository
+    comments: TaskCommentsRepository
+    wbs_nodes: WbsNodesRepository
+    milestones: MilestonesRepository
+
+
+ProjectQueryScopeFactory = Callable[[], AbstractAsyncContextManager[ProjectQueryScope]]

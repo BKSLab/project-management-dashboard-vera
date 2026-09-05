@@ -94,6 +94,42 @@ class ProjectMembersService:
             )
             raise ProjectsServiceError(str(error)) from error
 
+    async def resolve_member_user_id(self, *, project_id: int, username: str) -> int:
+        """Разрешает точный логин только внутри команды проекта.
+
+        Каталог пользователей наружу не раскрывается: несуществующий,
+        отключённый и не входящий в команду логин отвечают одинаково —
+        иначе перебором выяснялся бы состав системы.
+
+        Args:
+            project_id: Проект, в котором ищется участник.
+            username: Точный логин.
+
+        Returns:
+            Идентификатор пользователя-участника.
+
+        Raises:
+            ProjectMemberUserNotFoundError: Если активный участник не найден.
+            ProjectsServiceError: Если проверить участие не удалось.
+        """
+        try:
+            user = await self.users_repository.get_by_username(username=username.strip())
+            member = (
+                await self.members_repository.get(project_id=project_id, user_id=user.id)
+                if user is not None and user.is_active
+                else None
+            )
+        except RepositoryErrors as error:
+            logger.error(
+                "❌ Не удалось проверить участие пользователя в проекте id=%s.",
+                project_id,
+                exc_info=True,
+            )
+            raise ProjectsServiceError(str(error)) from error
+        if user is None or member is None:
+            raise ProjectMemberUserNotFoundError(username=username)
+        return user.id
+
     async def get_member_avatar(self, project_id: int, user_id: int) -> tuple[bytes, str]:
         """Отдаёт фотографию, только пока пользователь состоит в проекте."""
         try:

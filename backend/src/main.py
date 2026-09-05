@@ -32,7 +32,11 @@ from src.api.v1.endpoints.task_documents import router as task_documents_router
 from src.api.v1.endpoints.tasks import router as tasks_router
 from src.api.v1.endpoints.users import router as users_router
 from src.api.v1.endpoints.wbs_nodes import router as wbs_nodes_router
-from src.core.app_state import RUNTIME_STATE_KEY, SETTINGS_STATE_KEY
+from src.core.app_state import (
+    RUNTIME_STATE_KEY,
+    SESSION_FACTORY_STATE_KEY,
+    SETTINGS_STATE_KEY,
+)
 from src.core.config_logger import configure_logging
 from src.core.settings import get_settings
 from src.db.session import async_session_factory, engine
@@ -100,7 +104,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, object]]:
         async with mcp_server.session_manager.run():
             logger.info("✅ MCP-сервер доступен на %s.", settings.app.mcp_path)
             logger.info("✅ Приложение успешно запущено.")
-            yield {RUNTIME_STATE_KEY: runtime, SETTINGS_STATE_KEY: settings}
+            yield {
+                RUNTIME_STATE_KEY: runtime,
+                SETTINGS_STATE_KEY: settings,
+                SESSION_FACTORY_STATE_KEY: async_session_factory,
+            }
     finally:
         worker_stop.set()
         if worker_task is not None:

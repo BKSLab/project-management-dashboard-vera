@@ -14,20 +14,12 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from src.db.models.project_milestones import ProjectMilestoneStatus
-from src.db.models.project_stages import ProjectStage
-from src.db.models.tasks import TaskPriority
 from src.exceptions.base import ApplicationError
+from src.exceptions.projects import ProjectMemberUserNotFoundError
 from src.mcp_server.context import ToolContext, resolve_project, resolve_task, tool_context
 from src.mcp_server.server import mcp_server
-from src.mcp_server.services import (
-    build_comments_service,
-    build_milestones_service,
-    build_tasks_service,
-)
-from src.repositories.project_members import ProjectMembersRepository
-from src.repositories.project_stages import ProjectStagesRepository
-from src.repositories.users import UsersRepository
-from src.services.tasks import build_task_key
+from src.schemas.enums import TaskPriority
+from src.services.project_query import StageRefDto, UnknownStageError
 
 logger = logging.getLogger(__name__)
 
@@ -67,27 +59,24 @@ async def create_task(
 ) -> dict:
     """Создаёт задачу в доступном проекте."""
     async with tool_context(context, require_write=True) as tools:
-        project = await resolve_project(tools, project_key)
+        project_id = await resolve_project(tools, project_key)
         payload: dict = {"title": title.strip()}
         if description is not None:
             payload["description_md"] = description
         if stage is not None:
-            stages = await _project_stages(tools, project.id)
-            payload["stage_id"] = _stage_by_name(stages, stage).id
+            payload["stage_id"] = (await _resolve_stage(tools, project_id, stage)).stage_id
         if priority is not None:
             payload["priority"] = _parse_priority(priority)
         if assignee is not None:
             payload["executor_id"] = (
-                await _project_member_user_id(tools, project.id, assignee)
-                if assignee.strip()
-                else None
+                await _member_user_id(tools, project_id, assignee) if assignee.strip() else None
             )
         if due_date is not None:
             payload["due_date"] = _parse_date(due_date)
 
         try:
-            created = await build_tasks_service(tools.session, tools.settings).create_task(
-                project_id=project.id,
+            created = await tools.services.tasks.create_task(
+                project_id=project_id,
                 data=payload,
                 created_by_user_id=tools.principal.user_id,
             )
@@ -128,7 +117,7 @@ async def update_task(
 ) -> dict:
     """Изменяет переданные поля задачи."""
     async with tool_context(context, require_write=True) as tools:
-        task, project = await resolve_task(tools, task_key)
+        resolved = await resolve_task(tools, task_key)
         payload: dict = {}
         if title is not None:
             payload["title"] = title.strip()
@@ -138,7 +127,7 @@ async def update_task(
             payload["priority"] = _parse_priority(priority)
         if assignee is not None:
             payload["executor_id"] = (
-                await _project_member_user_id(tools, project.id, assignee)
+                await _member_user_id(tools, resolved.project_id, assignee)
                 if assignee.strip()
                 else None
             )
@@ -148,8 +137,8 @@ async def update_task(
             raise ToolError("Не передано ни одного поля для изменения.")
 
         try:
-            updated = await build_tasks_service(tools.session, tools.settings).update_task(
-                task_id=task.id,
+            updated = await tools.services.tasks.update_task(
+                task_id=resolved.task_id,
                 data=payload,
             )
         except ApplicationError as error:
@@ -172,14 +161,13 @@ async def move_task(
 ) -> dict:
     """Переводит задачу в другую стадию доски."""
     async with tool_context(context, require_write=True) as tools:
-        task, project = await resolve_task(tools, task_key)
-        stages = await _project_stages(tools, project.id)
-        target = _stage_by_name(stages, stage)
+        resolved = await resolve_task(tools, task_key)
+        target = await _resolve_stage(tools, resolved.project_id, stage)
 
         try:
-            moved = await build_tasks_service(tools.session, tools.settings).move_task(
-                task_id=task.id,
-                stage_id=target.id,
+            moved = await tools.services.tasks.move_task(
+                task_id=resolved.task_id,
+                stage_id=target.stage_id,
             )
         except ApplicationError as error:
             raise ToolError(_domain_message(error, "Не удалось переместить задачу.")) from error
@@ -209,11 +197,11 @@ async def delete_task(
         raise ToolError("Удаление требует confirm=true: действие необратимо.")
 
     async with tool_context(context, require_write=True) as tools:
-        task, project = await resolve_task(tools, task_key)
-        key = build_task_key(project.key, task.number)
+        resolved = await resolve_task(tools, task_key)
+        key = resolved.task_key
 
         try:
-            await build_tasks_service(tools.session, tools.settings).delete_task(task_id=task.id)
+            await tools.services.tasks.delete_task(task_id=resolved.task_id)
         except ApplicationError as error:
             raise ToolError(_domain_message(error, "Не удалось удалить задачу.")) from error
         return {"task_key": key, "deleted": True}
@@ -238,19 +226,19 @@ async def add_comment(
 ) -> dict:
     """Добавляет комментарий к задаче."""
     async with tool_context(context, require_write=True) as tools:
-        task, project = await resolve_task(tools, task_key)
+        resolved = await resolve_task(tools, task_key)
         author_name = (author or "").strip() or _default_author(tools)
 
         try:
-            comment = await build_comments_service(tools.session, tools.settings).add_comment(
-                task_id=task.id,
+            comment = await tools.services.comments.add_comment(
+                task_id=resolved.task_id,
                 author_name=author_name,
                 body_md=body,
             )
         except ApplicationError as error:
             raise ToolError(_domain_message(error, "Не удалось добавить комментарий.")) from error
         return {
-            "task_key": build_task_key(project.key, task.number),
+            "task_key": resolved.task_key,
             "author": comment.author_name,
             "created_at": comment.created_at.isoformat(),
         }
@@ -278,7 +266,7 @@ async def set_task_dates(
 ) -> dict:
     """Меняет только явно переданные календарные поля задачи."""
     async with tool_context(context, require_write=True) as tools:
-        task, _ = await resolve_task(tools, task_key)
+        resolved = await resolve_task(tools, task_key)
         payload: dict = {}
         if start_date is not None:
             payload["start_date"] = _parse_date(start_date) if start_date.strip() else None
@@ -287,8 +275,8 @@ async def set_task_dates(
         if not payload:
             raise ToolError("Не передано ни одной даты для изменения.")
         try:
-            updated = await build_tasks_service(tools.session, tools.settings).update_task(
-                task_id=task.id,
+            updated = await tools.services.tasks.update_task(
+                task_id=resolved.task_id,
                 data=payload,
             )
         except ApplicationError as error:
@@ -322,14 +310,14 @@ async def create_milestone(
 ) -> dict:
     """Создаёт пользовательскую веху в доступном проекте."""
     async with tool_context(context, require_write=True) as tools:
-        project = await resolve_project(tools, project_key)
+        project_id = await resolve_project(tools, project_key)
         try:
             milestone_status = ProjectMilestoneStatus(status.strip().upper())
         except ValueError as error:
             raise ToolError("Статус вехи должен быть PLANNED или ACHIEVED.") from error
         try:
-            created = await build_milestones_service(tools.session, tools.settings).create_milestone(
-                project.id,
+            created = await tools.services.milestones.create_milestone(
+                project_id,
                 {
                     "title": title.strip(),
                     "due_date": _parse_date(due_date),
@@ -341,7 +329,7 @@ async def create_milestone(
         except ApplicationError as error:
             raise ToolError(_domain_message(error, "Не удалось создать веху.")) from error
         return {
-            "project_key": project.key,
+            "project_key": project_key.strip().upper(),
             "title": created.title,
             "due_date": created.due_date.isoformat(),
             "status": created.status.value,
@@ -349,45 +337,33 @@ async def create_milestone(
         }
 
 
-async def _project_stages(tools: ToolContext, project_id: int) -> list[ProjectStage]:
-    """Загружает стадии проекта с единым текстом ошибки."""
+async def _resolve_stage(tools: ToolContext, project_id: int, stage: str) -> StageRefDto:
+    """Находит стадию сервисом и переводит его ошибку в ToolError."""
     try:
-        return await ProjectStagesRepository(tools.session).get_by_project(project_id)
+        return await tools.services.query.resolve_stage(project_id=project_id, stage_name=stage)
+    except UnknownStageError as error:
+        raise ToolError(error.detail) from error
     except ApplicationError as error:
         raise ToolError("Не удалось получить стадии проекта.") from error
 
 
-async def _project_member_user_id(
-    tools: ToolContext,
-    project_id: int,
-    username: str,
-) -> int:
-    """Разрешает точный логин только внутри команды, не раскрывая каталог пользователей."""
+async def _member_user_id(tools: ToolContext, project_id: int, username: str) -> int:
+    """Разрешает исполнителя сервисом команды проекта.
+
+    Правило «только активный участник этого проекта» принадлежит сервису:
+    оно одинаково для всех каналов и не должно повторяться в транспорте.
+    """
     try:
-        user = await UsersRepository(tools.session).get_by_username(username.strip())
-        member = (
-            await ProjectMembersRepository(tools.session).get(
-                project_id=project_id,
-                user_id=user.id,
-            )
-            if user is not None and user.is_active
-            else None
+        return await tools.services.members.resolve_member_user_id(
+            project_id=project_id,
+            username=username,
         )
+    except ProjectMemberUserNotFoundError as error:
+        raise ToolError(
+            "Активный пользователь с таким логином не входит в команду проекта."
+        ) from error
     except ApplicationError as error:
         raise ToolError("Не удалось проверить исполнителя задачи.") from error
-    if user is None or member is None:
-        raise ToolError("Активный пользователь с таким логином не входит в команду проекта.")
-    return user.id
-
-
-def _stage_by_name(stages: list[ProjectStage], name: str) -> ProjectStage:
-    """Находит стадию по названию без учёта регистра."""
-    wanted = name.strip().casefold()
-    for stage in stages:
-        if stage.name.casefold() == wanted:
-            return stage
-    known = ", ".join(item.name for item in stages)
-    raise ToolError(f"Стадия не найдена. Доступные стадии: {known}.")
 
 
 def _parse_priority(value: str) -> TaskPriority:

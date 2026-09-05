@@ -1,442 +1,421 @@
-"""Проверки инструментов чтения MCP."""
+"""Проверки инструментов чтения MCP.
 
-from contextlib import asynccontextmanager
+Инструменты больше не ходят в репозитории: они вызывают use case и
+превращают DTO в JSON. Поэтому здесь проверяется именно это — какой
+сценарий вызван, с какими аргументами, и как его результат выглядит
+снаружи.
+"""
+
 from datetime import UTC, date, datetime
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
-from src.clients.vision import DisabledVisionCapability
-from src.core.settings import get_settings
-from src.db.models.api_tokens import ApiTokenScope
-from src.db.models.project_members import ProjectMember, ProjectRole
 from src.db.models.project_milestones import ProjectMilestoneStatus
-from src.db.models.project_stages import ProjectStage
-from src.db.models.projects import Project, ProjectStatus
-from src.db.models.task_comments import TaskComment
-from src.db.models.tasks import Task, TaskPriority
-from src.exceptions.access import ResourceNotAvailableError
+from src.exceptions.projects import ProjectNotFoundError, ProjectsServiceError
 from src.mcp_server import server as srv
-from src.mcp_server.context import ToolContext
 from src.schemas.calendar import (
     CalendarMilestoneSchema,
+    CalendarProjectSchema,
     CalendarRangeSchema,
+    CalendarResponseSchema,
     CalendarRiskReasonSchema,
     CalendarSummarySchema,
     CalendarTaskSchema,
     UnscheduledTasksPageSchema,
 )
-from src.services.access import AccessGrant, AccessService
-from src.services.auth import Principal
+from src.schemas.enums import TaskPriority
+from src.services.project_query import (
+    CommentDto,
+    MilestoneDto,
+    ProjectOverviewDto,
+    ProjectStageDto,
+    ProjectSummaryDto,
+    ResolvedTask,
+    TaskDetailsDto,
+    TaskSummaryDto,
+    UnknownStageError,
+)
+from tests.unit.mcp_server.conftest import PROJECT_ID, FakeContext
 
-VISIBLE = Project(
-    id=1,
-    owner_id=1,
-    key="PROJ",
+PROJECT = ProjectSummaryDto(
+    project_key="PROJ",
     name="Тестовый проект",
-    color="#58a6ff",
-    status=ProjectStatus.ACTIVE,
+    status="ACTIVE",
+    start_date=None,
     due_date=date(2026, 9, 30),
 )
-FOREIGN = Project(
-    id=2,
-    owner_id=99,
-    key="OTHER",
-    name="Чужой",
-    color="#ff0000",
-    status=ProjectStatus.ACTIVE,
-)
-
-STAGES = [
-    ProjectStage(id=1, project_id=1, name="В работе", is_done_stage=False, order_index=0),
-    ProjectStage(id=2, project_id=1, name="Готово", is_done_stage=True, order_index=1),
-]
-TASKS = [
-    Task(
-        id=10,
-        project_id=1,
-        stage_id=1,
-        number=1,
-        title="Настроить вход",
-        description_md="Описание",
-        priority=TaskPriority.HIGH,
-        assignee="Борис",
-    ),
-    Task(
-        id=11,
-        project_id=1,
-        stage_id=2,
-        number=2,
-        title="Сверстать дашборд",
-        priority=TaskPriority.LOW,
-        assignee="Анна",
-    ),
-]
 
 
-def _access_service(*, member_project_ids: set[int]) -> AsyncMock:
-    """Сервис доступа, пускающий только в перечисленные проекты."""
-    service = AsyncMock(spec=AccessService)
-
-    async def ensure(*, project_id: int, user_id: int) -> AccessGrant:
-        if project_id not in member_project_ids:
-            raise ResourceNotAvailableError(resource="Проект", resource_id=project_id)
-        return AccessGrant(project_id=project_id, resource_id=project_id, is_owner=True)
-
-    service.ensure_project_access.side_effect = ensure
-    return service
-
-
-class FakeContext:
-    """Контекст вызова MCP с заголовком токена."""
-
-    headers = {"Authorization": "Bearer tt_test"}
-
-
-def _runtime() -> SimpleNamespace:
-    """Контейнер клиентов, который в проде создаёт lifespan приложения."""
-    return SimpleNamespace(
-        embedding_client=AsyncMock(),
-        qdrant_client=AsyncMock(),
-        llm_client=AsyncMock(),
-        vision=DisabledVisionCapability(),
-    )
+def calendar_task(**overrides) -> CalendarTaskSchema:
+    """Задача календаря в том виде, в каком её отдаёт сервис."""
+    values = {
+        "id": 7,
+        "key": "PROJ-142",
+        "title": "Задача",
+        "start_date": date(2026, 9, 1),
+        "due_date": date(2026, 9, 10),
+        "baseline_start_date": None,
+        "baseline_due_date": None,
+        "drift_days": None,
+        "stage_id": 11,
+        "wbs_node_id": None,
+        "priority": TaskPriority.HIGH,
+        "assignee": "Борис",
+        "is_done": False,
+        "is_overdue": True,
+        "is_due_soon": False,
+        "risk_level": "HIGH",
+        "risk_reasons": [CalendarRiskReasonSchema(code="OVERDUE", message="Срок прошёл")],
+        "updated_at": datetime(2026, 9, 2, 12, 0, tzinfo=UTC),
+    }
+    values.update(overrides)
+    return CalendarTaskSchema(**values)
 
 
-def _tools(scope: ApiTokenScope = ApiTokenScope.READ) -> ToolContext:
-    return ToolContext(
-        principal=Principal(
-            user_id=1,
-            username="tester",
-            last_name="Тестов",
-            first_name="Тест",
-            middle_name=None,
-            scope=scope,
-            via_api_token=True,
+def calendar_response(tasks: list[CalendarTaskSchema]) -> CalendarResponseSchema:
+    """Ответ календаря с минимальным, но валидным окружением."""
+    return CalendarResponseSchema(
+        range=CalendarRangeSchema(
+            date_from=date(2026, 9, 1),
+            date_to=date(2026, 9, 30),
+            today=date(2026, 9, 5),
         ),
-        session=object(),
-        runtime=_runtime(),
-        settings=get_settings(),
+        project=CalendarProjectSchema(start_date=None, due_date=date(2026, 9, 30)),
+        tasks=tasks,
+        stages=[],
+        wbs_nodes=[],
+        assignees=["Борис"],
+        summary=CalendarSummarySchema(overdue=1, due_soon=0, unscheduled=0, drifted=0),
+        recent_changes=[],
+        milestones=[
+            CalendarMilestoneSchema(
+                id=3,
+                title="MVP",
+                due_date=date(2026, 9, 20),
+                status=ProjectMilestoneStatus.PLANNED,
+                wbs_node_id=None,
+                description_md=None,
+            )
+        ],
+        dependencies=[],
     )
 
 
-@pytest.fixture
-def tracker(monkeypatch: pytest.MonkeyPatch):
-    """Подменяет репозитории и вход в контекст инструмента."""
-
-    @asynccontextmanager
-    async def fake_tool_context(context, *, require_write: bool = False):
-        yield _tools()
-
-    class Projects:
-        def __init__(self, session):
-            pass
-
-        async def get_all(self) -> list[Project]:
-            return [VISIBLE, FOREIGN]
-
-        async def get_by_key(self, key: str) -> Project | None:
-            return {"PROJ": VISIBLE, "OTHER": FOREIGN}.get(key)
-
-    class Members:
-        def __init__(self, session):
-            pass
-
-        async def get_project_ids_for_user(self, user_id: int) -> set[int]:
-            return {VISIBLE.id}
-
-        async def get(self, *, project_id: int, user_id: int) -> ProjectMember | None:
-            if project_id != VISIBLE.id:
-                return None
-            return ProjectMember(project_id=project_id, user_id=user_id, role=ProjectRole.OWNER)
-
-    class Stages:
-        def __init__(self, session):
-            pass
-
-        async def get_by_project(self, project_id: int) -> list[ProjectStage]:
-            return STAGES
-
-    class Tasks:
-        def __init__(self, session):
-            pass
-
-        async def get_by_project(self, project_id: int, task_ids=None, **kwargs) -> list[Task]:
-            if task_ids is None:
-                return TASKS
-            return [task for task in TASKS if task.id in task_ids]
-
-        async def search_ids(self, project_id: int, search: str) -> set[int]:
-            return {10} if "вход" in search else set()
-
-    class Comments:
-        def __init__(self, session):
-            pass
-
-        async def get_for_task(self, task_id: int) -> list[TaskComment]:
-            return [
-                TaskComment(
-                    id=1,
-                    task_id=task_id,
-                    author_name="Борис",
-                    body_md="Ждём уточнения",
-                    created_at=datetime.now(UTC),
-                )
-            ]
-
-    class Calendar:
-        async def get_range(self, *, project_id: int, date_from: date, date_to: date, today: date):
-            return SimpleNamespace(
-                range=CalendarRangeSchema(
-                    date_from=date_from,
-                    date_to=date_to,
-                    today=today,
-                ),
-                tasks=[
-                    CalendarTaskSchema(
-                        id=10,
-                        key="PROJ-1",
-                        title="Настроить вход",
-                        start_date=date(2026, 9, 1),
-                        due_date=date(2026, 9, 5),
-                        baseline_start_date=date(2026, 9, 1),
-                        baseline_due_date=date(2026, 9, 4),
-                        drift_days=1,
-                        stage_id=1,
-                        wbs_node_id=None,
-                        priority=TaskPriority.HIGH,
-                        assignee="Борис",
-                        is_done=False,
-                        is_overdue=True,
-                        is_due_soon=False,
-                        risk_level="high",
-                        risk_reasons=[
-                            CalendarRiskReasonSchema(
-                                code="OVERDUE",
-                                message="Срок просрочен.",
-                                days=1,
-                            )
-                        ],
-                        updated_at=datetime.now(UTC),
-                    )
-                ],
-                milestones=[
-                    CalendarMilestoneSchema(
-                        id=3,
-                        title="MVP",
-                        due_date=date(2026, 9, 20),
-                        status=ProjectMilestoneStatus.PLANNED,
-                        wbs_node_id=None,
-                        description_md=None,
-                    )
-                ],
-                summary=CalendarSummarySchema(
-                    overdue=1,
-                    due_soon=0,
-                    unscheduled=1,
-                    drifted=1,
-                    dependency_risks=0,
-                ),
-            )
-
-        async def get_unscheduled(self, **kwargs):
-            item = (
-                (
-                    await self.get_range(
-                        project_id=kwargs["project_id"],
-                        date_from=date(2026, 9, 1),
-                        date_to=date(2026, 9, 30),
-                        today=kwargs["today"],
-                    )
-                )
-                .tasks[0]
-                .model_copy(update={"start_date": None, "due_date": None})
-            )
-            return UnscheduledTasksPageSchema(items=[item], next_cursor=None)
-
-    class Milestones:
-        def __init__(self, session):
-            pass
-
-        async def get_by_project(self, project_id: int):
-            return [
-                SimpleNamespace(
-                    id=3,
-                    title="MVP",
-                    due_date=date(2026, 9, 20),
-                    status=ProjectMilestoneStatus.PLANNED,
-                    description_md="Первая версия",
-                )
-            ]
-
-    monkeypatch.setattr(srv, "tool_context", fake_tool_context)
-    for module in (srv, __import__("src.mcp_server.context", fromlist=["x"])):
-        monkeypatch.setattr(module, "ProjectsRepository", Projects, raising=False)
-        monkeypatch.setattr(module, "ProjectMembersRepository", Members, raising=False)
-        monkeypatch.setattr(
-            module,
-            "build_access_service",
-            lambda session: _access_service(member_project_ids={1}),
-            raising=False,
-        )
-        monkeypatch.setattr(module, "TasksRepository", Tasks, raising=False)
-    monkeypatch.setattr(srv, "ProjectStagesRepository", Stages)
-    monkeypatch.setattr(srv, "TaskCommentsRepository", Comments)
-    monkeypatch.setattr(srv, "build_calendar_service", lambda session: Calendar())
-    monkeypatch.setattr(srv, "MilestonesRepository", Milestones)
+def task_dto(number: int = 142, **overrides) -> TaskSummaryDto:
+    """Краткая карточка задачи для ответа сервиса."""
+    values = {
+        "task_key": f"PROJ-{number}",
+        "title": "Задача",
+        "stage": "В работе",
+        "is_done": False,
+        "priority": TaskPriority.HIGH.value,
+        "assignee": "Борис",
+        "due_date": date(2026, 10, 1),
+    }
+    values.update(overrides)
+    return TaskSummaryDto(**values)
 
 
-async def test_list_projects_hides_foreign_projects(tracker) -> None:
-    """Проект, в котором пользователь не состоит, в списке не появляется."""
+async def test_list_projects_returns_only_the_service_result(tools) -> None:
+    """Инструмент отдаёт то, что вернул сценарий, и не фильтрует сам.
+
+    Раньше фильтрация по доступу жила в обработчике: правило «что видно
+    владельцу токена» существовало только в MCP.
+    """
+    services = tools()
+    services.query.list_accessible_projects.return_value = [PROJECT]
+
     result = await srv.list_projects(FakeContext())
 
     assert [item["project_key"] for item in result] == ["PROJ"]
+    services.query.list_accessible_projects.assert_awaited_once_with(user_id=1)
 
 
-async def test_get_project_returns_stages_with_counts(tracker) -> None:
+async def test_list_projects_reports_service_failure(tools) -> None:
+    """Сбой сценария превращается в ToolError без внутренних деталей."""
+    services = tools()
+    services.query.list_accessible_projects.side_effect = ProjectsServiceError("сбой БД")
+
+    with pytest.raises(ToolError) as error:
+        await srv.list_projects(FakeContext())
+
+    assert "сбой БД" not in str(error.value)
+
+
+async def test_get_project_returns_stages_with_counts(tools) -> None:
     """Карточка проекта содержит стадии и число задач в каждой."""
+    services = tools()
+    services.query.get_project_overview.return_value = ProjectOverviewDto(
+        summary=PROJECT,
+        description="Описание",
+        total_tasks=2,
+        stages=[
+            ProjectStageDto(name="В работе", is_done_stage=False, task_count=2),
+            ProjectStageDto(name="Готово", is_done_stage=True, task_count=0),
+        ],
+    )
+
     result = await srv.get_project(FakeContext(), project_key="PROJ")
 
     assert result["project_key"] == "PROJ"
     assert result["total_tasks"] == 2
-    assert {stage["name"]: stage["task_count"] for stage in result["stages"]} == {
-        "В работе": 1,
-        "Готово": 1,
-    }
+    assert result["stages"] == [
+        {"name": "В работе", "is_done_stage": False, "task_count": 2},
+        {"name": "Готово", "is_done_stage": True, "task_count": 0},
+    ]
 
 
-async def test_get_project_rejects_foreign_project(tracker) -> None:
-    """Чужой проект недоступен даже при точном ключе."""
-    with pytest.raises(ToolError):
+async def test_get_project_rejects_foreign_project(tools) -> None:
+    """Чужой проект неотличим от несуществующего."""
+    services = tools()
+    services.query.resolve_project_id.side_effect = ProjectNotFoundError(project_id=0)
+
+    with pytest.raises(ToolError) as error:
         await srv.get_project(FakeContext(), project_key="OTHER")
 
-
-async def test_list_tasks_returns_display_keys(tracker) -> None:
-    """Наружу отдаются ключи вида PROJ-1, а не числовые идентификаторы."""
-    result = await srv.list_tasks(FakeContext(), project_key="PROJ")
-
-    assert [item["task_key"] for item in result] == ["PROJ-1", "PROJ-2"]
-    assert all("id" not in item for item in result)
+    assert str(error.value) == "Проект недоступен."
 
 
-async def test_list_tasks_filters_by_stage(tracker) -> None:
-    """Фильтр по названию стадии работает без учёта регистра."""
-    result = await srv.list_tasks(FakeContext(), project_key="PROJ", stage="в работе")
+async def test_list_tasks_passes_filters_to_the_use_case(tools) -> None:
+    """Фильтры уходят в сценарий, а не применяются в обработчике."""
+    services = tools()
+    services.query.list_tasks.return_value = [task_dto()]
 
-    assert [item["task_key"] for item in result] == ["PROJ-1"]
+    result = await srv.list_tasks(
+        FakeContext(),
+        project_key="PROJ",
+        stage="В работе",
+        assignee="Борис",
+        only_open=True,
+        limit=5,
+    )
+
+    assert [item["task_key"] for item in result] == ["PROJ-142"]
+    services.query.list_tasks.assert_awaited_once_with(
+        project_id=PROJECT_ID,
+        stage_name="В работе",
+        assignee="Борис",
+        only_open=True,
+        limit=5,
+    )
 
 
-async def test_list_tasks_unknown_stage_lists_available(tracker) -> None:
-    """Неизвестная стадия подсказывает доступные, а не молча отдаёт пустоту."""
+async def test_list_tasks_unknown_stage_lists_available(tools) -> None:
+    """Неизвестная стадия отвечает списком доступных.
+
+    Без него вызывающему пришлось бы угадывать написание.
+    """
+    services = tools()
+    services.query.list_tasks.side_effect = UnknownStageError(
+        stage_name="Ревью",
+        known=["В работе", "Готово"],
+    )
+
     with pytest.raises(ToolError) as error:
-        await srv.list_tasks(FakeContext(), project_key="PROJ", stage="Неизвестная")
+        await srv.list_tasks(FakeContext(), project_key="PROJ", stage="Ревью")
 
     assert "В работе" in str(error.value)
+    assert "Готово" in str(error.value)
 
 
-async def test_list_tasks_filters_by_assignee(tracker) -> None:
-    """Фильтр по исполнителю сравнивает без учёта регистра."""
-    result = await srv.list_tasks(FakeContext(), project_key="PROJ", assignee="анна")
+async def test_get_task_returns_details_and_comment_count(tools) -> None:
+    """Карточка задачи содержит описание, путь ИСР и число комментариев."""
+    services = tools()
+    services.query.resolve_task.return_value = ResolvedTask(
+        task_id=7,
+        project_id=PROJECT_ID,
+        task_key="PROJ-142",
+    )
+    services.query.get_task_details.return_value = TaskDetailsDto(
+        summary=task_dto(),
+        role="BE",
+        wbs_path="1.2 Раздел",
+        description="Подробности",
+        comment_count=3,
+    )
 
-    assert [item["task_key"] for item in result] == ["PROJ-2"]
+    result = await srv.get_task(FakeContext(), task_key="PROJ-142")
 
-
-async def test_list_tasks_only_open_drops_done_stage(tracker) -> None:
-    """Флаг только незавершённых отбрасывает задачи завершающей стадии."""
-    result = await srv.list_tasks(FakeContext(), project_key="PROJ", only_open=True)
-
-    assert [item["task_key"] for item in result] == ["PROJ-1"]
-
-
-async def test_list_tasks_respects_limit(tracker) -> None:
-    """Лимит ограничивает выдачу: агент не вытянет проект целиком случайно."""
-    result = await srv.list_tasks(FakeContext(), project_key="PROJ", limit=1)
-
-    assert len(result) == 1
-
-
-async def test_get_task_returns_details_and_comment_count(tracker) -> None:
-    """Карточка задачи содержит описание и число комментариев."""
-    result = await srv.get_task(FakeContext(), task_key="PROJ-1")
-
-    assert result["task_key"] == "PROJ-1"
-    assert result["description"] == "Описание"
-    assert result["comment_count"] == 1
-    assert result["is_done"] is False
+    assert result["task_key"] == "PROJ-142"
+    assert result["wbs_path"] == "1.2 Раздел"
+    assert result["comment_count"] == 3
+    services.query.get_task_details.assert_awaited_once_with(task_id=7)
 
 
-async def test_get_task_marks_done_stage(tracker) -> None:
-    """Завершённость берётся из признака стадии, а не из поля задачи."""
-    result = await srv.get_task(FakeContext(), task_key="PROJ-2")
+async def test_get_task_marks_done_stage(tools) -> None:
+    """Задача в завершающей стадии помечается как выполненная."""
+    services = tools()
+    services.query.resolve_task.return_value = ResolvedTask(
+        task_id=7,
+        project_id=PROJECT_ID,
+        task_key="PROJ-142",
+    )
+    services.query.get_task_details.return_value = TaskDetailsDto(
+        summary=task_dto(stage="Готово", is_done=True),
+        role=None,
+        wbs_path=None,
+        description=None,
+        comment_count=0,
+    )
+
+    result = await srv.get_task(FakeContext(), task_key="PROJ-142")
 
     assert result["is_done"] is True
 
 
-async def test_list_comments_returns_body_and_author(tracker) -> None:
-    """Комментарии отдаются с автором и ключом задачи."""
-    result = await srv.list_comments(FakeContext(), task_key="PROJ-1")
+async def test_list_comments_returns_body_and_author(tools) -> None:
+    """Комментарии отдаются с автором, временем и ключом задачи."""
+    services = tools()
+    services.query.resolve_task.return_value = ResolvedTask(
+        task_id=7,
+        project_id=PROJECT_ID,
+        task_key="PROJ-142",
+    )
+    services.query.list_comments.return_value = [
+        CommentDto(
+            task_key="PROJ-142",
+            author="Борис",
+            created_at=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+            body="Текст",
+        )
+    ]
 
-    assert result[0]["task_key"] == "PROJ-1"
-    assert result[0]["author"] == "Борис"
-    assert result[0]["body"] == "Ждём уточнения"
+    result = await srv.list_comments(FakeContext(), task_key="PROJ-142", limit=10)
+
+    assert result == [
+        {
+            "task_key": "PROJ-142",
+            "author": "Борис",
+            "created_at": "2026-09-01T10:00:00+00:00",
+            "body": "Текст",
+        }
+    ]
 
 
-async def test_search_tasks_finds_by_text(tracker) -> None:
-    """Лексический поиск возвращает совпавшие задачи."""
-    result = await srv.search_tasks(FakeContext(), project_key="PROJ", query="вход")
+async def test_search_tasks_delegates_to_the_use_case(tools) -> None:
+    """Поиск выполняется сценарием, обработчик только форматирует ответ."""
+    services = tools()
+    services.query.search_tasks.return_value = [task_dto()]
 
-    assert [item["task_key"] for item in result] == ["PROJ-1"]
+    result = await srv.search_tasks(FakeContext(), project_key="PROJ", query="отчёт", limit=7)
+
+    assert [item["task_key"] for item in result] == ["PROJ-142"]
+    services.query.search_tasks.assert_awaited_once_with(
+        project_id=PROJECT_ID,
+        query="отчёт",
+        limit=7,
+    )
 
 
-async def test_search_tasks_returns_empty_without_matches(tracker) -> None:
+async def test_search_tasks_returns_empty_without_matches(tools) -> None:
     """Отсутствие совпадений — пустой список, а не ошибка."""
-    result = await srv.search_tasks(FakeContext(), project_key="PROJ", query="ничего")
+    services = tools()
+    services.query.search_tasks.return_value = []
 
-    assert result == []
-
-
-async def test_search_tasks_rejects_foreign_project(tracker) -> None:
-    """Поиск не выполняется в недоступном проекте."""
-    with pytest.raises(ToolError):
-        await srv.search_tasks(FakeContext(), project_key="OTHER", query="вход")
+    assert await srv.search_tasks(FakeContext(), project_key="PROJ", query="нет") == []
 
 
-async def test_get_calendar_range_returns_display_keys_and_backend_risks(tracker) -> None:
-    """Календарный tool не раскрывает id и отдаёт готовые причины риска."""
+async def test_get_calendar_range_returns_display_keys(tools) -> None:
+    """Календарь отдаётся отображаемыми ключами, без внутренних id."""
+    services = tools()
+    services.calendar.get_range.return_value = calendar_response([calendar_task()])
+
+    result = await srv.get_calendar_range(
+        FakeContext(),
+        project_key="proj",
+        date_from="2026-09-01",
+        date_to="2026-09-30",
+    )
+
+    assert result["project_key"] == "PROJ"
+    assert result["tasks"][0]["task_key"] == "PROJ-142"
+    assert "id" not in result["tasks"][0]
+    assert result["milestones"][0]["title"] == "MVP"
+    assert result["truncated"] is False
+
+
+async def test_get_calendar_range_marks_truncated_result(tools) -> None:
+    """Обрезанный по лимиту ответ помечается явно.
+
+    Иначе вызывающий принял бы неполный список за полный.
+    """
+    services = tools()
+    services.calendar.get_range.return_value = calendar_response(
+        [calendar_task(id=7, key="PROJ-1"), calendar_task(id=8, key="PROJ-2")]
+    )
+
     result = await srv.get_calendar_range(
         FakeContext(),
         project_key="PROJ",
         date_from="2026-09-01",
         date_to="2026-09-30",
-    )
-
-    assert result["tasks"][0]["task_key"] == "PROJ-1"
-    assert result["tasks"][0]["risk_reasons"][0]["code"] == "OVERDUE"
-    assert "id" not in result["tasks"][0]
-    assert result["milestones"][0]["title"] == "MVP"
-
-
-async def test_list_tasks_without_due_date_is_bounded_and_uses_keys(tracker) -> None:
-    """Backlog без срока возвращается ограниченным списком с task_key."""
-    result = await srv.list_tasks_without_due_date(
-        FakeContext(),
-        project_key="PROJ",
         limit=1,
     )
 
-    assert result[0]["task_key"] == "PROJ-1"
-    assert result[0]["risk_reasons"] == [
-        {"code": "OVERDUE", "message": "Срок просрочен.", "days": 1}
+    assert [item["task_key"] for item in result["tasks"]] == ["PROJ-1"]
+    assert result["truncated"] is True
+
+
+async def test_get_calendar_range_rejects_bad_date(tools) -> None:
+    """Некорректная дата отвечает понятным сообщением о формате."""
+    tools()
+
+    with pytest.raises(ToolError) as error:
+        await srv.get_calendar_range(
+            FakeContext(),
+            project_key="PROJ",
+            date_from="01.09.2026",
+            date_to="2026-09-30",
+        )
+
+    assert "ГГГГ-ММ-ДД" in str(error.value)
+
+
+async def test_list_tasks_without_due_date_is_bounded(tools) -> None:
+    """Пул задач без срока ограничен лимитом и отдаётся ключами."""
+    services = tools()
+    services.calendar.get_unscheduled.return_value = UnscheduledTasksPageSchema(
+        items=[
+            calendar_task(
+                title="Без срока",
+                start_date=None,
+                due_date=None,
+                is_overdue=False,
+                risk_level=None,
+                risk_reasons=[],
+            )
+        ],
+        next_cursor=None,
+    )
+
+    result = await srv.list_tasks_without_due_date(FakeContext(), project_key="PROJ", limit=3)
+
+    assert [item["task_key"] for item in result] == ["PROJ-142"]
+    assert services.calendar.get_unscheduled.await_args.kwargs["limit"] == 3
+
+
+async def test_list_milestones_includes_system_project_deadline(tools) -> None:
+    """Системная веха дедлайна приходит из сценария вместе с обычными."""
+    services = tools()
+    services.query.list_milestones.return_value = [
+        MilestoneDto(
+            title="MVP",
+            due_date=date(2026, 9, 20),
+            status="PLANNED",
+            description="Первая версия",
+            is_system=False,
+        ),
+        MilestoneDto(
+            title="Дедлайн проекта",
+            due_date=date(2026, 9, 30),
+            status="PLANNED",
+            description=None,
+            is_system=True,
+        ),
     ]
 
+    result = await srv.list_milestones(FakeContext(), project_key="PROJ", limit=10)
 
-async def test_list_milestones_includes_system_project_deadline(tracker) -> None:
-    """Системная веха дедлайна добавляется без отдельной записи в БД."""
-    result = await srv.list_milestones(FakeContext(), project_key="PROJ")
-
-    assert [(item["title"], item["is_system"]) for item in result] == [
-        ("MVP", False),
-        ("Дедлайн проекта", True),
-    ]
+    assert [item["title"] for item in result] == ["MVP", "Дедлайн проекта"]
+    assert result[-1]["is_system"] is True

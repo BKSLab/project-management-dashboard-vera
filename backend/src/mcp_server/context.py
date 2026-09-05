@@ -1,9 +1,11 @@
 """Аутентификация и разрешение сущностей для MCP-инструментов.
 
-MCP-слой намеренно не имеет собственной логики доступа: он вызывает ту же
-функцию аутентификации, что и HTTP-эндпоинты, и ту же проверку участия в
-проекте. Иначе две реализации прав рано или поздно разъедутся, и разойдутся
-молча.
+MCP-слой намеренно не имеет собственной логики доступа: он вызывает те же
+сервисы, что и HTTP-эндпоинты. Иначе две реализации прав рано или поздно
+разъедутся, и разойдутся молча.
+
+Наружу отдаётся контекст с готовыми сервисами, а не с сессией: обработчик
+инструмента не должен решать, что и в какой транзакции читать.
 """
 
 import logging
@@ -13,21 +15,21 @@ from dataclasses import dataclass
 
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.app_state import RUNTIME_STATE_KEY, SETTINGS_STATE_KEY
+from src.core.app_state import (
+    RUNTIME_STATE_KEY,
+    SESSION_FACTORY_STATE_KEY,
+    SETTINGS_STATE_KEY,
+)
 from src.core.settings import Settings
-from src.db.models.projects import Project
-from src.db.models.tasks import Task
-from src.db.session import async_session_factory
 from src.exceptions.access import AccessServiceError
 from src.exceptions.auth import AuthServiceError
-from src.exceptions.base import ApplicationError
+from src.exceptions.projects import ProjectNotFoundError, ProjectsServiceError
+from src.exceptions.tasks import TaskNotFoundError
 from src.knowledge.runtime import KnowledgeRuntime
-from src.mcp_server.services import build_access_service, build_auth_service
-from src.repositories.projects import ProjectsRepository
-from src.repositories.tasks import TasksRepository
+from src.mcp_server.services import ToolServices, build_tool_services
 from src.services.auth import Principal
+from src.services.project_query import ResolvedTask
 from src.utils.api_tokens import extract_bearer_secret
 
 logger = logging.getLogger(__name__)
@@ -41,14 +43,14 @@ RESOURCES_MISSING = "Сервер запущен без ресурсов при�
 
 @dataclass(slots=True)
 class ToolContext:
-    """Всё, что нужно инструменту: кто спрашивает, через какую сессию и чем.
+    """Всё, что нужно инструменту: кто спрашивает и какими сервисами.
 
-    Клиенты и настройки приходят из состояния приложения, созданного
-    lifespan: у MCP и HTTP один набор ресурсов, а инструмент не ищет их сам.
+    Сессия сюда не попадает: работа с базой остаётся внутри сервисов, а
+    обработчик инструмента получает готовые use case.
     """
 
     principal: Principal
-    session: AsyncSession
+    services: ToolServices
     runtime: KnowledgeRuntime
     settings: Settings
 
@@ -57,23 +59,28 @@ class ToolContext:
 async def tool_context(
     context: Context, *, require_write: bool = False
 ) -> AsyncIterator[ToolContext]:
-    """Открывает сессию и определяет пользователя вызова инструмента.
+    """Определяет пользователя вызова и собирает сервисы инструмента.
 
     Args:
         context: Контекст вызова MCP с заголовками транспорта.
         require_write: Требуется ли право изменять данные.
 
     Yields:
-        Пользователь запроса и сессия базы данных.
+        Принципал запроса и готовые сервисы.
 
     Raises:
         ToolError: Если токен не предъявлен, недействителен или недостаточен.
     """
     authorization = _authorization_header(context)
-    runtime, settings = _app_resources(context)
-    async with async_session_factory() as session:
+    runtime, settings, session_factory = _app_resources(context)
+    async with session_factory() as session:
+        services = build_tool_services(
+            session=session,
+            session_factory=session_factory,
+            settings=settings,
+        )
         try:
-            principal = await build_auth_service(session, settings).resolve_principal(
+            principal = await services.auth.resolve_principal(
                 session_token=None,
                 bearer_secret=extract_bearer_secret(authorization),
             )
@@ -87,13 +94,13 @@ async def tool_context(
             raise ToolError(READ_ONLY_TOKEN)
         yield ToolContext(
             principal=principal,
-            session=session,
+            services=services,
             runtime=runtime,
             settings=settings,
         )
 
 
-async def resolve_project(tools: ToolContext, project_key: str) -> Project:
+async def resolve_project(tools: ToolContext, project_key: str) -> int:
     """Находит проект по ключу и проверяет доступ пользователя.
 
     Args:
@@ -101,25 +108,23 @@ async def resolve_project(tools: ToolContext, project_key: str) -> Project:
         project_key: Отображаемый ключ проекта, например ``PROJ``.
 
     Returns:
-        Проект, доступный пользователю.
+        Идентификатор доступного пользователю проекта.
 
     Raises:
         ToolError: Если проект не найден или недоступен.
     """
-    normalized = (project_key or "").strip().upper()
-    if not normalized:
-        raise ToolError(PROJECT_NOT_AVAILABLE)
     try:
-        project = await ProjectsRepository(tools.session).get_by_key(normalized)
-    except ApplicationError as error:
+        project_id = await tools.services.query.resolve_project_id(project_key=project_key)
+    except ProjectNotFoundError as error:
+        raise ToolError(PROJECT_NOT_AVAILABLE) from error
+    except ProjectsServiceError as error:
         raise ToolError("Не удалось получить проект.") from error
-    if project is None:
-        raise ToolError(PROJECT_NOT_AVAILABLE)
-    await _ensure_member(tools, project.id)
-    return project
+
+    await ensure_project_access(tools, project_id)
+    return project_id
 
 
-async def resolve_task(tools: ToolContext, task_key: str) -> tuple[Task, Project]:
+async def resolve_task(tools: ToolContext, task_key: str) -> ResolvedTask:
     """Находит задачу по отображаемому ключу и проверяет доступ.
 
     Args:
@@ -127,7 +132,7 @@ async def resolve_task(tools: ToolContext, task_key: str) -> tuple[Task, Project
         task_key: Ключ задачи вида ``PROJ-142``.
 
     Returns:
-        Задача и её проект.
+        Идентификаторы задачи и её проекта.
 
     Raises:
         ToolError: Если ключ некорректен, задача не найдена или недоступна.
@@ -136,27 +141,27 @@ async def resolve_task(tools: ToolContext, task_key: str) -> tuple[Task, Project
     if not project_key or not number_text.isdigit():
         raise ToolError("Ключ задачи должен иметь вид PROJ-142.")
 
-    project = await resolve_project(tools, project_key)
+    project_id = await resolve_project(tools, project_key)
     try:
-        tasks = await TasksRepository(tools.session).get_by_project(project_id=project.id)
-    except ApplicationError as error:
+        return await tools.services.query.resolve_task(
+            project_id=project_id,
+            project_key=project_key.strip().upper(),
+            number=int(number_text),
+        )
+    except TaskNotFoundError as error:
+        raise ToolError(TASK_NOT_AVAILABLE) from error
+    except ProjectsServiceError as error:
         raise ToolError("Не удалось получить задачи проекта.") from error
 
-    number = int(number_text)
-    task = next((item for item in tasks if item.number == number), None)
-    if task is None:
-        raise ToolError(TASK_NOT_AVAILABLE)
-    return task, project
 
-
-async def _ensure_member(tools: ToolContext, project_id: int) -> None:
+async def ensure_project_access(tools: ToolContext, project_id: int) -> None:
     """Проверяет участие пользователя в проекте тем же сервисом, что и HTTP-слой.
 
     Отсутствие доступа и отсутствие проекта неразличимы: иначе перебором
     выяснялось бы существование чужих проектов.
     """
     try:
-        await build_access_service(tools.session).ensure_project_access(
+        await tools.services.access.ensure_project_access(
             project_id=project_id,
             user_id=tools.principal.user_id,
         )
@@ -164,17 +169,17 @@ async def _ensure_member(tools: ToolContext, project_id: int) -> None:
         raise ToolError(PROJECT_NOT_AVAILABLE) from error
 
 
-def _app_resources(context: Context) -> tuple[KnowledgeRuntime, Settings]:
-    """Достаёт клиентов и настройки из состояния запущенного приложения.
+def _app_resources(context: Context) -> tuple[KnowledgeRuntime, Settings, object]:
+    """Достаёт ресурсы приложения из состояния запущенного приложения.
 
     Смонтированный ASGI-транспорт видит то же состояние, что и основное
-    приложение, поэтому отдельный набор клиентов для MCP не создаётся.
+    приложение, поэтому отдельный набор ресурсов для MCP не создаётся.
 
     Args:
         context: Контекст вызова MCP.
 
     Returns:
-        Контейнер клиентов и настройки приложения.
+        Клиенты, настройки и фабрику сессий приложения.
 
     Raises:
         ToolError: Если приложение запущено без lifespan.
@@ -183,10 +188,11 @@ def _app_resources(context: Context) -> tuple[KnowledgeRuntime, Settings]:
     state = getattr(request, "state", None)
     runtime = getattr(state, RUNTIME_STATE_KEY, None)
     settings = getattr(state, SETTINGS_STATE_KEY, None)
-    if runtime is None or settings is None:
+    session_factory = getattr(state, SESSION_FACTORY_STATE_KEY, None)
+    if runtime is None or settings is None or session_factory is None:
         logger.error("❌ MCP-вызов без ресурсов приложения: lifespan не отработал.")
         raise ToolError(RESOURCES_MISSING)
-    return runtime, settings
+    return runtime, settings, session_factory
 
 
 def _authorization_header(context: Context) -> str | None:

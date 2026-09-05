@@ -1,16 +1,14 @@
 """Публичный контракт MCP: имена инструментов, входные схемы и форма ответа.
 
-Этап 8 переводит MCP-инструменты с прямых репозиториев на сервисный слой.
-Наружу при этом не должно измениться ничего: ни набор инструментов, ни их
-входные схемы, ни ключи JSON, который видит вызывающая модель.
+Этап 8 перевёл MCP-инструменты с прямых репозиториев на сервисный слой.
+Наружу при этом не изменилось ничего: ни набор инструментов, ни их входные
+схемы, ни ключи JSON, который видит вызывающая модель. Представления
+теперь принимают DTO сервисов вместо ORM-моделей — это внутренняя замена,
+и множества ключей ниже остались ровно теми же, что до рефакторинга.
 """
 
 from datetime import UTC, date, datetime
 
-from src.db.models.project_stages import ProjectStage
-from src.db.models.projects import Project, ProjectStatus
-from src.db.models.task_comments import TaskComment
-from src.db.models.tasks import Task, TaskPriority
 from src.mcp_server.presenters import (
     TEXT_LIMIT,
     TRUNCATION_NOTE,
@@ -22,6 +20,15 @@ from src.mcp_server.presenters import (
     task_summary,
 )
 from src.mcp_server.server import mcp_server
+from src.schemas.enums import TaskPriority
+from src.services.project_query import (
+    CommentDto,
+    ProjectOverviewDto,
+    ProjectStageDto,
+    ProjectSummaryDto,
+    TaskDetailsDto,
+    TaskSummaryDto,
+)
 
 EXPECTED_TOOLS = {
     "list_projects",
@@ -102,36 +109,25 @@ async def test_every_tool_keeps_its_description() -> None:
         assert tool.description, f"У инструмента {tool.name} нет описания."
 
 
-def _project() -> Project:
-    """Проект с заполненными полями представления."""
-    return Project(
-        id=1,
-        owner_id=1,
-        key="CHAR",
+def _project() -> ProjectSummaryDto:
+    """Краткая карточка проекта из сервиса."""
+    return ProjectSummaryDto(
+        project_key="CHAR",
         name="Характеризация",
-        color="#58a6ff",
-        status=ProjectStatus.ACTIVE,
-        description_md="Описание проекта.",
+        status="ACTIVE",
         start_date=date(2026, 9, 1),
         due_date=date(2026, 12, 31),
     )
 
 
-def _stage() -> ProjectStage:
-    """Стадия проекта."""
-    return ProjectStage(id=10, project_id=1, name="В работе", is_done_stage=False)
-
-
-def _task() -> Task:
-    """Задача проекта."""
-    return Task(
-        id=100,
-        project_id=1,
-        stage_id=10,
-        number=142,
+def _task() -> TaskSummaryDto:
+    """Краткая карточка задачи из сервиса."""
+    return TaskSummaryDto(
+        task_key="CHAR-142",
         title="Собрать отчёт",
-        description_md="Подробности задачи.",
-        priority=TaskPriority.HIGH,
+        stage="В работе",
+        is_done=False,
+        priority=TaskPriority.HIGH.value,
         assignee="Борис",
         due_date=date(2026, 10, 1),
     )
@@ -149,10 +145,12 @@ def test_project_summary_keys_are_frozen() -> None:
 def test_project_detail_keys_are_frozen() -> None:
     """Подробная карточка проекта сохраняет свои ключи и форму стадий."""
     result = project_detail(
-        _project(),
-        stages=[_stage()],
-        task_counts={10: 3},
-        total_tasks=3,
+        ProjectOverviewDto(
+            summary=_project(),
+            description="Описание проекта.",
+            total_tasks=3,
+            stages=[ProjectStageDto(name="В работе", is_done_stage=False, task_count=3)],
+        )
     )
 
     assert set(result) == {
@@ -170,7 +168,7 @@ def test_project_detail_keys_are_frozen() -> None:
 
 def test_task_summary_keys_are_frozen() -> None:
     """Карточка задачи в списке сохраняет свои ключи и формат ключа задачи."""
-    result = task_summary(_task(), project=_project(), stage=_stage())
+    result = task_summary(_task())
 
     assert set(result) == {
         "task_key",
@@ -188,11 +186,13 @@ def test_task_summary_keys_are_frozen() -> None:
 def test_task_detail_keys_are_frozen() -> None:
     """Подробная карточка задачи сохраняет свои ключи."""
     result = task_detail(
-        _task(),
-        project=_project(),
-        stage=_stage(),
-        wbs_path="1.2 Раздел",
-        comment_count=2,
+        TaskDetailsDto(
+            summary=_task(),
+            role="BE",
+            wbs_path="1.2 Раздел",
+            description="Подробности задачи.",
+            comment_count=2,
+        )
     )
 
     assert set(result) == {
@@ -212,15 +212,14 @@ def test_task_detail_keys_are_frozen() -> None:
 
 def test_comment_item_keys_are_frozen() -> None:
     """Комментарий сохраняет свои ключи и ISO-формат времени."""
-    comment = TaskComment(
-        id=1,
-        task_id=100,
-        author_name="Борис",
-        body_md="Текст комментария.",
+    comment = CommentDto(
+        task_key="CHAR-142",
+        author="Борис",
         created_at=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+        body="Текст комментария.",
     )
 
-    result = comment_item(comment, task_key="CHAR-142")
+    result = comment_item(comment)
 
     assert set(result) == {"task_key", "author", "created_at", "body"}
     assert result["created_at"] == "2026-09-01T10:00:00+00:00"
