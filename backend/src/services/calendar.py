@@ -242,8 +242,6 @@ class CalendarService:
                 (perf_counter() - started) * 1000,
             )
             return result
-        except (ProjectNotFoundError, CalendarFilterError):
-            raise
         except (
             ProjectsRepositoryError,
             MilestonesRepositoryError,
@@ -307,8 +305,6 @@ class CalendarService:
                 ],
                 next_cursor=page[-1].id if has_more and page else None,
             )
-        except (ProjectNotFoundError, CalendarFilterError):
-            raise
         except (
             ProjectsRepositoryError,
             ProjectStagesRepositoryError,

@@ -236,8 +236,6 @@ class AuthService:
 
             logger.info("✅ Вход пользователя %s.", user.username)
             return to_user_schema(user), create_access_token(user_id=user.id)
-        except (InvalidCredentialsError, InactiveUserError):
-            raise
         except UsersRepositoryError as error:
             logger.error("❌ Ошибка входа пользователя.", exc_info=True)
             raise AuthServiceError(str(error)) from error

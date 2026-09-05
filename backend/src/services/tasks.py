@@ -13,8 +13,8 @@ from src.exceptions.project_stages import (
     ProjectStagesRepositoryError,
 )
 from src.exceptions.projects import ProjectNotFoundError, ProjectsRepositoryError
+from src.exceptions.storage import TaskAttachmentStorageError
 from src.exceptions.task_activity import TaskActivityRepositoryError
-from src.exceptions.task_attachments import TaskAttachmentStorageError
 from src.exceptions.task_comments import TaskCommentsRepositoryError
 from src.exceptions.tasks import (
     TaskDateRangeError,
@@ -160,8 +160,6 @@ class TasksService:
                     setattr(schema, field, value)
                 result.append(schema)
             return result
-        except ProjectNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка получения задач проекта id=%s.", project_id, exc_info=True)
             raise TasksServiceError(str(error)) from error
@@ -191,8 +189,6 @@ class TasksService:
             comment_context = await self._build_comment_context(task_ids=[task.id])
             schema.comments_count, schema.last_comment = comment_context.get(task.id, (0, None))
             return schema
-        except (TaskNotFoundError, ProjectNotFoundError):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка получения задачи id=%s.", task_id, exc_info=True)
             raise TasksServiceError(str(error)) from error
@@ -276,18 +272,6 @@ class TasksService:
             await self.unit_of_work.commit()
             logger.info("✅ Задача %s-%s создана.", project.key, task.number)
             return await self._to_task_schema(task=task, project_key=project.key)
-        except (
-            ProjectNotFoundError,
-            ProjectStageNotFoundError,
-            ProjectStageForeignProjectError,
-            WbsNodeNotFoundError,
-            WbsNodeForeignProjectError,
-            TaskNumberAllocationError,
-            TaskDateRangeError,
-            TaskParticipantNotProjectMemberError,
-            TaskReporterPermissionError,
-        ):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка создания задачи в проекте id=%s.", project_id, exc_info=True)
             raise TasksServiceError(str(error)) from error
@@ -371,14 +355,6 @@ class TasksService:
                 )
             await self.unit_of_work.commit()
             return await self._to_task_schema(task=updated, project_key=project.key)
-        except (
-            TaskNotFoundError,
-            ProjectNotFoundError,
-            TaskDateRangeError,
-            TaskParticipantNotProjectMemberError,
-            TaskReporterPermissionError,
-        ):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка обновления задачи id=%s.", task_id, exc_info=True)
             raise TasksServiceError(str(error)) from error
@@ -444,13 +420,6 @@ class TasksService:
             )
             await self.unit_of_work.commit()
             return await self._to_task_schema(task=updated, project_key=project.key)
-        except (
-            TaskNotFoundError,
-            ProjectNotFoundError,
-            ProjectStageNotFoundError,
-            ProjectStageForeignProjectError,
-        ):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка перемещения задачи id=%s.", task_id, exc_info=True)
             raise TasksServiceError(str(error)) from error
@@ -478,8 +447,6 @@ class TasksService:
             )
             await self.unit_of_work.commit()
             return await self._to_task_schema(task=updated, project_key=project.key)
-        except (TaskNotFoundError, ProjectNotFoundError):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка фиксации baseline задачи id=%s.", task_id, exc_info=True)
             raise TasksServiceError(str(error)) from error
@@ -509,8 +476,6 @@ class TasksService:
                 )
             await self.unit_of_work.commit()
             await self._cleanup_deleted_task_files(task_id=task_id)
-        except TaskNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка удаления задачи id=%s.", task_id, exc_info=True)
             raise TasksServiceError(str(error)) from error

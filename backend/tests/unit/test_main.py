@@ -10,7 +10,7 @@ from fastapi import FastAPI
 
 import src.main as main_module
 from src.core.app_state import RUNTIME_STATE_KEY, SETTINGS_STATE_KEY
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.clients import VectorStoreClientError
 
 
 @pytest.fixture
@@ -117,7 +117,7 @@ async def test_lifespan_starts_application_when_qdrant_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Недоступный Qdrant не блокирует запуск основного трекера."""
-    backfill = AsyncMock(side_effect=KnowledgeProviderError("Qdrant offline"))
+    backfill = AsyncMock(side_effect=VectorStoreClientError("Qdrant offline"))
     composition.runtime.qdrant_client.backfill_payload_indexes = backfill
     warning = Mock()
     monkeypatch.setattr(main_module.logger, "warning", warning)

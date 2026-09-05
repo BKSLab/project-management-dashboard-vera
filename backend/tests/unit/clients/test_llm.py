@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from src.clients.llm import LlmClient
 from src.clients.retry import RetryDecision, classify, worst_case_seconds
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.clients import LlmClientError
 
 
 class AnswerSchema(BaseModel):
@@ -71,7 +71,7 @@ async def test_client_error_is_not_retried() -> None:
         attempts["count"] += 1
         return httpx.Response(403, json={"error": "forbidden"})
 
-    with pytest.raises(KnowledgeProviderError):
+    with pytest.raises(LlmClientError):
         await _ask(build_client(handler, retries=3))
 
     assert attempts["count"] == 1

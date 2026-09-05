@@ -10,7 +10,11 @@ from src.db.models.documents import Document
 from src.db.models.project_stages import ProjectStage
 from src.db.models.projects import Project, ProjectStatus
 from src.db.models.tasks import Task, TaskPriority
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.clients import (
+    EmbeddingClientError,
+    LlmClientError,
+    VectorStoreClientError,
+)
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
@@ -96,7 +100,7 @@ def build_service(*, semantic_available: bool = True):
         embedding_client.get_embedding.return_value = [1.0, 0.0]
         qdrant_client.search.return_value = []
     else:
-        embedding_client.get_embedding.side_effect = KnowledgeProviderError("offline")
+        embedding_client.get_embedding.side_effect = EmbeddingClientError("offline")
     llm_client = AsyncMock()
 
     async def answer_with_first_task_handle(*, schema, content, **_kwargs):
@@ -219,7 +223,7 @@ async def test_agent_uses_basic_plan_when_tool_planner_is_offline(monkeypatch) -
 
     async def fail_planner_then_answer(*, schema, **_kwargs):
         if schema is AgentToolPlan:
-            raise KnowledgeProviderError("planner offline")
+            raise LlmClientError("planner offline")
         return AgentOutput(answer="В проекте одна задача.", source_ids=[])
 
     runtime.llm_client.get_structured_response.side_effect = fail_planner_then_answer
@@ -252,7 +256,7 @@ async def test_agent_uses_basic_plan_when_tool_planner_is_offline(monkeypatch) -
 @pytest.mark.asyncio
 async def test_agent_logs_metrics_when_qdrant_is_offline(monkeypatch) -> None:
     service, project, runtime = build_service()
-    runtime.qdrant_client.search.side_effect = KnowledgeProviderError("Qdrant offline")
+    runtime.qdrant_client.search.side_effect = VectorStoreClientError("Qdrant offline")
     info = Mock()
     monkeypatch.setattr("src.services.project_agent.logger.info", info)
 

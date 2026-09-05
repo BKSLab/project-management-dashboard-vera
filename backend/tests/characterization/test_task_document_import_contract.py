@@ -17,9 +17,12 @@ from main import app
 from src.clients.vision import DisabledVisionCapability
 from src.dependencies.services import get_task_document_import_service
 from src.exceptions.documents import DocumentsServiceError
-from src.exceptions.task_attachments import (
-    TaskAttachmentTooLargeError,
-    TaskDocumentImportError,
+from src.exceptions.task_attachments import TaskAttachmentTooLargeError
+from src.exceptions.task_documents import (
+    TaskDocumentImportServiceError,
+    TaskDocumentStepFailedError,
+    TaskDocumentTooLargeError,
+    TaskDocumentUnsupportedFormatError,
 )
 from src.repositories.tasks import TasksRepository
 from src.schemas.document_links import DocumentLinkSchema
@@ -117,19 +120,39 @@ async def test_successful_import_returns_all_three_entities(
 
 
 @pytest.mark.parametrize(
-    "error",
+    ("error", "expected_status", "expected_detail"),
     [
-        TaskDocumentImportError("Этот формат нельзя преобразовать в документ проекта."),
-        TaskAttachmentTooLargeError(max_size_mb=10),
-        DocumentsServiceError("сбой создания документа"),
+        (
+            TaskDocumentUnsupportedFormatError(
+                "Этот формат нельзя преобразовать в документ проекта."
+            ),
+            422,
+            "Этот формат нельзя преобразовать в документ проекта.",
+        ),
+        (
+            TaskDocumentTooLargeError(max_size_mb=10),
+            413,
+            "Размер файла превышает допустимые 10 МБ.",
+        ),
+        (
+            TaskDocumentStepFailedError(DocumentsServiceError("сбой создания документа")),
+            500,
+            DocumentsServiceError("сбой создания документа").detail,
+        ),
     ],
     ids=["неподдерживаемый формат", "слишком большой файл", "сбой вложенного сервиса"],
 )
 async def test_failed_import_keeps_status_and_detail(
     api_client: AsyncClient,
     error: Exception,
+    expected_status: int,
+    expected_detail: str,
 ) -> None:
-    """Отказ импорта отвечает статусом и формулировкой доменной ошибки."""
+    """Отказ импорта отвечает прежним статусом и прежней формулировкой.
+
+    Внутренние типы ошибок сменились на собственную иерархию верхнего
+    сервиса, но клиент этого видеть не должен: статус и текст те же.
+    """
     _install(FakeImportService(error=error))
 
     response = await api_client.post(
@@ -137,8 +160,23 @@ async def test_failed_import_keeps_status_and_detail(
         files={"file": ("brief.txt", b"hello", "text/plain")},
     )
 
-    assert response.status_code == error.status_code
-    assert response.json() == {"detail": error.detail}
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+
+
+def test_nested_failure_keeps_the_cause_visible_to_the_client() -> None:
+    """Обёртка верхнего сервиса переносит наружу причину отказа.
+
+    Иначе «файл слишком большой» и «конфликт slug» слились бы в одно
+    невнятное сообщение, и пользователь не понял бы, что исправлять.
+    """
+    cause = TaskAttachmentTooLargeError(max_size_mb=10)
+
+    wrapped = TaskDocumentStepFailedError(cause)
+
+    assert wrapped.status_code == cause.status_code
+    assert wrapped.detail == cause.detail
+    assert isinstance(wrapped, TaskDocumentImportServiceError)
 
 
 def _build_service(*, link_error: Exception | None = None):
@@ -180,7 +218,7 @@ async def test_import_leaves_nothing_behind_when_last_step_fails() -> None:
         link_error=DocumentsServiceError("связь не создана")
     )
 
-    with pytest.raises(DocumentsServiceError):
+    with pytest.raises(TaskDocumentStepFailedError):
         await service.import_file(
             task_id=8,
             user_id=1,
@@ -219,7 +257,7 @@ async def test_unsupported_extension_is_rejected_before_any_write() -> None:
     """Неподдерживаемый формат отсекается до создания чего-либо."""
     service, attachments, documents, links = _build_service()
 
-    with pytest.raises(TaskDocumentImportError):
+    with pytest.raises(TaskDocumentUnsupportedFormatError):
         await service.import_file(
             task_id=8,
             user_id=1,

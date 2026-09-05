@@ -6,6 +6,7 @@ import pytest
 
 from src.clients.vision import DisabledVisionCapability
 from src.exceptions.documents import DocumentsServiceError
+from src.exceptions.task_documents import TaskDocumentStepFailedError
 from src.repositories.tasks import TasksRepository
 from src.schemas.document_links import DocumentLinkSchema
 from src.schemas.documents import DocumentDetailSchema
@@ -80,7 +81,8 @@ async def test_import_file_removes_attachment_when_document_creation_fails() -> 
     service, attachments, documents, links = build_service()
     documents.create_document.side_effect = DocumentsServiceError("БД недоступна")
 
-    with pytest.raises(DocumentsServiceError):
+    # Наружу уходит ошибка верхнего сервиса: эндпоинт знает одну иерархию.
+    with pytest.raises(TaskDocumentStepFailedError) as error:
         await service.import_file(
             task_id=8,
             user_id=4,
@@ -89,5 +91,6 @@ async def test_import_file_removes_attachment_when_document_creation_fails() -> 
             content=b"hello",
         )
 
+    assert error.value.status_code == DocumentsServiceError("x").status_code
     links.create_link.assert_not_awaited()
     attachments.delete_attachment.assert_awaited_once_with(task_id=8, attachment_id=10)

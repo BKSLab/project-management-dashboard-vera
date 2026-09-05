@@ -1,9 +1,10 @@
 import logging
 
 from src.exceptions.auth import WrongCurrentPasswordError
+from src.exceptions.storage import AvatarStorageError
 from src.exceptions.users import (
     AvatarNotFoundError,
-    AvatarStorageError,
+    AvatarOperationError,
     AvatarTooLargeError,
     AvatarUnsupportedTypeError,
     UserNotFoundError,
@@ -53,8 +54,6 @@ class UsersService:
         """
         try:
             return to_user_schema(await self._get_user(user_id=user_id))
-        except UserNotFoundError:
-            raise
         except UsersRepositoryError as error:
             logger.error("❌ Ошибка получения пользователя id=%s.", user_id, exc_info=True)
             raise UsersServiceError(str(error)) from error
@@ -77,8 +76,6 @@ class UsersService:
             user = await self._get_user(user_id=user_id)
             updated = await self.users_repository.update(user=user, data=data)
             return to_user_schema(updated)
-        except UserNotFoundError:
-            raise
         except UsersRepositoryError as error:
             logger.error("❌ Ошибка обновления профиля id=%s.", user_id, exc_info=True)
             raise UsersServiceError(str(error)) from error
@@ -113,8 +110,6 @@ class UsersService:
                 data={"password_hash": hash_password(new_password)},
             )
             logger.info("✅ Пароль пользователя id=%s изменён.", user_id)
-        except (UserNotFoundError, WrongCurrentPasswordError):
-            raise
         except UsersRepositoryError as error:
             logger.error("❌ Ошибка смены пароля id=%s.", user_id, exc_info=True)
             raise UsersServiceError(str(error)) from error
@@ -154,9 +149,10 @@ class UsersService:
             if previous_key is not None:
                 await self._remove_file(storage_key=previous_key)
             logger.info("✅ Фотография пользователя id=%s обновлена.", user_id)
-        except UserNotFoundError:
-            raise
-        except (UsersRepositoryError, AvatarStorageError) as error:
+        except AvatarStorageError as error:
+            logger.error("❌ Хранилище не сохранило фотографию id=%s.", user_id, exc_info=True)
+            raise AvatarOperationError(str(error)) from error
+        except UsersRepositoryError as error:
             logger.error("❌ Ошибка сохранения фотографии id=%s.", user_id, exc_info=True)
             raise UsersServiceError(str(error)) from error
 
@@ -180,9 +176,10 @@ class UsersService:
                 raise AvatarNotFoundError(user_id=user_id)
             content = await self.avatar_storage.read(storage_key=user.avatar_key)
             return content, _content_type_for(user.avatar_key)
-        except (UserNotFoundError, AvatarNotFoundError):
-            raise
-        except (UsersRepositoryError, AvatarStorageError) as error:
+        except AvatarStorageError as error:
+            logger.error("❌ Хранилище не отдало фотографию id=%s.", user_id, exc_info=True)
+            raise AvatarOperationError(str(error)) from error
+        except UsersRepositoryError as error:
             logger.error("❌ Ошибка чтения фотографии id=%s.", user_id, exc_info=True)
             raise UsersServiceError(str(error)) from error
 
@@ -207,9 +204,10 @@ class UsersService:
             storage_key = user.avatar_key
             await self.users_repository.update(user=user, data={"avatar_key": None})
             await self._remove_file(storage_key=storage_key)
-        except (UserNotFoundError, AvatarNotFoundError):
-            raise
-        except (UsersRepositoryError, AvatarStorageError) as error:
+        except AvatarStorageError as error:
+            logger.error("❌ Хранилище не удалило фотографию id=%s.", user_id, exc_info=True)
+            raise AvatarOperationError(str(error)) from error
+        except UsersRepositoryError as error:
             logger.error("❌ Ошибка удаления фотографии id=%s.", user_id, exc_info=True)
             raise UsersServiceError(str(error)) from error
 

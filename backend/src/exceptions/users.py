@@ -87,7 +87,11 @@ class AvatarUnsupportedTypeError(UsersServiceError):
         super().__init__(error_details=f"Неподдерживаемый тип {content_type!r}.")
 
 
-class AvatarStorageError(UsersServiceError):
-    """Ошибка работы с файлом фотографии на диске."""
+class AvatarOperationError(UsersServiceError):
+    """Сервис не смог выполнить операцию с фотографией профиля.
 
-    detail = "Не удалось сохранить фотографию."
+    Ошибка хранилища преобразуется сюда на границе сервиса: наружу не
+    должно уходить исключение слоя файлов.
+    """
+
+    detail = "Не удалось выполнить операцию с фотографией."

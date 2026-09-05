@@ -51,8 +51,6 @@ class TaskDependenciesService:
             await self._ensure_project_exists(project_id)
             dependencies = await self.dependencies_repository.get_by_project(project_id)
             return [TaskDependencySchema.model_validate(item) for item in dependencies]
-        except ProjectNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error(
                 "❌ Ошибка получения зависимостей проекта id=%s.",
@@ -104,14 +102,6 @@ class TaskDependenciesService:
                 raise TaskDependencyCycleError()
             await self.unit_of_work.commit()
             return TaskDependencySchema.model_validate(dependency)
-        except (
-            ProjectNotFoundError,
-            TaskNotFoundError,
-            TaskDependencyAlreadyExistsError,
-            TaskDependencyCycleError,
-            TaskDependencyForeignProjectError,
-        ):
-            raise
         except TaskDependencyAlreadyExistsRepositoryError as error:
             raise TaskDependencyAlreadyExistsError() from error
         except RepositoryErrors as error:
@@ -130,8 +120,6 @@ class TaskDependenciesService:
                 raise TaskDependencyNotFoundError(dependency_id)
             await self.dependencies_repository.delete(dependency)
             await self.unit_of_work.commit()
-        except TaskDependencyNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error(
                 "❌ Ошибка удаления зависимости id=%s.",

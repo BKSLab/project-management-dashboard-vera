@@ -57,8 +57,6 @@ class TaskCommentsService:
                 raise TaskNotFoundError(task_id=task_id)
             comments = await self.comments_repository.get_for_task(task_id=task_id)
             return [CommentSchema.model_validate(comment) for comment in comments]
-        except TaskNotFoundError:
-            raise
         except (TaskCommentsRepositoryError, TasksRepositoryError) as error:
             logger.error("❌ Ошибка получения комментариев задачи id=%s.", task_id, exc_info=True)
             raise TaskCommentsServiceError(str(error)) from error
@@ -106,8 +104,6 @@ class TaskCommentsService:
                 )
             await self.unit_of_work.commit()
             return CommentSchema.model_validate(comment)
-        except TaskNotFoundError:
-            raise
         except (
             TaskCommentsRepositoryError,
             TasksRepositoryError,
@@ -144,8 +140,6 @@ class TaskCommentsService:
                     entity_id=comment_id,
                 )
             await self.unit_of_work.commit()
-        except TaskCommentNotFoundError:
-            raise
         except (
             TaskCommentsRepositoryError,
             TasksRepositoryError,

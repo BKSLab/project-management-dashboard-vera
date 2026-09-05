@@ -1,18 +1,12 @@
 from fastapi import status
 
-from src.exceptions.base import ApplicationError, RepositoryError, ServiceError
+from src.exceptions.base import RepositoryError, ServiceError
 
 
 class TaskAttachmentsRepositoryError(RepositoryError):
     """Ошибка доступа к метаданным файлов задач."""
 
     detail = "Ошибка базы данных при обработке файлов задачи."
-
-
-class TaskAttachmentStorageError(ApplicationError):
-    """Ошибка локального файлового хранилища."""
-
-    detail = "Не удалось выполнить операцию с файловым хранилищем."
 
 
 class TaskAttachmentsServiceError(ServiceError):

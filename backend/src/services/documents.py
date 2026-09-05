@@ -90,8 +90,6 @@ class DocumentsService:
                     setattr(schema, field, value)
                 result.append(schema)
             return result
-        except ProjectNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка получения документов проекта id=%s.", project_id, exc_info=True)
             raise DocumentsServiceError(str(error)) from error
@@ -114,8 +112,6 @@ class DocumentsService:
             if document is None:
                 raise DocumentNotFoundError(document_id=document_id)
             return DocumentDetailSchema.model_validate(document)
-        except DocumentNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка получения документа id=%s.", document_id, exc_info=True)
             raise DocumentsServiceError(str(error)) from error
@@ -166,8 +162,6 @@ class DocumentsService:
                 )
             await self.unit_of_work.commit()
             return DocumentDetailSchema.model_validate(document)
-        except ProjectNotFoundError:
-            raise
         except DocumentSlugAlreadyExistsRepositoryError as error:
             logger.warning("⚠️ Конфликт slug при создании документа: %s.", error.slug)
             raise DocumentSlugConflictError(slug=error.slug) from error
@@ -203,8 +197,6 @@ class DocumentsService:
                 )
             await self.unit_of_work.commit()
             return DocumentDetailSchema.model_validate(updated)
-        except DocumentNotFoundError:
-            raise
         except DocumentSlugAlreadyExistsRepositoryError as error:
             logger.warning("⚠️ Конфликт slug при обновлении документа: %s.", error.slug)
             raise DocumentSlugConflictError(slug=error.slug) from error
@@ -238,8 +230,6 @@ class DocumentsService:
                     entity_id=document_id,
                 )
             await self.unit_of_work.commit()
-        except DocumentNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка удаления документа id=%s.", document_id, exc_info=True)
             raise DocumentsServiceError(str(error)) from error

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, call
 import pytest
 
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType, KnowledgeIndexOperation
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.clients import VectorStoreClientError
 from src.knowledge.worker import (
     _backfill_payload_indexes_if_pending,
     _execute_task_jobs,
@@ -151,7 +151,7 @@ async def test_task_batch_external_call_runs_after_database_session_closed(monke
 
 @pytest.mark.asyncio
 async def test_pending_payload_index_backfill_stops_after_first_success() -> None:
-    backfill = AsyncMock(side_effect=[KnowledgeProviderError("offline"), 2])
+    backfill = AsyncMock(side_effect=[VectorStoreClientError("offline"), 2])
     runtime = SimpleNamespace(
         payload_indexes_backfill_pending=True,
         qdrant_client=SimpleNamespace(backfill_payload_indexes=backfill),
@@ -170,7 +170,7 @@ async def test_pending_payload_index_backfill_stops_after_first_success() -> Non
 @pytest.mark.asyncio
 async def test_unavailable_qdrant_does_not_stop_worker_cycle(monkeypatch) -> None:
     stop_event = asyncio.Event()
-    backfill = AsyncMock(side_effect=KnowledgeProviderError("offline"))
+    backfill = AsyncMock(side_effect=VectorStoreClientError("offline"))
     runtime = SimpleNamespace(
         payload_indexes_backfill_pending=True,
         qdrant_client=SimpleNamespace(backfill_payload_indexes=backfill),

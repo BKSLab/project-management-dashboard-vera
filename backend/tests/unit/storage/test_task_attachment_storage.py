@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from src.exceptions.task_attachments import TaskAttachmentStorageError
+from src.exceptions.storage import TaskAttachmentStorageError
 from src.storage.task_attachments import TaskAttachmentStorage
 
 

@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from src.clients.vision import DisabledVisionCapability, VisionCapability, VisionClient
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.clients import VisionClientError
 
 
 def build_client(handler, *, retries: int = 2) -> VisionClient:
@@ -75,7 +75,7 @@ async def test_raises_provider_error_after_all_attempts() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": "boom"})
 
-    with pytest.raises(KnowledgeProviderError):
+    with pytest.raises(VisionClientError):
         await build_client(handler).extract_text(
             image_data_url="data:image/jpeg;base64,QUJD"
         )
@@ -93,7 +93,7 @@ async def test_client_error_is_not_retried() -> None:
         attempts["count"] += 1
         return httpx.Response(401, json={"error": "unauthorized"})
 
-    with pytest.raises(KnowledgeProviderError):
+    with pytest.raises(VisionClientError):
         await build_client(handler, retries=3).extract_text(
             image_data_url="data:image/jpeg;base64,QUJD"
         )

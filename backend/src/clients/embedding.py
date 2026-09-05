@@ -2,7 +2,7 @@ import logging
 
 import httpx
 
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.clients import EmbeddingClientError
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ class EmbeddingClient:
             return vectors
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
             logger.error("❌ Ошибка embedding API: %s", error, exc_info=True)
-            raise KnowledgeProviderError(str(error)) from error
+            raise EmbeddingClientError(str(error)) from error
 
     async def get_embedding(self, text: str) -> list[float]:
         """Возвращает embedding одного текста."""

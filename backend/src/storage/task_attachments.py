@@ -6,7 +6,7 @@ import shutil
 import uuid
 from pathlib import Path, PurePosixPath
 
-from src.exceptions.task_attachments import TaskAttachmentStorageError
+from src.exceptions.storage import TaskAttachmentStorageError
 
 
 class TaskAttachmentStorage:

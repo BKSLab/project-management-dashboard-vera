@@ -82,8 +82,6 @@ class ProjectStickersService:
             )
             await self.unit_of_work.commit()
             return _to_sticker_schema(sticker)
-        except ProjectStickerTaskMismatchError:
-            raise
         except RepositoryErrors as error:
             logger.error(
                 "❌ Ошибка создания стикера проекта id=%s.",
@@ -111,8 +109,6 @@ class ProjectStickersService:
                 raise ProjectStickerNotFoundError(sticker_id)
             await self.unit_of_work.commit()
             return _to_sticker_schema(moved)
-        except ProjectStickerNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка перемещения стикера id=%s.", sticker_id, exc_info=True)
             raise ProjectStickersServiceError(str(error)) from error
@@ -153,12 +149,6 @@ class ProjectStickersService:
                 raise ProjectStickerRevisionConflictError(sticker_id, data.revision)
             await self.unit_of_work.commit()
             return _to_sticker_schema(updated)
-        except (
-            ProjectStickerNotFoundError,
-            ProjectStickerRevisionConflictError,
-            ProjectStickerTaskMismatchError,
-        ):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка изменения стикера id=%s.", sticker_id, exc_info=True)
             raise ProjectStickersServiceError(str(error)) from error
@@ -188,8 +178,6 @@ class ProjectStickersService:
             if not deleted:
                 raise ProjectStickerRevisionConflictError(sticker_id, revision)
             await self.unit_of_work.commit()
-        except (ProjectStickerNotFoundError, ProjectStickerRevisionConflictError):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка удаления стикера id=%s.", sticker_id, exc_info=True)
             raise ProjectStickersServiceError(str(error)) from error

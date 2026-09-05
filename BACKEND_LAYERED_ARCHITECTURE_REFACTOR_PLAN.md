@@ -19,7 +19,7 @@
 | 0. Safety net | ✅ выполнен | 633 passed | `stage-0` |
 | 1. Client/config dependencies | ✅ выполнен | 791 passed | `stage-1` |
 | 2. Auth/access в сервисы, write scope | ✅ выполнен | 882 passed | `stage-2` |
-| 3. Exception boundaries | ⬜ | — | — |
+| 3. Exception boundaries | ✅ выполнен | 931 passed | `stage-3` |
 | 4. Транзакционные границы | ⬜ | — | — |
 | 5. Атомарный импорт документа | ⬜ | — | — |
 | 6. Короткие DB scopes | ⬜ | — | — |
@@ -795,7 +795,28 @@ token-management routes и 4 read-only POST routes составляют явны
 - route-graph test проверяет полный allowlist/denylist и не позволяет забыть `WriteScopeDep` в новом маршруте;
 - MCP auth tests используют тот же service contract и больше не ловят FastAPI `HTTPException`.
 
-### Этап 3. Нормализовать exception boundaries
+### Этап 3. Нормализовать exception boundaries — ✅ выполнен
+
+Результат: появились `exceptions/clients.py` (`ClientError` и четыре типа по
+внешним системам) и `exceptions/storage.py` (`StorageError`, куда переехали
+`AvatarStorageError` и `TaskAttachmentStorageError`). Ни один из них не
+наследуется от `ServiceError`: сбой httpx больше не приходит в эндпоинт как
+доменная ошибка. Сервисы преобразуют `ClientError` в свои ошибки через
+`raise ... from error`.
+
+Импорт документа получил собственную иерархию `exceptions/task_documents.py`;
+эндпоинт перестал знать пять чужих семейств. `TaskDocumentStepFailedError`
+переносит наружу статус и формулировку причины, поэтому клиент видит ту же
+причину отказа, что и раньше.
+
+Удалено **64 мёртвых клаузы** `except OwnError: raise`. Каждая проверена
+разбором иерархии классов: ни один последующий обработчик не поймал бы эти
+типы, то есть клаузы не защищали ничего, но создавали впечатление защиты.
+Оставшиеся 9 сохранены — там ниже действительно стоит широкий перехват.
+Широкий `except ApplicationError` убран из сервисов и оставлен только на
+финальной границе MCP-транспорта.
+
+Итог: `931 passed`, `ruff All checks passed`.
 
 Нормативное основание: [PAT-ERROR], [PAT-ARCH] и endpoint mapping из
 [PAT-ENDPOINT].

@@ -7,7 +7,9 @@ from pathlib import Path
 
 from src.clients.llm import LlmClient
 from src.clients.vision import VisionCapability
+from src.exceptions.clients import ClientError
 from src.exceptions.documents import DocumentsRepositoryError
+from src.exceptions.knowledge import KnowledgeProviderError
 from src.exceptions.projects import ProjectNotFoundError, ProjectsRepositoryError
 from src.exceptions.tasks import (
     TaskContextDocumentError,
@@ -69,83 +71,109 @@ class TaskDescriptionService:
         data: TaskRephraseRequestSchema,
         files: list[TaskRephraseFile],
     ) -> TaskRephraseResultSchema:
-        """Возвращает новый текст, оставляя пользовательский черновик несохранённым."""
-        try:
-            project = await self.projects_repository.get_by_id(project_id=project_id)
-            if project is None:
-                raise ProjectNotFoundError(project_id=project_id)
+        """Возвращает новый текст, оставляя пользовательский черновик несохранённым.
 
-            current_task = None
-            if data.task_id is not None:
-                current_task = await self.tasks_repository.get_by_id(task_id=data.task_id)
-                if current_task is None or current_task.project_id != project_id:
-                    raise TaskNotFoundError(task_id=data.task_id)
+        Args:
+            project_id: Проект, в контексте которого переписывается черновик.
+            data: Черновик задачи и выбранные источники контекста.
+            files: Приложенные к запросу файлы контекста.
 
-            selected_documents = await self._get_documents(
-                project_id=project_id,
-                document_ids=data.document_ids,
-            )
-            extracted_files = await self._extract_files(files)
-            related_tasks = await self.tasks_repository.get_by_project(project_id=project_id)
-            related_tasks = [task for task in related_tasks if task.id != data.task_id]
-            related_tasks.sort(key=lambda task: task.updated_at, reverse=True)
+        Returns:
+            Переписанное описание задачи.
 
-            payload = {
-                "project": {
-                    "key": project.key,
-                    "name": project.name,
-                    "description": _clip(project.description_md, PROJECT_DESCRIPTION_LIMIT),
-                },
-                "task": {
-                    "key": (
-                        build_task_key(project.key, current_task.number)
-                        if current_task is not None
-                        else None
+        Raises:
+            ProjectNotFoundError: Если проект не найден.
+            TaskNotFoundError: Если задача не принадлежит проекту.
+            TaskContextDocumentError: Если выбранный документ недоступен.
+            TaskContextFileError: Если файл контекста не разобран.
+            TaskDescriptionRewriteError: Если модель вернула непригодный текст.
+            KnowledgeProviderError: Если LLM-сервис недоступен.
+            TasksServiceError: Если собрать контекст задачи не удалось.
+        """
+        project, current_task, selected_documents, related_tasks = await self._load_context(
+            project_id=project_id,
+            data=data,
+        )
+        extracted_files = await self._extract_files(files)
+
+        payload = {
+            "project": {
+                "key": project.key,
+                "name": project.name,
+                "description": _clip(project.description_md, PROJECT_DESCRIPTION_LIMIT),
+            },
+            "task": {
+                "key": (
+                    build_task_key(project.key, current_task.number)
+                    if current_task is not None
+                    else None
+                ),
+                "title": data.title.strip(),
+                "draft_description": data.description_md.strip(),
+            },
+            "related_task_wording": [
+                {
+                    "key": build_task_key(project.key, task.number),
+                    "title": task.title,
+                    "description": _clip(
+                        task.description_md,
+                        RELATED_TASK_DESCRIPTION_LIMIT,
                     ),
-                    "title": data.title.strip(),
-                    "draft_description": data.description_md.strip(),
-                },
-                "related_task_wording": [
-                    {
-                        "key": build_task_key(project.key, task.number),
-                        "title": task.title,
-                        "description": _clip(
-                            task.description_md,
-                            RELATED_TASK_DESCRIPTION_LIMIT,
-                        ),
-                    }
-                    for task in related_tasks[:RELATED_TASKS_LIMIT]
-                ],
-                "selected_documents": [
-                    {
-                        "title": document.title,
-                        "content": _clip(document.content_md, DOCUMENT_CONTEXT_LIMIT),
-                    }
-                    for document in selected_documents
-                ],
-                "new_files": extracted_files,
-                "length_guidance": _length_guidance(data.description_md),
-            }
+                }
+                for task in related_tasks[:RELATED_TASKS_LIMIT]
+            ],
+            "selected_documents": [
+                {
+                    "title": document.title,
+                    "content": _clip(document.content_md, DOCUMENT_CONTEXT_LIMIT),
+                }
+                for document in selected_documents
+            ],
+            "new_files": extracted_files,
+            "length_guidance": _length_guidance(data.description_md),
+        }
+
+        # Перехват охватывает только вызов клиента: собственная доменная
+        # проверка результата ниже не должна попадать под этот except.
+        try:
             result = await self.llm_client.get_structured_response(
                 system_prompt=TASK_DESCRIPTION_REPHRASE_PROMPT,
                 content=json.dumps(payload, ensure_ascii=False),
                 schema=TaskRephraseResultSchema,
                 max_completion_tokens=1800,
             )
-            description = result.description_md.strip()
-            if not description or len(description) > _maximum_result_length(data.description_md):
-                raise TaskDescriptionRewriteError(
-                    "LLM вернула пустое или чрезмерно длинное описание."
-                )
-            return TaskRephraseResultSchema(description_md=description)
-        except (
-            ProjectNotFoundError,
-            TaskNotFoundError,
-            TaskContextDocumentError,
-            TaskContextFileError,
-            TaskDescriptionRewriteError,
-        ):
-            raise
+        except ClientError as error:
+            logger.error("❌ LLM недоступен при переформулировании задачи.", exc_info=True)
+            raise KnowledgeProviderError(str(error)) from error
+
+        description = result.description_md.strip()
+        if not description or len(description) > _maximum_result_length(data.description_md):
+            raise TaskDescriptionRewriteError("LLM вернула пустое или чрезмерно длинное описание.")
+        return TaskRephraseResultSchema(description_md=description)
+
+    async def _load_context(
+        self,
+        *,
+        project_id: int,
+        data: TaskRephraseRequestSchema,
+    ) -> tuple:
+        """Читает проект, задачу, документы и соседние задачи одним срезом.
+
+        Перехват ошибок репозитория охватывает только чтение: доменные
+        проверки ниже выполняются уже вне него, поэтому собственную ошибку
+        сервиса не приходится пропускать через `except ... : raise`.
+        """
+        try:
+            project = await self.projects_repository.get_by_id(project_id=project_id)
+            current_task = (
+                await self.tasks_repository.get_by_id(task_id=data.task_id)
+                if data.task_id is not None
+                else None
+            )
+            documents = await self.documents_repository.get_by_ids(
+                set(dict.fromkeys(data.document_ids))
+            )
+            related_tasks = await self.tasks_repository.get_by_project(project_id=project_id)
         except (ProjectsRepositoryError, TasksRepositoryError, DocumentsRepositoryError) as error:
             logger.error(
                 "❌ Не удалось собрать контекст задачи в проекте id=%s.",
@@ -154,15 +182,33 @@ class TaskDescriptionService:
             )
             raise TasksServiceError(str(error)) from error
 
-    async def _get_documents(self, *, project_id: int, document_ids: list[int]) -> list:
-        unique_ids = list(dict.fromkeys(document_ids))
-        documents = await self.documents_repository.get_by_ids(set(unique_ids))
+        if project is None:
+            raise ProjectNotFoundError(project_id=project_id)
+        if data.task_id is not None and (
+            current_task is None or current_task.project_id != project_id
+        ):
+            raise TaskNotFoundError(task_id=data.task_id)
+
+        selected_documents = self._select_documents(
+            project_id=project_id,
+            document_ids=data.document_ids,
+            documents=documents,
+        )
+        related_tasks = [task for task in related_tasks if task.id != data.task_id]
+        related_tasks.sort(key=lambda task: task.updated_at, reverse=True)
+        return project, current_task, selected_documents, related_tasks
+
+    @staticmethod
+    def _select_documents(*, project_id: int, document_ids: list[int], documents: list) -> list:
+        """Проверяет, что каждый выбранный документ принадлежит проекту."""
         by_id = {document.id: document for document in documents}
-        for document_id in unique_ids:
+        selected = []
+        for document_id in dict.fromkeys(document_ids):
             document = by_id.get(document_id)
             if document is None or document.project_id != project_id:
                 raise TaskContextDocumentError(document_id=document_id)
-        return [by_id[document_id] for document_id in unique_ids]
+            selected.append(document)
+        return selected
 
     async def _extract_files(self, files: list[TaskRephraseFile]) -> list[dict[str, str]]:
         if len(files) > MAX_REPHRASE_FILES:
@@ -180,6 +226,9 @@ class TaskDescriptionService:
                 )
             except ValueError as error:
                 raise TaskContextFileError(file_name=file.name) from error
+            except ClientError as error:
+                logger.error("❌ Vision недоступен при разборе файла контекста.", exc_info=True)
+                raise KnowledgeProviderError(str(error)) from error
             if not extracted:
                 raise TaskContextFileError(file_name=file.name)
             result.append({"name": file.name, "content": extracted})

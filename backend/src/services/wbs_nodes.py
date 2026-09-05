@@ -139,8 +139,6 @@ class WbsNodesService:
                     overdue_tasks=overdue,
                 ),
             )
-        except ProjectNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка получения структуры проекта id=%s.", project_id, exc_info=True)
             raise WbsNodesServiceError(str(error)) from error
@@ -189,8 +187,6 @@ class WbsNodesService:
             await self.unit_of_work.commit()
             logger.info("✅ Раздел ИСР %r создан в проекте id=%s.", title, project_id)
             return WbsNodeSchema.model_validate(node)
-        except (ProjectNotFoundError, WbsNodeNotFoundError, WbsNodeForeignProjectError):
-            raise
         except RepositoryErrors as error:
             logger.error(
                 "❌ Ошибка создания раздела ИСР в проекте id=%s.", project_id, exc_info=True
@@ -227,8 +223,6 @@ class WbsNodesService:
                 )
             await self.unit_of_work.commit()
             return WbsNodeSchema.model_validate(updated)
-        except (WbsNodeNotFoundError, WbsNodeForeignProjectError):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка переименования раздела ИСР id=%s.", node_id, exc_info=True)
             raise WbsNodesServiceError(str(error)) from error
@@ -299,8 +293,6 @@ class WbsNodesService:
             await self.unit_of_work.commit()
             logger.info("✅ Раздел ИСР id=%s перемещён в родителя %s.", node_id, parent_id)
             return WbsNodeSchema.model_validate(updated)
-        except (WbsNodeNotFoundError, WbsNodeForeignProjectError, WbsNodeCycleError):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка перемещения раздела ИСР id=%s.", node_id, exc_info=True)
             raise WbsNodesServiceError(str(error)) from error
@@ -351,8 +343,6 @@ class WbsNodesService:
                 deleted_nodes=len(affected_ids),
                 released_tasks=released_tasks,
             )
-        except (WbsNodeNotFoundError, WbsNodeForeignProjectError):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка удаления раздела ИСР id=%s.", node_id, exc_info=True)
             raise WbsNodesServiceError(str(error)) from error
@@ -490,14 +480,6 @@ class WbsNodesService:
             result = await self._to_compact(task=updated, project=project)
             await self.unit_of_work.commit()
             return result
-        except (
-            ProjectNotFoundError,
-            TaskNotFoundError,
-            TaskForeignProjectError,
-            WbsNodeNotFoundError,
-            WbsNodeForeignProjectError,
-        ):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка размещения задачи id=%s.", task_id, exc_info=True)
             raise WbsNodesServiceError(str(error)) from error

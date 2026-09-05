@@ -55,8 +55,6 @@ class MilestonesService:
             await self._ensure_project_exists(project_id)
             milestones = await self.milestones_repository.get_by_project(project_id)
             return [MilestoneSchema.model_validate(item) for item in milestones]
-        except ProjectNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка получения вех проекта id=%s.", project_id, exc_info=True)
             raise MilestonesServiceError(str(error)) from error
@@ -75,8 +73,6 @@ class MilestonesService:
                 )
             await self.unit_of_work.commit()
             return MilestoneSchema.model_validate(milestone)
-        except (ProjectNotFoundError, WbsNodeNotFoundError, WbsNodeForeignProjectError):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка создания вехи проекта id=%s.", project_id, exc_info=True)
             raise MilestonesServiceError(str(error)) from error
@@ -100,8 +96,6 @@ class MilestonesService:
                 )
             await self.unit_of_work.commit()
             return MilestoneSchema.model_validate(updated)
-        except (MilestoneNotFoundError, WbsNodeNotFoundError, WbsNodeForeignProjectError):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка обновления вехи id=%s.", milestone_id, exc_info=True)
             raise MilestonesServiceError(str(error)) from error
@@ -118,8 +112,6 @@ class MilestonesService:
                     entity_id=milestone_id,
                 )
             await self.unit_of_work.commit()
-        except MilestoneNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка удаления вехи id=%s.", milestone_id, exc_info=True)
             raise MilestonesServiceError(str(error)) from error

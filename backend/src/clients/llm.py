@@ -13,7 +13,7 @@ from src.clients.retry import (
     sleep_before_retry,
     worst_case_seconds,
 )
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.clients import LlmClientError
 
 logger = logging.getLogger(__name__)
 PydanticModel = TypeVar("PydanticModel", bound=BaseModel)
@@ -70,7 +70,7 @@ class LlmClient:
             Разобранный и провалидированный ответ модели.
 
         Raises:
-            KnowledgeProviderError: Если API недоступен или ответ не разобран.
+            LlmClientError: Если API недоступен или ответ не разобран.
         """
         payload = {
             "model": self.model,
@@ -118,4 +118,4 @@ class LlmClient:
                     break
                 if attempt < self.retries:
                     await sleep_before_retry(attempt)
-        raise KnowledgeProviderError(str(last_error))
+        raise LlmClientError(str(last_error))

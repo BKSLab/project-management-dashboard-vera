@@ -20,7 +20,8 @@ from src.db.models.knowledge_index_jobs import (
     KnowledgeIndexStatus,
 )
 from src.db.models.projects import Project
-from src.exceptions.base import ApplicationError
+from src.exceptions.base import RepositoryError
+from src.exceptions.clients import ClientError
 from src.exceptions.knowledge import (
     KnowledgeDisabledError,
     KnowledgeIndexJobsRepositoryError,
@@ -284,7 +285,7 @@ class ProjectAgentService:
                 nodes=nodes,
                 tool_plan=tool_plan,
             )
-        except ApplicationError as error:
+        except RepositoryError as error:
             raise ProjectAgentError(str(error)) from error
 
         semantic_hits: list[KnowledgeSearchHit] = []
@@ -308,7 +309,7 @@ class ProjectAgentService:
                     )
                 finally:
                     phases_ms["qdrant"] = self._elapsed_ms(phase_started_at)
-            except KnowledgeProviderError:
+            except ClientError:
                 # Вопросы по текущим статусам продолжают работать по PostgreSQL даже
                 # во время переиндексации или временной недоступности Qdrant/embeddings.
                 logger.warning(
@@ -355,8 +356,8 @@ class ProjectAgentService:
                     schema=AgentOutput,
                     max_completion_tokens=3000,
                 )
-            except KnowledgeProviderError:
-                raise
+            except ClientError as error:
+                raise KnowledgeProviderError(str(error)) from error
             except Exception as error:
                 raise ProjectAgentError(str(error)) from error
 
@@ -403,7 +404,7 @@ class ProjectAgentService:
         if self.config.knowledge_enabled:
             try:
                 points_count = await self.qdrant_client.count(project_id)
-            except KnowledgeProviderError as error:
+            except ClientError as error:
                 provider_error = error.error_details
         pending = counts.get(KnowledgeIndexStatus.PENDING, 0)
         processing = counts.get(KnowledgeIndexStatus.PROCESSING, 0)
@@ -461,8 +462,8 @@ class ProjectAgentService:
                 schema=AgentToolPlan,
                 max_completion_tokens=700,
             )
-        except KnowledgeProviderError:
-            raise
+        except ClientError as error:
+            raise KnowledgeProviderError(str(error)) from error
         except Exception as error:
             raise ProjectAgentError(str(error)) from error
 

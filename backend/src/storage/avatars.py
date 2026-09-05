@@ -5,7 +5,7 @@ import shutil
 import uuid
 from pathlib import Path, PurePosixPath
 
-from src.exceptions.users import AvatarStorageError
+from src.exceptions.storage import AvatarStorageError
 
 
 class AvatarStorage:

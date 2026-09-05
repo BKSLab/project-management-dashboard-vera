@@ -260,3 +260,128 @@ def test_endpoints_never_receive_orm_models_from_access_guards() -> None:
         f"Возвращены ORM-алиасы доступа: {present}. "
         "Эндпоинт работает с идентификатором пути и разрешением."
     )
+
+
+@pytest.mark.parametrize(
+    "path",
+    iter_python_files("clients", "storage"),
+    ids=lambda path: path.name,
+)
+def test_client_and_storage_do_not_import_service_errors(path: Path) -> None:
+    """Нижний слой не знает исключений вышестоящего.
+
+    Клиент, поднимающий `*ServiceError`, фактически объявляет чужой
+    контракт: вышестоящий сервис перестаёт быть местом, где решается,
+    во что превращается сбой внешней системы.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or not node.module:
+            continue
+        if not node.module.startswith("src.exceptions"):
+            continue
+        if node.module in {"src.exceptions.clients", "src.exceptions.storage"}:
+            continue
+        offenders.extend(
+            f"{node.module}.{alias.name}:{node.lineno}"
+            for alias in node.names
+            if alias.name.endswith("ServiceError") or "Service" in alias.name
+        )
+
+    assert not offenders, (
+        f"{path.relative_to(SRC.parent)} импортирует исключения сервисного слоя: {offenders}. "
+        "Преобразование принадлежит вызывающему сервису."
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    iter_python_files("api"),
+    ids=lambda path: path.name,
+)
+def test_endpoints_do_not_catch_lower_layer_errors(path: Path) -> None:
+    """Эндпоинт не ловит ошибки клиента, хранилища или репозитория.
+
+    Их обязан преобразовать сервис: если такая ошибка доходит до
+    транспорта, значит граница слоя где-то пропущена.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    forbidden_suffixes = ("ClientError", "StorageError", "RepositoryError")
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ExceptHandler) or node.type is None:
+            continue
+        elements = node.type.elts if isinstance(node.type, ast.Tuple) else [node.type]
+        for element in elements:
+            if isinstance(element, ast.Name) and element.id.endswith(forbidden_suffixes):
+                offenders.append(f"{element.id}:{node.lineno}")
+
+    assert not offenders, (
+        f"{path.relative_to(SRC.parent)} ловит ошибку нижнего слоя: {offenders}."
+    )
+
+
+def test_broad_application_error_is_confined_to_transport_boundaries() -> None:
+    """Широкий перехват допустим только на финальной границе транспорта.
+
+    Внутри сервиса он скрывает, какой именно контракт зависимости
+    обрабатывается, и молча проглатывает новое семейство ошибок.
+    """
+    allowed_prefixes = (SRC / "mcp_server",)
+    offenders: list[str] = []
+    for path in iter_python_files("."):
+        if any(path.is_relative_to(prefix) for prefix in allowed_prefixes):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ExceptHandler) or node.type is None:
+                continue
+            elements = node.type.elts if isinstance(node.type, ast.Tuple) else [node.type]
+            offenders.extend(
+                f"{path.relative_to(SRC.parent)}:{node.lineno}"
+                for element in elements
+                if isinstance(element, ast.Name) and element.id == "ApplicationError"
+            )
+
+    assert not offenders, (
+        "Широкий перехват ApplicationError вне транспортной границы: " + ", ".join(offenders)
+    )
+
+
+def test_no_dead_reraise_of_own_errors_remains() -> None:
+    """Не осталось `except OwnError: raise`, который ничего не ловит.
+
+    Такая клауза появляется, когда `try` охватывает и вызов зависимости,
+    и собственную доменную проверку. Она ничего не защищает и создаёт
+    ложное впечатление, что защищает.
+    """
+    offenders: list[str] = []
+    for path in iter_python_files("services"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try):
+                continue
+            for index, handler in enumerate(node.handlers):
+                is_bare_raise = (
+                    len(handler.body) == 1
+                    and isinstance(handler.body[0], ast.Raise)
+                    and handler.body[0].exc is None
+                )
+                if not is_bare_raise or handler.type is None:
+                    continue
+                later_types = [
+                    ast.unparse(other.type)
+                    for other in node.handlers[index + 1 :]
+                    if other.type is not None
+                ]
+                # Пропускаем случаи с широким перехватом ниже: там клауза
+                # действительно нужна, чтобы своя ошибка прошла наверх.
+                if any("Exception" in item or "BaseException" in item for item in later_types):
+                    continue
+                offenders.append(
+                    f"{path.relative_to(SRC.parent)}:{handler.lineno} "
+                    f"({ast.unparse(handler.type)})"
+                )
+
+    assert not offenders, "Мёртвые клаузы `except ...: raise`: " + ", ".join(offenders)

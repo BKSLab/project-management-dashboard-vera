@@ -38,8 +38,6 @@ class TaskActivityService:
                 raise TaskNotFoundError(task_id=task_id)
             activity = await self.activity_repository.get_for_task(task_id=task_id)
             return [ActivitySchema.model_validate(item) for item in activity]
-        except TaskNotFoundError:
-            raise
         except (TaskActivityRepositoryError, TasksRepositoryError) as error:
             logger.error("❌ Ошибка получения истории задачи id=%s.", task_id, exc_info=True)
             raise TaskActivityServiceError(str(error)) from error

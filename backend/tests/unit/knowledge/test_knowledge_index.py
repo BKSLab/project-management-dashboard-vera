@@ -11,6 +11,7 @@ from src.db.models.projects import Project
 from src.db.models.task_attachments import TaskAttachment
 from src.db.models.task_comments import TaskComment
 from src.db.models.tasks import Task
+from src.exceptions.clients import VisionClientError
 from src.exceptions.knowledge import KnowledgeProviderError
 from src.knowledge.documents import build_attachment_chunks, build_comment_document
 from src.repositories.documents import DocumentsRepository
@@ -260,7 +261,7 @@ async def test_unavailable_vision_model_fails_job_instead_of_skipping_image(tmp_
         created_at=datetime.now(UTC),
     )
     (tmp_path / storage_name).write_bytes(b"\x89PNG\r\n\x1a\nvision-fixture")
-    runtime.vision.extract_image_text.side_effect = KnowledgeProviderError(
+    runtime.vision.extract_image_text.side_effect = VisionClientError(
         "vision API недоступен"
     )
 

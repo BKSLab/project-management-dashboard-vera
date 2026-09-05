@@ -36,7 +36,7 @@ from src.core.app_state import RUNTIME_STATE_KEY, SETTINGS_STATE_KEY
 from src.core.config_logger import configure_logging
 from src.core.settings import get_settings
 from src.db.session import async_session_factory, engine
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.clients import VectorStoreClientError
 from src.knowledge.runtime import (
     build_knowledge_runtime,
     close_knowledge_runtime,
@@ -83,7 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, object]]:
     if settings.knowledge.knowledge_enabled:
         try:
             await runtime.qdrant_client.backfill_payload_indexes()
-        except KnowledgeProviderError:
+        except VectorStoreClientError:
             runtime.payload_indexes_backfill_pending = True
             logger.warning(
                 "⚠️ Qdrant недоступен при старте; backfill payload-индексов отложен.",

@@ -4,7 +4,7 @@ from typing import Any
 
 from qdrant_client import AsyncQdrantClient, models
 
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.clients import VectorStoreClientError
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class ProjectQdrantClient:
                 logger.info("✅ Создана Qdrant collection %s.", name)
             await self._ensure_payload_indexes(name)
         except Exception as error:
-            raise KnowledgeProviderError(str(error)) from error
+            raise VectorStoreClientError(str(error)) from error
 
     async def recreate_collection(self, project_id: int) -> None:
         """Пересоздаёт производный индекс проекта для полного reindex."""
@@ -76,7 +76,7 @@ class ProjectQdrantClient:
             self._indexed_collections.discard(name)
             await self._ensure_payload_indexes(name)
         except Exception as error:
-            raise KnowledgeProviderError(str(error)) from error
+            raise VectorStoreClientError(str(error)) from error
 
     async def backfill_payload_indexes(self) -> int:
         """Создаёт payload-индексы во всех существующих project collections."""
@@ -94,10 +94,10 @@ class ProjectQdrantClient:
             if names:
                 logger.info("✅ Payload-индексы проверены для %s Qdrant collections.", len(names))
             return len(names)
-        except KnowledgeProviderError:
+        except VectorStoreClientError:
             raise
         except Exception as error:
-            raise KnowledgeProviderError(str(error)) from error
+            raise VectorStoreClientError(str(error)) from error
 
     async def delete_collection(self, project_id: int) -> None:
         """Удаляет collection проекта, если она существует."""
@@ -108,7 +108,7 @@ class ProjectQdrantClient:
                 logger.info("✅ Удалена Qdrant collection %s.", name)
             self._indexed_collections.discard(name)
         except Exception as error:
-            raise KnowledgeProviderError(str(error)) from error
+            raise VectorStoreClientError(str(error)) from error
 
     async def upsert_documents(
         self,
@@ -121,9 +121,9 @@ class ProjectQdrantClient:
         if not documents:
             return
         if len(documents) != len(vectors):
-            raise KnowledgeProviderError("Число документов не совпало с числом embeddings.")
+            raise VectorStoreClientError("Число документов не совпало с числом embeddings.")
         if any(len(vector) != self.vector_dim for vector in vectors):
-            raise KnowledgeProviderError(
+            raise VectorStoreClientError(
                 f"Embedding dimension не совпадает с Qdrant: ожидается {self.vector_dim}."
             )
         try:
@@ -140,10 +140,10 @@ class ProjectQdrantClient:
                 ],
                 wait=True,
             )
-        except KnowledgeProviderError:
+        except VectorStoreClientError:
             raise
         except Exception as error:
-            raise KnowledgeProviderError(str(error)) from error
+            raise VectorStoreClientError(str(error)) from error
 
     async def delete_entity(
         self,
@@ -221,7 +221,7 @@ class ProjectQdrantClient:
                 for point in group.hits[:1]
             ]
         except Exception as error:
-            raise KnowledgeProviderError(str(error)) from error
+            raise VectorStoreClientError(str(error)) from error
 
     async def count(self, project_id: int) -> int | None:
         """Возвращает точное число points либо ``None`` без collection."""
@@ -232,7 +232,7 @@ class ProjectQdrantClient:
             result = await self.client.count(collection_name=name, exact=True)
             return int(result.count)
         except Exception as error:
-            raise KnowledgeProviderError(str(error)) from error
+            raise VectorStoreClientError(str(error)) from error
 
     async def close(self) -> None:
         """Закрывает сетевой клиент Qdrant."""
@@ -267,4 +267,4 @@ class ProjectQdrantClient:
                 wait=True,
             )
         except Exception as error:
-            raise KnowledgeProviderError(str(error)) from error
+            raise VectorStoreClientError(str(error)) from error

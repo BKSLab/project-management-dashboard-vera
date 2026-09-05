@@ -14,7 +14,7 @@ from src.exceptions.projects import (
     ProjectsRepositoryError,
     ProjectsServiceError,
 )
-from src.exceptions.task_attachments import TaskAttachmentStorageError
+from src.exceptions.storage import TaskAttachmentStorageError
 from src.exceptions.tasks import TasksRepositoryError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.repositories.project_members import ProjectMembersRepository
@@ -110,8 +110,6 @@ class ProjectsService:
             if project is None:
                 raise ProjectNotFoundError(project_id=project_id)
             return ProjectSchema.model_validate(project)
-        except ProjectNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка получения проекта id=%s.", project_id, exc_info=True)
             raise ProjectsServiceError(str(error)) from error
@@ -194,8 +192,6 @@ class ProjectsService:
                     )
             await self.unit_of_work.commit()
             return ProjectSchema.model_validate(updated)
-        except ProjectNotFoundError:
-            raise
         except ProjectKeyAlreadyExistsRepositoryError as error:
             logger.warning("⚠️ Конфликт кода проекта %s.", error.key)
             raise ProjectKeyConflictError(key=error.key) from error
@@ -228,8 +224,6 @@ class ProjectsService:
             await self.unit_of_work.commit()
             await self._cleanup_task_files(task_ids=task_ids)
             logger.info("✅ Проект id=%s удалён вместе с %s задачами.", project_id, len(task_ids))
-        except ProjectNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка удаления проекта id=%s.", project_id, exc_info=True)
             raise ProjectsServiceError(str(error)) from error
@@ -254,8 +248,6 @@ class ProjectsService:
             stages = await self.stages_repository.get_by_project(project_id=project_id)
             tasks = await self.tasks_repository.get_by_project(project_id=project_id)
             return build_project_stats(project_id=project_id, stages=stages, tasks=tasks)
-        except ProjectNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка расчёта показателей проекта id=%s.", project_id, exc_info=True)
             raise ProjectsServiceError(str(error)) from error

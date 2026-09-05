@@ -12,7 +12,7 @@ from src.db.models.knowledge_index_jobs import (
     KnowledgeIndexOperation,
 )
 from src.db.session import async_session_factory
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.clients import VectorStoreClientError
 from src.knowledge.runtime import KnowledgeRuntime
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
@@ -87,7 +87,7 @@ async def _backfill_payload_indexes_if_pending(runtime: KnowledgeRuntime) -> Non
         return
     try:
         await runtime.qdrant_client.backfill_payload_indexes()
-    except KnowledgeProviderError:
+    except VectorStoreClientError:
         logger.warning(
             "⚠️ Qdrant недоступен; отложенный backfill payload-индексов будет повторён.",
             exc_info=True,

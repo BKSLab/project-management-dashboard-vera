@@ -9,12 +9,12 @@ from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.task_attachments import TaskAttachment
 from src.db.models.tasks import Task
 from src.exceptions.knowledge import KnowledgeEventsServiceError
+from src.exceptions.storage import TaskAttachmentStorageError
 from src.exceptions.task_attachments import (
     TaskAttachmentLimitError,
     TaskAttachmentNotFoundError,
     TaskAttachmentsRepositoryError,
     TaskAttachmentsServiceError,
-    TaskAttachmentStorageError,
     TaskAttachmentTooLargeError,
     TaskAttachmentUnsupportedTypeError,
     TaskAttachmentValidationError,
@@ -115,8 +115,6 @@ class TaskAttachmentsService:
             await self._ensure_task_exists(task_id)
             attachments = await self.attachments_repository.get_for_task(task_id=task_id)
             return [self._to_schema(attachment) for attachment in attachments]
-        except TaskNotFoundError:
-            raise
         except (TaskAttachmentsRepositoryError, TasksRepositoryError) as error:
             logger.error("❌ Ошибка получения файлов задачи id=%s.", task_id, exc_info=True)
             raise TaskAttachmentsServiceError(str(error)) from error
@@ -189,14 +187,6 @@ class TaskAttachmentsService:
             await self.unit_of_work.commit()
             return self._to_schema(attachment)
         except (
-            TaskNotFoundError,
-            TaskAttachmentLimitError,
-            TaskAttachmentTooLargeError,
-            TaskAttachmentUnsupportedTypeError,
-            TaskAttachmentValidationError,
-        ):
-            raise
-        except (
             TaskAttachmentStorageError,
             TaskAttachmentsRepositoryError,
             TasksRepositoryError,
@@ -245,8 +235,6 @@ class TaskAttachmentsService:
                     attachment.content_type,
                 ),
             )
-        except TaskAttachmentNotFoundError:
-            raise
         except (TaskAttachmentStorageError, TaskAttachmentsRepositoryError) as error:
             logger.error("❌ Файл задачи id=%s недоступен.", attachment_id, exc_info=True)
             raise TaskAttachmentsServiceError(str(error)) from error
@@ -283,8 +271,6 @@ class TaskAttachmentsService:
                     storage_key,
                     exc_info=True,
                 )
-        except TaskAttachmentNotFoundError:
-            raise
         except (
             TaskAttachmentsRepositoryError,
             TasksRepositoryError,

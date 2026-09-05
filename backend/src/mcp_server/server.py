@@ -18,7 +18,7 @@ from starlette.applications import Starlette
 
 from src.core.settings import Settings
 from src.exceptions.base import ApplicationError
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.clients import ClientError
 from src.knowledge.documents import build_wbs_paths
 from src.mcp_server.context import resolve_project, resolve_task, tool_context
 from src.mcp_server.presenters import (
@@ -295,7 +295,7 @@ async def search_project_knowledge(
                 limit=limit,
                 score_threshold=tools.settings.knowledge.qdrant_score_threshold,
             )
-        except KnowledgeProviderError as error:
+        except ClientError as error:
             raise ToolError("Семантический поиск временно недоступен.") from error
 
         wanted = entity_type.strip().lower() if entity_type else None

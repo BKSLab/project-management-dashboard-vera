@@ -101,12 +101,6 @@ class DocumentLinksService:
                 data={"document_id": document_id, "task_id": task_id}
             )
             return DocumentLinkSchema.model_validate(link)
-        except (
-            DocumentNotFoundError,
-            TaskNotFoundError,
-            DocumentLinkProjectMismatchError,
-        ):
-            raise
         except DocumentLinkAlreadyExistsRepositoryError as error:
             logger.warning("⚠️ Связь документа id=%s уже существует.", error.document_id)
             raise DocumentLinkAlreadyExistsError(document_id=error.document_id) from error
@@ -132,8 +126,6 @@ class DocumentLinksService:
             if link is None:
                 raise DocumentLinkNotFoundError(link_id=link_id)
             await self.document_links_repository.delete(link=link)
-        except DocumentLinkNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка удаления связи документа id=%s.", link_id, exc_info=True)
             raise DocumentLinksServiceError(str(error)) from error
@@ -177,8 +169,6 @@ class DocumentLinksService:
                     )
                 )
             return result
-        except DocumentNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка получения связей документа id=%s.", document_id, exc_info=True)
             raise DocumentLinksServiceError(str(error)) from error
@@ -219,8 +209,6 @@ class DocumentLinksService:
                     )
                 )
             return result
-        except TaskNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка получения связей задачи id=%s.", task_id, exc_info=True)
             raise DocumentLinksServiceError(str(error)) from error

@@ -132,8 +132,6 @@ class CalendarScenarioService:
                 (perf_counter() - started) * 1000,
             )
             return result
-        except (ProjectNotFoundError, TaskNotFoundError, TaskDateRangeError):
-            raise
         except RepositoryErrors as error:
             logger.error(
                 "❌ Ошибка preview календарного сценария проекта id=%s.",
@@ -201,14 +199,6 @@ class CalendarScenarioService:
                 applied_count=len(changed_ids),
                 task_ids=changed_ids,
             )
-        except (
-            ProjectNotFoundError,
-            TaskNotFoundError,
-            CalendarScenarioConflictError,
-            CalendarScenarioVersionConflictError,
-            TaskDateRangeError,
-        ):
-            raise
         except RepositoryErrors as error:
             logger.error(
                 "❌ Ошибка применения календарного сценария проекта id=%s.",

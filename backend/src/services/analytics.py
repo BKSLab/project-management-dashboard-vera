@@ -25,6 +25,7 @@ from src.exceptions.analytics import (
     AnalyticsReportsRepositoryError,
     AnalyticsServiceError,
 )
+from src.exceptions.clients import ClientError
 from src.exceptions.document_links import DocumentLinksRepositoryError
 from src.exceptions.documents import DocumentsRepositoryError
 from src.exceptions.knowledge import KnowledgeProviderError
@@ -284,8 +285,9 @@ class AnalyticsService:
                 schema=AnalyticsDraftSchema,
                 max_completion_tokens=MAX_COMPLETION_TOKENS,
             )
-        except KnowledgeProviderError:
-            raise
+        except ClientError as error:
+            logger.error("❌ LLM недоступен при сборе аналитического свода.", exc_info=True)
+            raise KnowledgeProviderError(str(error)) from error
         except Exception as error:
             logger.error("❌ Модель не вернула аналитический свод.", exc_info=True)
             raise AnalyticsGenerationError(str(error)) from error

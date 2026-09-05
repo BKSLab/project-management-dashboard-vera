@@ -11,7 +11,7 @@ from src.clients.retry import (
     sleep_before_retry,
     worst_case_seconds,
 )
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.clients import VisionClientError
 from src.knowledge.images import build_image_data_url
 from src.prompts.vision import VISION_EXTRACTION_PROMPT
 
@@ -74,7 +74,7 @@ class VisionClient:
 
         Raises:
             ValueError: Если расширение не поддерживается или файл пуст.
-            KnowledgeProviderError: Если API недоступен или ответ не разобран.
+            VisionClientError: Если API недоступен или ответ не разобран.
         """
         image_data_url = build_image_data_url(filename, content)
         return await self.extract_text(image_data_url=image_data_url)
@@ -92,7 +92,7 @@ class VisionClient:
             Извлечённый текст; пустая строка, если модель ничего не нашла.
 
         Raises:
-            KnowledgeProviderError: Если API недоступен или ответ не разобран.
+            VisionClientError: Если API недоступен или ответ не разобран.
         """
         payload = {
             "model": self.model,
@@ -138,7 +138,7 @@ class VisionClient:
                     break
                 if attempt < self.retries:
                     await sleep_before_retry(attempt)
-        raise KnowledgeProviderError(str(last_error))
+        raise VisionClientError(str(last_error))
 
 
 class DisabledVisionCapability:

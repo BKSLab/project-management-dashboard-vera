@@ -13,6 +13,7 @@ from src.db.models.knowledge_index_jobs import (
     KnowledgeIndexJob,
     KnowledgeIndexOperation,
 )
+from src.exceptions.clients import ClientError
 from src.exceptions.knowledge import KnowledgeProviderError
 from src.knowledge.documents import (
     KnowledgeDocument,
@@ -390,11 +391,11 @@ class KnowledgeIndexService:
                 vision=self.vision,
                 max_chars=self.extract_max_chars,
             )
-        except KnowledgeProviderError:
+        except ClientError as error:
             # Недоступность vision-модели — временная: файл разобрать можно,
             # просто не сейчас. Пропустить его здесь значило бы навсегда
             # потерять содержимое, поэтому job уходит на повторную попытку.
-            raise
+            raise KnowledgeProviderError(str(error)) from error
         except Exception:
             logger.warning(
                 "⚠️ Вложение id=%s не удалось извлечь, оно пропущено при индексации.",

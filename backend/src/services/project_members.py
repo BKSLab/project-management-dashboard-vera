@@ -84,8 +84,6 @@ class ProjectMembersService:
             )
             await self.unit_of_work.commit()
             return to_project_member_schema(member, user=user)
-        except (ProjectMemberUserNotFoundError, ProjectMemberAlreadyExistsError):
-            raise
         except ProjectMemberAlreadyExistsRepositoryError as error:
             raise ProjectMemberAlreadyExistsError(user_id=error.user_id) from error
         except RepositoryErrors as error:
@@ -103,8 +101,6 @@ class ProjectMembersService:
             if member is None:
                 raise ProjectMemberNotFoundError(user_id=user_id)
             return await self.users_service.get_avatar(user_id=user_id)
-        except ProjectMemberNotFoundError:
-            raise
         except ProjectsRepositoryError as error:
             logger.error(
                 "❌ Ошибка получения фотографии участника id=%s проекта id=%s.",
@@ -133,8 +129,6 @@ class ProjectMembersService:
             # Все ролевые назначения удалятся через FK ON DELETE CASCADE.
             await self.members_repository.delete(member=member)
             await self.unit_of_work.commit()
-        except (ProjectMemberNotFoundError, ProjectOwnerRemovalError):
-            raise
         except RepositoryErrors as error:
             logger.error(
                 "❌ Ошибка удаления пользователя из проекта id=%s.",

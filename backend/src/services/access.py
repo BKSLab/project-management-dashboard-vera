@@ -18,7 +18,7 @@ from src.exceptions.access import (
     ProjectOwnerRequiredError,
     ResourceNotAvailableError,
 )
-from src.exceptions.base import ApplicationError
+from src.exceptions.base import RepositoryError
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
 from src.repositories.project_members import ProjectMembersRepository
@@ -217,6 +217,6 @@ class AccessService:
         """
         try:
             return await query(**kwargs)
-        except ApplicationError as error:
+        except RepositoryError as error:
             logger.error("❌ Ошибка проверки доступа: %s", error, exc_info=True)
             raise AccessServiceError(str(error)) from error

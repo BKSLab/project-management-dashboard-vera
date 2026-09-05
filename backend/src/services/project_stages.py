@@ -61,8 +61,6 @@ class ProjectStagesService:
             await self._ensure_project_exists(project_id=project_id)
             stages = await self.stages_repository.get_by_project(project_id=project_id)
             return [StageSchema.model_validate(stage) for stage in stages]
-        except ProjectNotFoundError:
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка получения стадий проекта id=%s.", project_id, exc_info=True)
             raise ProjectStagesServiceError(str(error)) from error
@@ -90,8 +88,6 @@ class ProjectStagesService:
             )
             await self.unit_of_work.commit()
             return StageSchema.model_validate(stage)
-        except ProjectNotFoundError:
-            raise
         except ProjectStageNameAlreadyExistsRepositoryError as error:
             logger.warning("⚠️ Конфликт названия стадии %r.", error.name)
             raise ProjectStageNameConflictError(name=error.name) from error
@@ -121,8 +117,6 @@ class ProjectStagesService:
             updated = await self.stages_repository.update(stage=stage, data=data)
             await self.unit_of_work.commit()
             return StageSchema.model_validate(updated)
-        except ProjectStageNotFoundError:
-            raise
         except ProjectStageNameAlreadyExistsRepositoryError as error:
             logger.warning("⚠️ Конфликт названия стадии %r.", error.name)
             raise ProjectStageNameConflictError(name=error.name) from error
@@ -156,12 +150,6 @@ class ProjectStagesService:
                 raise ProjectLastStageDeleteError(stage_id=stage_id)
             await self.stages_repository.delete(stage=stage)
             await self.unit_of_work.commit()
-        except (
-            ProjectStageNotFoundError,
-            ProjectStageHasTasksError,
-            ProjectLastStageDeleteError,
-        ):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка удаления стадии id=%s.", stage_id, exc_info=True)
             raise ProjectStagesServiceError(str(error)) from error
@@ -188,8 +176,6 @@ class ProjectStagesService:
             if stage.project_id != project_id:
                 raise ProjectStageForeignProjectError(stage_id=stage_id, project_id=project_id)
             return stage
-        except (ProjectStageNotFoundError, ProjectStageForeignProjectError):
-            raise
         except RepositoryErrors as error:
             logger.error("❌ Ошибка получения стадии id=%s.", stage_id, exc_info=True)
             raise ProjectStagesServiceError(str(error)) from error
