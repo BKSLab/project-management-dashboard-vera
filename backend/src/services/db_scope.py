@@ -153,3 +153,18 @@ class ProjectQueryScope:
 
 
 ProjectQueryScopeFactory = Callable[[], AbstractAsyncContextManager[ProjectQueryScope]]
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeQueueScope:
+    """Одна короткая область обслуживания очереди индексации.
+
+    Каждая операция очереди — отдельная короткая транзакция: между ними
+    worker выполняет сетевые вызовы, и держать соединение всё это время
+    нельзя.
+    """
+
+    jobs: KnowledgeIndexJobsRepository
+
+
+KnowledgeQueueScopeFactory = Callable[[], AbstractAsyncContextManager[KnowledgeQueueScope]]

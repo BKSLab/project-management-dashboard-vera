@@ -9,6 +9,7 @@
 """
 
 import ast
+import inspect
 from pathlib import Path
 
 import pytest
@@ -35,16 +36,14 @@ COMPOSITION_MODULES = {
     SRC / "dependencies" / "storage.py",
     SRC / "dependencies" / "clients.py",
     SRC / "mcp_server" / "services.py",
+    SRC / "knowledge" / "composition.py",
     SRC / "knowledge" / "runtime.py",
     SRC / "main.py",
 }
 
-# Модули, которые ещё собирают репозитории сами. Исключение временное и
-# снимается вместе с соответствующим этапом: worker получает зависимости
-# конструктором.
-PENDING_REPOSITORY_BUILDERS = {
-    SRC / "knowledge" / "worker.py",
-}
+# Отложенных исключений не осталось: каждый модуль, который собирал
+# репозитории сам, переведён на composition root своего контура.
+PENDING_REPOSITORY_BUILDERS: set[Path] = set()
 
 # Транспорт MCP: инструмент вызывает сервис ровно так же, как эндпоинт.
 MCP_TRANSPORT_MODULES = (
@@ -161,6 +160,32 @@ def test_mcp_tool_does_not_construct_services(path: Path) -> None:
     assert not offenders, f"{path.name} создаёт зависимость напрямую: {offenders}"
 
 
+def test_worker_does_not_know_the_data_layer_or_the_session_factory() -> None:
+    """Фоновый индексатор не собирает репозитории и не ищет фабрику сессий.
+
+    Пока worker брал `async_session_factory` из модуля, его зависимости
+    нельзя было ни увидеть в сигнатуре, ни подменить в тесте без
+    monkeypatch модульных globals.
+    """
+    path = SRC / "knowledge" / "worker.py"
+    offenders = [
+        f"{module}:{lineno}"
+        for module, lineno in imported_modules(path)
+        if module.startswith(("src.repositories", "src.db.session", "sqlalchemy"))
+    ]
+
+    assert not offenders, f"worker.py импортирует слой данных: {offenders}"
+
+
+def test_worker_receives_its_dependencies_through_the_constructor() -> None:
+    """Конструктор worker-а перечисляет всё, от чего он зависит."""
+    from src.knowledge.worker import KnowledgeWorker
+
+    parameters = set(inspect.signature(KnowledgeWorker.__init__).parameters) - {"self"}
+
+    assert parameters == {"config", "queue", "index_service", "runtime"}
+
+
 def test_mcp_tool_context_does_not_expose_a_session() -> None:
     """В контексте инструмента нет сессии базы данных.
 
@@ -253,7 +278,8 @@ def test_pending_repository_builders_still_need_the_exception() -> None:
 
     Если модуль перестал собирать репозитории, он обязан уйти из списка
     отложенных: иначе исключение переживёт причину своего появления и
-    перестанет что-либо охранять.
+    перестанет что-либо охранять. Список пуст — проверка охраняет от
+    возврата исключений без причины.
     """
     stale: list[str] = []
     for path in PENDING_REPOSITORY_BUILDERS:

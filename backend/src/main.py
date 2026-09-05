@@ -41,13 +41,13 @@ from src.core.config_logger import configure_logging
 from src.core.settings import get_settings
 from src.db.session import async_session_factory, engine
 from src.exceptions.clients import VectorStoreClientError
+from src.knowledge.composition import build_knowledge_worker
 from src.knowledge.runtime import (
     build_knowledge_runtime,
     close_knowledge_runtime,
     create_http_client,
     create_qdrant_client,
 )
-from src.knowledge.worker import run_knowledge_worker
 from src.mcp_server.server import build_mcp_app, mcp_server
 from src.utils.check_db import check_db_connection
 
@@ -93,8 +93,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, object]]:
                 "⚠️ Qdrant недоступен при старте; backfill payload-индексов отложен.",
                 exc_info=True,
             )
+        worker = build_knowledge_worker(
+            session_factory=async_session_factory,
+            settings=settings,
+            runtime=runtime,
+        )
         worker_task = asyncio.create_task(
-            run_knowledge_worker(stop_event=worker_stop, settings=settings, runtime=runtime),
+            worker.run(worker_stop),
             name="project-knowledge-indexer",
         )
         logger.info("✅ Фоновый индексатор базы знаний запущен.")

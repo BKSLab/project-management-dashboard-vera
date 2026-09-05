@@ -25,7 +25,7 @@
 | 6. Короткие DB scopes | ✅ выполнен | 1071 passed | `stage-6` |
 | 7. Очистка endpoints | ✅ выполнен | 1171 passed | `stage-7` |
 | 8. MCP на сервисы | ✅ выполнен | 1204 passed | `stage-8` |
-| 9. DI knowledge worker | ⬜ | — | — |
+| 9. DI knowledge worker | ✅ выполнен | 1228 passed | `stage-9` |
 | 10. Архитектурные тесты | ⬜ | — | — |
 
 Baseline до рефакторинга: `pytest 587 passed`, `ruff All checks passed`.
@@ -1146,7 +1146,7 @@ test_channel_equivalence.py` — эквивалентность HTTP и MCP на
 доступа, `tests/characterization/test_mcp_contract.py` — неизменность имён
 инструментов, обязательных аргументов и ключей JSON.
 
-### Этап 9. Инъецировать зависимости knowledge worker
+### Этап 9. Инъецировать зависимости knowledge worker — ✅ выполнен
 
 Нормативное основание: [PAT-SERVICE], [PAT-DI], [PAT-LIFESPAN] и resource budget
 [PAT-CLIENT].
@@ -1174,6 +1174,32 @@ test_channel_equivalence.py` — эквивалентность HTTP и MCP на
 - existing session-lifetime tests остаются;
 - lifecycle test проверяет cancellation и закрытие clients/engine;
 - integration tests очереди проверяют retry/status transitions и concurrent claim.
+
+**Результат.** Вместо функции `run_knowledge_worker` появился класс
+`KnowledgeWorker` с четырьмя конструкторными зависимостями: неизменяемый
+`WorkerConfig` (снимается с настроек один раз), `KnowledgeQueueService`,
+фабрика индексатора и клиенты AI-контура. Обслуживание очереди вынесено в
+`src/services/knowledge_queue.py`: `reset_interrupted`, `purge_succeeded`,
+`claim_next_batch` и `finish` — каждая операция в своей короткой области.
+Конкретные репозитории и `KnowledgeIndexService` собираются только в
+`src/knowledge/composition.py`, который вызывает `main.lifespan`.
+
+Инварианты сохранены и проверены: подготовка идёт в DB-области, внешний
+вызов — после её закрытия; `asyncio.CancelledError` не расходует попытку;
+TASK-пачка делится пополам при частичном отказе; отложенный backfill
+payload-индексов повторяется до первого успеха.
+
+Тесты этапа: `tests/unit/knowledge/test_worker.py` (12) переписаны на
+конструкторные дублёры — monkeypatch модульных globals больше нет;
+`tests/integration/repositories/test_knowledge_queue_service.py` (9) на
+настоящем PostgreSQL проверяет переходы статусов, отложенный повтор,
+исчерпание попыток, конкурентный захват и то, что сессия живёт ровно одну
+операцию очереди; `tests/unit/test_main.py` — отмену зависшего worker-а с
+освобождением клиентов и пула.
+
+`PENDING_REPOSITORY_BUILDERS` опустел: добавлены guards
+`test_worker_does_not_know_the_data_layer_or_the_session_factory` и
+`test_worker_receives_its_dependencies_through_the_constructor`.
 
 ### Этап 10. Закрепить архитектуру тестами
 
