@@ -1,4 +1,5 @@
 from src.prompts.base import build_system_prompt
+from src.prompts.task_checklist import CHECKLIST_ANALYSIS_RULES
 
 _WBS_SUGGESTION_INSTRUCTIONS = """Сейчас ты собираешь иерархическую структуру работ (ИСР)
 по списку существующих задач проекта.
@@ -32,4 +33,4 @@ temp_id — произвольные уникальные строки внут�
 на temp_id из этого же ответа. В skipped_task_ids перечисли задачи, которым не нашлось
 осмысленного места; их лучше оставить нераспределёнными, чем отнести наугад."""
 
-WBS_SUGGESTION_SYSTEM_PROMPT = build_system_prompt(_WBS_SUGGESTION_INSTRUCTIONS)
+WBS_SUGGESTION_SYSTEM_PROMPT = build_system_prompt(_WBS_SUGGESTION_INSTRUCTIONS + "\n" + CHECKLIST_ANALYSIS_RULES)

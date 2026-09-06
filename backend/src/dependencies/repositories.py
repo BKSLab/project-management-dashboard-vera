@@ -10,6 +10,7 @@ from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_members import ProjectMembersRepository
+from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.project_stickers import ProjectStickersRepository
 from src.repositories.projects import ProjectsRepository
@@ -171,3 +172,11 @@ AnalyticsReportsRepositoryDep = Annotated[
     Depends(get_analytics_reports_repository),
 ]
 UnitOfWorkDep = Annotated[UnitOfWork, Depends(get_unit_of_work)]
+
+
+def get_project_risk_repository(session: DbSessionDep) -> ProjectRiskRepository:
+    """Создаёт репозиторий рисков в общей сессии запроса."""
+    return ProjectRiskRepository(session)
+
+
+ProjectRiskRepositoryDep = Annotated[ProjectRiskRepository, Depends(get_project_risk_repository)]

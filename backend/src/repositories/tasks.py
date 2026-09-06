@@ -292,6 +292,29 @@ class TasksRepository:
             logger.error("❌ Не удалось получить задачу id=%s.", task_id, exc_info=True)
             raise TasksRepositoryError(f"Ошибка получения задачи id={task_id}.") from error
 
+    async def get_for_update(self, *, task_id: int) -> Task | None:
+        """Читает актуальную задачу с блокировкой до конца транзакции.
+
+        Args:
+            task_id: Изменяемая задача.
+
+        Returns:
+            Задача либо None.
+
+        Raises:
+            TasksRepositoryError: Ошибка получения блокировки.
+        """
+        try:
+            result = await self.db_session.execute(
+                select(Task).where(Task.id == task_id).with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            return result.scalar_one_or_none()
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось заблокировать задачу id=%s.", task_id, exc_info=True)
+            raise TasksRepositoryError(f"Ошибка блокировки задачи id={task_id}.") from error
+
     async def get_by_project_number(self, project_id: int, number: int) -> Task | None:
         """Возвращает задачу по отображаемому номеру внутри проекта."""
         try:

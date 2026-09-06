@@ -446,7 +446,7 @@ select:-webkit-autofill {
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.035), transparent 42%),
     var(--sticker-surface);
-  box-shadow: var(--shadow-card);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.38), 0 2px 5px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(255, 255, 255, 0.07);
   color: var(--surface-note-ink);
   cursor: grab;
   transition:
@@ -454,10 +454,21 @@ select:-webkit-autofill {
     box-shadow var(--duration-fast) var(--ease-standard);
 }
 
+.project-sticker-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.24;
+  background-image: radial-gradient(rgba(75, 62, 35, 0.18) 0.55px, transparent 0.7px);
+  background-size: 5px 5px;
+  mix-blend-mode: multiply;
+}
+
 .project-sticker-card:hover,
 .project-sticker-card:focus-within {
   transform: translateY(-2px);
-  box-shadow: var(--shadow-hover);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.48), 0 3px 8px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(255, 255, 255, 0.11);
 }
 
 .react-flow__node-sticker.dragging .project-sticker-card {
@@ -471,6 +482,11 @@ select:-webkit-autofill {
 .project-sticker-card--green { --sticker-surface: var(--surface-note-green); }
 .project-sticker-card--red { --sticker-surface: var(--surface-note-red); }
 .project-sticker-card--violet { --sticker-surface: var(--surface-note-violet); }
+.project-sticker-card--yellow { transform: rotate(-0.35deg); }
+.project-sticker-card--blue { transform: rotate(0.25deg); }
+.project-sticker-card--green { transform: rotate(-0.18deg); }
+.project-sticker-card--red { transform: rotate(0.32deg); }
+.project-sticker-card--violet { transform: rotate(-0.28deg); }
 
 .project-sticker-card__tape {
   position: absolute;
@@ -481,6 +497,58 @@ select:-webkit-autofill {
   transform: translateX(-50%);
   border-inline: 1px solid rgba(41, 37, 28, 0.08);
   background: rgba(255, 255, 255, 0.48);
+  opacity: 0.72;
+  transform: translateX(-50%) rotate(-1.5deg);
+  box-shadow: 0 1px 2px rgba(50, 40, 20, 0.12);
+}
+
+.project-sticker-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+.project-sticker-size span { color: var(--color-text-muted); font-family: var(--font-mono); font-size: 10px; }
+.project-sticker-size:hover, .project-sticker-size--active {
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-soft);
+  color: var(--color-text-primary);
+}
+
+.project-sticker-canvas .react-flow__resize-control.handle {
+  width: 17px;
+  height: 17px;
+  border: 2px solid var(--color-accent);
+  border-radius: 3px;
+  background: var(--surface-floating);
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.45);
+}
+.project-sticker-canvas .react-flow__resize-control.handle.bottom.right {
+  cursor: nwse-resize;
+}
+.project-sticker-canvas .react-flow__resize-control.handle.bottom.left {
+  cursor: nesw-resize;
+}
+.project-sticker-canvas .react-flow__resize-control.handle.top.right {
+  cursor: nesw-resize;
+}
+.project-sticker-canvas .react-flow__resize-control.handle.top.left {
+  cursor: nwse-resize;
+}
+.project-sticker-card__resize-hint {
+  position: absolute;
+  right: 6px;
+  bottom: 5px;
+  z-index: 2;
+  pointer-events: none;
+  color: color-mix(in srgb, var(--surface-note-ink), transparent 35%);
+  font-size: 18px;
+  line-height: 1;
   opacity: 0.72;
 }
 

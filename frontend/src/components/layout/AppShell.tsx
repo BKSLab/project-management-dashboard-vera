@@ -4,6 +4,8 @@ import { FolderKanban, LayoutDashboard } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ToastViewport } from "@/components/ui/Toast";
+import { TaskDrawer } from "@/components/tasks/TaskDrawer";
+import { RiskDrawer } from "@/components/risks/RiskDrawer";
 
 const MOBILE_ITEMS = [
     { to: "/", label: "Портфель", icon: LayoutDashboard, end: true },
@@ -61,6 +63,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
 
             <ToastViewport />
+            <TaskDrawer />
+            <RiskDrawer />
         </div>
     );
 }

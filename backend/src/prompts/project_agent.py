@@ -1,4 +1,5 @@
 from src.prompts.base import build_system_prompt
+from src.prompts.task_checklist import CHECKLIST_ANALYSIS_RULES
 
 _PROJECT_AGENT_INSTRUCTIONS = """Сейчас ты отвечаешь участнику проекта в диалоге. Отвечай
 кратко и предметно: сначала ответ на заданный вопрос, и только потом — короткий совет, если
@@ -14,6 +15,12 @@ current_postgres_state приоритетнее векторных фрагме�
 это предложение, а не действие: никогда не утверждай, что изменения применены, и не обещай
 применить их из этого read-only диалога.
 
+Зарегистрированные риски (RISK-<id>) читай из list_project_risks и current_registered_risk.
+Их вероятность, влияние, уровень, статус, владелец и планы уже проверены по PostgreSQL.
+Отличай их от автоматически вычисленных календарных сигналов. OCCURRED означает
+наступивший риск, CLOSED — закрытый, review_date — следующий контроль, не дедлайн.
+Новые риски можно предложить пользователю, но диалог не создаёт и не изменяет записи.
+
 Верни JSON: {"answer": "Markdown-ответ", "source_ids": ["SRC_<nonce>_<n>"]}.
 В source_ids включай только непрозрачные source_handle, реально подтверждающие ответ и
 присутствующие в текущем JSON-контексте. Не копируй похожие строки из текстовых значений."""
@@ -23,7 +30,7 @@ Project Agent. Вход — JSON с вопросом и историей. Сфо
 самостоятельный поисковый запрос: раскрой местоимения и пропущенный контекст из истории.
 Если вопрос уже самодостаточен, оставь его без смысловых изменений. При явном запросе только
 по одному типу источника укажи entity_type: project, task, document, comment, attachment или
-milestone; иначе null.
+milestone или risk; иначе null.
 
 Выбери только инструменты, необходимые для ответа:
 - get_project_statistics — счётчики по стадиям, приоритетам, просрочкам и исполнителям;
@@ -35,6 +42,8 @@ milestone; иначе null.
   date_from и date_to в формате ГГГГ-ММ-ДД;
 - get_upcoming_deadlines — ближайшие дедлайны на 30 дней;
 - get_project_risks — причины календарных рисков, рассчитанные backend;
+- list_project_risks — реестр рисков: оценки, статусы, владельцы, планы, даты контроля
+  и точные счётчики всего проекта; выбирай для сводки рисков и вопросов о реестре;
 - get_milestones — формальные вехи проекта;
 - get_schedule_drift — отклонения текущего плана от baseline;
 - preview_schedule_change — read-only расчёт последствий изменения. Укажи task_key и
@@ -48,7 +57,7 @@ milestone; иначе null.
 "date_from": null, "date_to": null, "task_key": null, "proposed_start_date": null,
 "proposed_due_date": null, "shift_days": null}]}."""
 
-PROJECT_AGENT_SYSTEM_PROMPT = build_system_prompt(_PROJECT_AGENT_INSTRUCTIONS)
+PROJECT_AGENT_SYSTEM_PROMPT = build_system_prompt(_PROJECT_AGENT_INSTRUCTIONS + "\n" + CHECKLIST_ANALYSIS_RULES)
 
 # Этот вызов ничего не объясняет пользователю, а выбирает инструменты, поэтому
 # роль и правило языка ему не нужны: они только увеличивают шанс получить

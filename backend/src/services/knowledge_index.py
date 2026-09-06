@@ -22,12 +22,14 @@ from src.knowledge.documents import (
     build_document_chunks,
     build_milestone_document,
     build_project_document,
+    build_risk_chunks,
     build_task_document,
     build_wbs_paths,
 )
 from src.knowledge.extract import extract_indexable_text
 from src.repositories.documents import DocumentsRepository
 from src.repositories.milestones import MilestonesRepository
+from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
@@ -63,6 +65,7 @@ class KnowledgeIndexService:
         attachments_repository: TaskAttachmentsRepository,
         attachment_storage: TaskAttachmentStorage,
         milestones_repository: MilestonesRepository,
+        risks_repository: ProjectRiskRepository,
         embedding_batch_size: int,
         chunk_target_chars: int,
         chunk_overlap_chars: int,
@@ -83,6 +86,7 @@ class KnowledgeIndexService:
         self.chunk_overlap_chars = chunk_overlap_chars
         self.extract_max_chars = extract_max_chars
         self.milestones_repository = milestones_repository
+        self.risks_repository = risks_repository
         self.embedding_client = embedding_client
         self.qdrant_client = qdrant_client
         self.vision = vision
@@ -123,6 +127,7 @@ class KnowledgeIndexService:
                 KnowledgeEntityType.COMMENT: self._comment_documents,
                 KnowledgeEntityType.ATTACHMENT: self._attachment_documents,
                 KnowledgeEntityType.MILESTONE: self._milestone_documents,
+                KnowledgeEntityType.RISK: self._risk_documents,
             }
             documents = tuple(await builders[job.entity_type](job.project_id, entity_id))
         return PreparedIndexAction(
@@ -192,11 +197,20 @@ class KnowledgeIndexService:
         comments = await self.comments_repository.get_for_tasks(task_ids)
         attachments = await self.attachments_repository.get_for_tasks(task_ids)
         milestones = await self.milestones_repository.get_by_project(project_id)
+        risks = await self.risks_repository.get_by_project(project_id)
 
         task_by_id = {task.id: task for task in tasks}
         wbs_paths = build_wbs_paths(nodes)
         chunks: list[KnowledgeDocument] = [build_project_document(project)]
         chunks.extend(build_milestone_document(milestone) for milestone in milestones)
+        for risk in risks:
+            chunks.extend(
+                build_risk_chunks(
+                    risk,
+                    target_chars=self.chunk_target_chars,
+                    overlap_chars=self.chunk_overlap_chars,
+                )
+            )
         chunks.extend(
             build_task_document(
                 task,
@@ -364,6 +378,15 @@ class KnowledgeIndexService:
             return []
         return await self._attachment_chunks(attachment, task, project)
 
+    async def _risk_documents(self, project_id: int, entity_id: int) -> list[KnowledgeDocument]:
+        """Читает риск только в проекте задания и готовит текстовые фрагменты."""
+        risk = await self.risks_repository.get_by_id(project_id=project_id, risk_id=entity_id)
+        if risk is None:
+            return []
+        return build_risk_chunks(
+            risk, target_chars=self.chunk_target_chars, overlap_chars=self.chunk_overlap_chars
+        )
+
     async def _milestone_documents(
         self,
         project_id: int,
@@ -419,9 +442,7 @@ class KnowledgeIndexService:
         for index in range(0, len(documents), self.embedding_batch_size):
             batch = documents[index : index + self.embedding_batch_size]
             vectors.extend(
-                await self.embedding_client.get_embeddings(
-                    [document.text for document in batch]
-                )
+                await self.embedding_client.get_embeddings([document.text for document in batch])
             )
         if any(len(vector) != self.qdrant_client.vector_dim for vector in vectors):
             raise ValueError(

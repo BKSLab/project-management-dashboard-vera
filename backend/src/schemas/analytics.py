@@ -3,6 +3,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.schemas.project_risks import ProjectRiskSummarySchema
+
 MAX_FINDINGS = 8
 MAX_PROGRESS = 6
 MAX_RECOMMENDATIONS = 6
@@ -286,7 +288,7 @@ class AnalyticsRecommendationSchema(BaseModel):
     )
 
 
-class AnalyticsSignalsSchema(BaseModel):
+class AnalyticsSignalsSchema(ProjectRiskSummarySchema):
     """Факты, посчитанные по базе, а не моделью.
 
     Эти числа показываются рядом с текстом свода: они позволяют проверить
@@ -340,10 +342,21 @@ class AnalyticsSignalsSchema(BaseModel):
     )
 
 
+class AnalyticsEntityCountSchema(BaseModel):
+    """Полное и переданное число записей одного вида источников."""
+
+    total: int = Field(..., ge=0, description="Записей в проекте или портфеле.", examples=[32])
+    included: int = Field(..., ge=0, description="Записей в контексте модели.", examples=[20])
+
+
 class AnalyticsContextSchema(BaseModel):
     """Что именно увидела модель: границы анализа видны пользователю."""
 
     projects: int = Field(..., ge=0, description="Проектов в контексте.", examples=[3])
+    risks_total: int = Field(0, ge=0, description="Всего зарегистрированных рисков.", examples=[8])
+    risks_included: int = Field(
+        0, ge=0, description="Рисков в содержательном контексте модели.", examples=[8]
+    )
     tasks_total: int = Field(..., ge=0, description="Всего задач в области.", examples=[340])
     tasks_included: int = Field(
         ...,
@@ -357,6 +370,11 @@ class AnalyticsContextSchema(BaseModel):
     wbs_nodes_included: int = Field(..., ge=0, description="Разделов ИСР.", examples=[18])
     milestones_included: int = Field(..., ge=0, description="Вех.", examples=[4])
     activity_included: int = Field(..., ge=0, description="Событий истории задач.", examples=[60])
+    entity_counts: dict[str, AnalyticsEntityCountSchema] = Field(
+        default_factory=dict,
+        description="Охват каждого вида источников, включая команду, назначения, вложения и связи.",
+        examples=[{"attachments": {"total": 12, "included": 10}}],
+    )
     truncated: bool = Field(
         ...,
         description="Признак, что часть данных не поместилась в контекст.",

@@ -11,6 +11,7 @@ from .knowledge_index_jobs import (
 )
 from .project_members import ProjectMember, ProjectRole
 from .project_milestones import ProjectMilestone, ProjectMilestoneStatus
+from .project_risks import ProjectRisk
 from .project_stages import ProjectStage
 from .project_stickers import ProjectSticker, ProjectStickerColor, ProjectStickerTaskLink
 from .projects import Project, ProjectStatus
@@ -39,6 +40,7 @@ __all__ = [
     "ProjectMilestone",
     "ProjectMilestoneStatus",
     "ProjectRole",
+    "ProjectRisk",
     "ProjectStage",
     "ProjectSticker",
     "ProjectStickerColor",

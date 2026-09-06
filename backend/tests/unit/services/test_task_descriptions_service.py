@@ -60,7 +60,11 @@ def build_service(*, file_context_limit: int = 5000):
 
 @pytest.mark.asyncio
 async def test_rephrase_uses_project_tasks_documents_and_limited_file_text() -> None:
-    service, _, _, _, llm = build_service(file_context_limit=5)
+    service, _, tasks, _, llm = build_service(file_context_limit=5)
+    tasks.get_by_project.return_value[0].checklist = {
+        "title": "Приёмка",
+        "items": [{"text": "Согласовать макет", "is_completed": True}],
+    }
 
     result = await service.rephrase(
         project_id=1,
@@ -68,6 +72,7 @@ async def test_rephrase_uses_project_tasks_documents_and_limited_file_text() -> 
             title="Новая задача",
             description_md="сделать форму понятнее",
             document_ids=[5],
+            checklist={"title": "Новые проверки", "items": [{"text": "Проверить фокус"}]},
         ),
         files=[TaskRephraseFile(name="brief.txt", content=b"abcdefghij")],
     )
@@ -78,6 +83,10 @@ async def test_rephrase_uses_project_tasks_documents_and_limited_file_text() -> 
     assert prompt["related_task_wording"][0]["key"] == "VERA-7"
     assert prompt["selected_documents"][0]["title"] == "Требования"
     assert prompt["new_files"][0]["content"] == "abcde"
+    assert prompt["task"]["checklist"]["items"] == [
+        {"text": "Проверить фокус", "is_completed": False}
+    ]
+    assert prompt["related_task_wording"][0]["checklist"]["completed_items"] == 1
 
 
 @pytest.mark.asyncio
@@ -99,9 +108,7 @@ async def test_rephrase_rejects_foreign_document_and_overgrown_result() -> None:
     llm.get_structured_response.assert_not_awaited()
 
     service, _, _, _, llm = build_service()
-    llm.get_structured_response.return_value = TaskRephraseResultSchema(
-        description_md="x" * 1000
-    )
+    llm.get_structured_response.return_value = TaskRephraseResultSchema(description_md="x" * 1000)
 
     with pytest.raises(TaskDescriptionRewriteError):
         await service.rephrase(

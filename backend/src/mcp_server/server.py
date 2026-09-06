@@ -219,7 +219,8 @@ async def search_project_knowledge(
         str | None,
         Field(
             description=(
-                "Ограничить тип: project, task, document, comment, attachment или milestone."
+                "Ограничить тип: project, task, document, comment, attachment, milestone или risk. "
+                "Текущие оценки и планы риска проверяйте через get_project_risk."
             )
         ),
     ] = None,
@@ -480,3 +481,4 @@ def build_mcp_app(*, settings: Settings) -> Starlette:
 # тому же серверу. Импорт в конце файла, потому что модуль записи опирается
 # на уже созданный ``mcp_server``.
 from src.mcp_server import write_tools  # noqa: E402,F401  isort:skip
+from src.mcp_server import risk_tools  # noqa: E402,F401  isort:skip

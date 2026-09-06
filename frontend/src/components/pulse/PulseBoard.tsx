@@ -15,7 +15,7 @@ import { api, endpoints, queryKeys } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDateTime, formatRelative } from "@/lib/dates";
 import { reportFreshness } from "@/lib/pulse";
-import type { AnalyticsHealth, AnalyticsReport, AnalyticsSignals } from "@/lib/types";
+import type { AnalyticsHealth, AnalyticsReport } from "@/lib/types";
 import { ANALYTICS_HEALTH_LABELS } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { ErrorMessage, Skeleton } from "@/components/ui/States";
@@ -47,7 +47,12 @@ const HEALTH_ICONS: Record<AnalyticsHealth, typeof Activity> = {
  * Факты рядом с текстом свода: по ним видно, на чём основан вывод, и они
  * остаются верными, даже если модель ошиблась в формулировке.
  */
-const SIGNAL_ROWS: { key: keyof AnalyticsSignals; label: string; tone: string }[] = [
+const SIGNAL_ROWS: { key: "high_risks" | "occurred_risks" | "risks_review_overdue" | "risks_without_owner" | "risks_without_mitigation" | "overdue_tasks" | "milestones_at_risk" | "due_soon_tasks" | "blocked_tasks" | "stale_tasks" | "no_due_date_tasks" | "unassigned_tasks" | "unplaced_tasks"; label: string; tone: string }[] = [
+    { key: "high_risks", label: "высокие риски", tone: "text-danger" },
+    { key: "occurred_risks", label: "риски реализовались", tone: "text-danger" },
+    { key: "risks_review_overdue", label: "риски: просрочен контроль", tone: "text-warning" },
+    { key: "risks_without_owner", label: "риски без ответственного", tone: "text-secondary" },
+    { key: "risks_without_mitigation", label: "риски без митигации", tone: "text-secondary" },
     { key: "overdue_tasks", label: "просрочено", tone: "text-danger" },
     { key: "milestones_at_risk", label: "вехи под угрозой", tone: "text-danger" },
     { key: "due_soon_tasks", label: "срок на неделе", tone: "text-warning" },
@@ -71,7 +76,7 @@ const SCOPE_COPY = {
         introText:
             "Разбор сравнивает активные проекты между собой: где сорваны сроки, где работа встала и за какой проект браться сегодня.",
         pendingText:
-            "Читаю показатели, вехи и проблемные задачи каждого активного проекта. Обычно это занимает до полуминуты.",
+            "Читаю задачи, риски, документы, обсуждения и планы активных проектов. Сопоставляю их с показателями и командой.",
         findings: "Где горит",
         progress: "Где движется",
         recommendations: "За что взяться",
@@ -81,13 +86,13 @@ const SCOPE_COPY = {
     },
     project: {
         title: "Пульс проекта",
-        subtitle: "Задачи, комментарии, ИСР, доска и документы одним разбором",
-        unit: "задачам",
+        subtitle: "Работы, риски, команда и документы одним разбором",
+        unit: "данным проекта",
         introTitle: "Цифры собраны — нужна трактовка",
         introText:
             "Разбор показывает, что и где просрочено, что сделано и как это шло по комментариям, и какие организационные шаги стоит сделать.",
         pendingText:
-            "Читаю задачи, комментарии, историю изменений, ИСР, стикеры и документы. Обычно это занимает до полуминуты.",
+            "Читаю задачи, риски, документы, обсуждения, структуру работ и вехи. Проверяю сроки, связи и ответственных.",
         findings: "Что горит",
         progress: "Что сделано",
         recommendations: "Что делать",
@@ -336,7 +341,7 @@ interface PulseVerdictProps {
 }
 
 function PulseVerdict({ report, copy, stale, onOpenTask }: PulseVerdictProps) {
-    const signals = SIGNAL_ROWS.filter((row) => report.signals[row.key] > 0);
+    const signals = SIGNAL_ROWS.filter((row) => (report.signals[row.key] ?? 0) > 0);
 
     return (
         <div
@@ -465,6 +470,19 @@ function PulseFooter({ report, unit }: { report: AnalyticsReport; unit: string }
         context.wbs_nodes_included > 0 && `${context.wbs_nodes_included} разделов ИСР`,
         context.stickers_included > 0 && `${context.stickers_included} стикеров`,
         context.documents_included > 0 && `${context.documents_included} документов`,
+        (context.risks_total ?? 0) > 0 && `${context.risks_included ?? 0} из ${context.risks_total} рисков`,
+        context.activity_included > 0 && `${context.activity_included} событий истории`,
+        ...([
+            ["members", "участников команды"],
+            ["participants", "ролевых назначений"],
+            ["attachments", "вложений (метаданные)"],
+            ["dependencies", "зависимостей задач"],
+            ["checklists", "чек-листов"],
+            ["checklist_items", "пунктов чек-листов"],
+        ] as const).map(([key, label]) => {
+            const count = context.entity_counts?.[key];
+            return count && count.total > 0 && `${count.included} из ${count.total} ${label}`;
+        }),
     ].filter(Boolean) as string[];
 
     return (

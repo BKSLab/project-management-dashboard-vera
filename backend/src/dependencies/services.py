@@ -27,6 +27,7 @@ from src.dependencies.repositories import (
     KnowledgeIndexJobsRepositoryDep,
     MilestonesRepositoryDep,
     ProjectMembersRepositoryDep,
+    ProjectRiskRepositoryDep,
     ProjectsRepositoryDep,
     ProjectStagesRepositoryDep,
     ProjectStickersRepositoryDep,
@@ -42,7 +43,9 @@ from src.dependencies.repositories import (
 )
 from src.dependencies.scopes import (
     AnalyticsScopeDep,
+    ChecklistSuggestionScopeDep,
     ProjectAgentScopeDep,
+    RiskSuggestionScopeDep,
     TaskDescriptionScopeDep,
     TaskDocumentImportScopeDep,
     WbsSuggestionScopeDep,
@@ -62,11 +65,15 @@ from src.services.knowledge_events import KnowledgeEvents
 from src.services.milestones import MilestonesService
 from src.services.project_agent import ProjectAgentConfig, ProjectAgentService
 from src.services.project_members import ProjectMembersService
+from src.services.project_risks import ProjectRiskService
 from src.services.project_stages import ProjectStagesService
 from src.services.project_stickers import ProjectStickersService
 from src.services.projects import ProjectsService
+from src.services.risk_formulation import RiskFormulationService
+from src.services.risk_suggestions import RiskSuggestionService
 from src.services.task_activity import TaskActivityService
 from src.services.task_attachments import TaskAttachmentsService
+from src.services.task_checklist_suggestions import TaskChecklistSuggestionService
 from src.services.task_comments import TaskCommentsService
 from src.services.task_dependencies import TaskDependenciesService
 from src.services.task_descriptions import TaskDescriptionService
@@ -129,6 +136,50 @@ def get_access_service(
 AccessServiceDep = Annotated[AccessService, Depends(get_access_service)]
 
 
+def get_project_risk_service(
+    risks_repository: ProjectRiskRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    members_repository: ProjectMembersRepositoryDep,
+    access_service: AccessServiceDep,
+    knowledge_events: KnowledgeEventsDep,
+    unit_of_work: UnitOfWorkDep,
+    projects_repository: ProjectsRepositoryDep,
+) -> ProjectRiskService:
+    """Создаёт сервис реестра с единой транзакцией риска и outbox."""
+    return ProjectRiskService(
+        risks_repository=risks_repository,
+        tasks_repository=tasks_repository,
+        members_repository=members_repository,
+        access_service=access_service,
+        projects_repository=projects_repository,
+        knowledge_events=knowledge_events,
+        unit_of_work=unit_of_work,
+    )
+
+
+ProjectRiskServiceDep = Annotated[ProjectRiskService, Depends(get_project_risk_service)]
+
+
+def get_risk_suggestion_service(
+    scope: RiskSuggestionScopeDep, llm_client: LlmClientDep
+) -> RiskSuggestionService:
+    """Создаёт AI-сценарий без request-scoped сессии базы."""
+    return RiskSuggestionService(scope=scope, llm_client=llm_client)
+
+
+RiskSuggestionServiceDep = Annotated[RiskSuggestionService, Depends(get_risk_suggestion_service)]
+
+
+def get_risk_formulation_service(
+    scope: RiskSuggestionScopeDep, llm_client: LlmClientDep
+) -> RiskFormulationService:
+    """Создаёт AI-помощь с формулировками полей риска."""
+    return RiskFormulationService(scope=scope, llm_client=llm_client)
+
+
+RiskFormulationServiceDep = Annotated[RiskFormulationService, Depends(get_risk_formulation_service)]
+
+
 def get_api_tokens_service(
     tokens_repository: ApiTokensRepositoryDep,
     settings: SettingsDep,
@@ -185,6 +236,8 @@ def get_project_members_service(
     tasks_repository: TasksRepositoryDep,
     unit_of_work: UnitOfWorkDep,
     users_service: UsersServiceDep,
+    risks_repository: ProjectRiskRepositoryDep,
+    knowledge_events: KnowledgeEventsDep,
 ) -> ProjectMembersService:
     """Создаёт сервис управления проектной командой."""
     return ProjectMembersService(
@@ -194,6 +247,8 @@ def get_project_members_service(
         tasks_repository=tasks_repository,
         unit_of_work=unit_of_work,
         users_service=users_service,
+        risks_repository=risks_repository,
+        knowledge_events=knowledge_events,
     )
 
 
@@ -336,6 +391,7 @@ def get_dashboard_service(
     members_repository: ProjectMembersRepositoryDep,
     stages_repository: ProjectStagesRepositoryDep,
     tasks_repository: TasksRepositoryDep,
+    risks_repository: ProjectRiskRepositoryDep,
 ) -> DashboardService:
     """Создаёт сервис общей сводки по проектам."""
     return DashboardService(
@@ -343,6 +399,7 @@ def get_dashboard_service(
         members_repository=members_repository,
         stages_repository=stages_repository,
         tasks_repository=tasks_repository,
+        risks_repository=risks_repository,
     )
 
 
@@ -573,6 +630,29 @@ def get_task_attachments_service(
 TaskAttachmentsServiceDep = Annotated[
     TaskAttachmentsService,
     Depends(get_task_attachments_service),
+]
+
+
+def get_checklist_suggestion_service(
+    scope: ChecklistSuggestionScopeDep,
+    llm_client: LlmClientDep,
+    vision: VisionCapabilityDep,
+    storage: TaskAttachmentStorageDep,
+    settings: SettingsDep,
+) -> TaskChecklistSuggestionService:
+    """Создаёт генерацию чек-листа с адаптерами файлов и модели."""
+    return TaskChecklistSuggestionService(
+        scope=scope,
+        llm_client=llm_client,
+        vision=vision,
+        storage=storage,
+        file_context_limit=settings.llm.task_rephrase_file_max_chars,
+        max_file_size=TaskAttachmentsService.MAX_FILE_SIZE,
+    )
+
+
+ChecklistSuggestionServiceDep = Annotated[
+    TaskChecklistSuggestionService, Depends(get_checklist_suggestion_service)
 ]
 
 

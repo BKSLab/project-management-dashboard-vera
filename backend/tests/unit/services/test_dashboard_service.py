@@ -9,6 +9,7 @@ from src.db.models.tasks import TaskPriority
 from src.exceptions.dashboard import DashboardServiceError
 from src.exceptions.projects import ProjectsRepositoryError
 from src.repositories.project_members import ProjectMembersRepository
+from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
@@ -89,6 +90,9 @@ def build_service(
         members_repository=members_repository,
         stages_repository=stages_repository,
         tasks_repository=tasks_repository,
+        risks_repository=AsyncMock(
+            spec=ProjectRiskRepository, get_aggregates=AsyncMock(return_value=[])
+        ),
     )
 
 
@@ -181,6 +185,7 @@ async def test_overview_aggregates_projects_and_survives_edge_cases() -> None:
         members_repository=members_repository,
         stages_repository=AsyncMock(spec=ProjectStagesRepository),
         tasks_repository=AsyncMock(spec=TasksRepository),
+        risks_repository=AsyncMock(spec=ProjectRiskRepository),
     )
 
     with pytest.raises(DashboardServiceError) as exc_info:

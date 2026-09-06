@@ -86,12 +86,19 @@ export const authEndpoints = {
 
 /** Единый источник правды по адресам API — маршруты не разъезжаются по экранам. */
 export const endpoints = {
+    taskChecklistSuggestion: (projectId: number) => `${V1}/projects/${projectId}/tasks/checklist-suggestion`,
     dashboard: () => `${V1}/dashboard`,
     dashboardAnalytics: (projectId?: number | null) =>
         `${V1}/dashboard/analytics${projectId ? `?project_id=${projectId}` : ""}`,
     projects: () => `${V1}/projects`,
     project: (projectId: number) => `${V1}/projects/${projectId}`,
     projectStats: (projectId: number) => `${V1}/projects/${projectId}/stats`,
+    projectRisks: (projectId: number) => `${V1}/projects/${projectId}/risks`,
+    projectRisk: (projectId: number, riskId: number) => `${V1}/projects/${projectId}/risks/${riskId}`,
+    projectRiskSummary: (projectId: number) => `${V1}/projects/${projectId}/risks/summary`,
+    projectRiskTaskCounts: (projectId: number) => `${V1}/projects/${projectId}/risks/task-counts`,
+    projectRiskSuggestions: (projectId: number) => `${V1}/projects/${projectId}/risks/suggestions`,
+    projectRiskFieldSuggestion: (projectId: number) => `${V1}/projects/${projectId}/risks/field-suggestion`,
     projectMembers: (projectId: number) => `${V1}/projects/${projectId}/members`,
     projectMember: (projectId: number, userId: number) =>
         `${V1}/projects/${projectId}/members/${userId}`,
@@ -166,6 +173,11 @@ export const queryKeys = {
     projects: ["projects"] as const,
     project: (projectId: number) => ["projects", projectId] as const,
     projectStats: (projectId: number) => ["projects", projectId, "stats"] as const,
+    projectRisks: (projectId: number) => ["projects", projectId, "risks"] as const,
+    projectRiskList: (projectId: number, query: string) => ["projects", projectId, "risks", "list", query] as const,
+    projectRisk: (projectId: number, riskId: number) => ["projects", projectId, "risks", "detail", riskId] as const,
+    projectRiskSummary: (projectId: number, query = "") => ["projects", projectId, "risks", "summary", query] as const,
+    projectRiskTaskCounts: (projectId: number) => ["projects", projectId, "risks", "task-counts"] as const,
     projectMembers: (projectId: number) => ["projects", projectId, "members"] as const,
     projectStickers: (projectId: number) => ["projects", projectId, "board-stickers"] as const,
     projectKnowledgeStatus: (projectId: number) =>

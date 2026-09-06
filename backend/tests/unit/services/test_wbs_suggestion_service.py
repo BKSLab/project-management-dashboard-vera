@@ -128,8 +128,16 @@ def build_service(
 
 @pytest.mark.asyncio
 async def test_suggest_passes_tasks_and_existing_structure_to_model() -> None:
+    task_with_checklist = task(11)
+    task_with_checklist.checklist = {
+        "title": "Приёмка",
+        "items": [
+            {"text": "Согласовать поля API", "is_completed": True},
+            {"text": "Проверить ответ", "is_completed": False},
+        ],
+    }
     service, mocks = build_service(
-        tasks=[task(11), task(12, wbs_node_id=5)],
+        tasks=[task_with_checklist, task(12, wbs_node_id=5)],
         nodes=[node(5)],
         llm_output=WbsSuggestionSchema(
             nodes=[draft_node("n1")],
@@ -145,6 +153,11 @@ async def test_suggest_passes_tasks_and_existing_structure_to_model() -> None:
 
     content = json.loads(mocks["llm"].get_structured_response.await_args.kwargs["content"])
     assert [item["task_id"] for item in content["tasks"]] == [11, 12]
+    assert content["tasks"][0]["checklist"]["completed_items"] == 1
+    assert content["tasks"][0]["checklist"]["items"][1] == {
+        "text": "Проверить ответ",
+        "is_completed": False,
+    }
     assert content["tasks"][1]["current_section"] == "Раздел 5"
     assert content["existing_structure"] == [{"node_id": 5, "path": "Раздел 5"}]
     assert len(result.assignments) == 2

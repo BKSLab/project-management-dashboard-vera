@@ -16,7 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.schemas.enums import TaskPriority, TaskRole
@@ -97,6 +97,15 @@ class Task(Base, TimestampMixin):
         nullable=True,
         doc="Markdown-описание задачи.",
         comment="Описание задачи в формате Markdown.",
+    )
+    checklist: Mapped[dict | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True, doc="Чек-лист задачи с упорядоченными пунктами.",
+        comment="Название, стабильные ID, тексты и отметки пунктов; NULL — чек-листа нет.",
+    )
+    checklist_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0,
+        doc="Версия чек-листа для защиты от потери параллельных правок.",
+        comment="Монотонная версия, сохраняется и после удаления чек-листа.",
     )
     priority: Mapped[TaskPriority] = mapped_column(
         Enum(TaskPriority, name="task_priority"),

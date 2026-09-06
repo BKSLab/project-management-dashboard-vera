@@ -35,6 +35,7 @@ from src.schemas.wbs_suggestion import (
 from src.services.db_scope import WbsSuggestionScope, WbsSuggestionScopeFactory
 from src.services.tasks import build_task_key
 from src.services.wbs_nodes import POSITION_STEP
+from src.utils.checklists import checklist_context
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +300,7 @@ class WbsSuggestionService:
                         "task_id": task.id,
                         "key": build_task_key(project_key=project.key, number=task.number),
                         "title": task.title,
+                        "checklist": checklist_context(getattr(task, "checklist", None)),
                         "priority": task.priority.value,
                         "stage": stage_names.get(task.stage_id),
                         "current_section": (

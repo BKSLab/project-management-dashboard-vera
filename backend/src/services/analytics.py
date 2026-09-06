@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from time import perf_counter
 from typing import Any
@@ -10,13 +10,17 @@ from typing import Any
 from src.clients.llm import LlmClient
 from src.db.models.analytics_reports import AnalyticsReport
 from src.db.models.documents import Document
+from src.db.models.project_members import ProjectMember
 from src.db.models.project_milestones import ProjectMilestone, ProjectMilestoneStatus
+from src.db.models.project_risks import ProjectRisk
 from src.db.models.project_stages import ProjectStage
 from src.db.models.project_stickers import ProjectSticker
 from src.db.models.projects import Project, ProjectStatus
 from src.db.models.task_activity import TaskActivity
+from src.db.models.task_attachments import TaskAttachment
 from src.db.models.task_comments import TaskComment
 from src.db.models.task_dependencies import TaskDependency
+from src.db.models.task_participants import TaskParticipant
 from src.db.models.tasks import Task
 from src.db.models.wbs_nodes import WbsNode
 from src.exceptions.analytics import (
@@ -30,10 +34,12 @@ from src.exceptions.document_links import DocumentLinksRepositoryError
 from src.exceptions.documents import DocumentsRepositoryError
 from src.exceptions.knowledge import KnowledgeProviderError
 from src.exceptions.milestones import MilestonesRepositoryError
+from src.exceptions.project_risks import ProjectRiskRepositoryError
 from src.exceptions.project_stages import ProjectStagesRepositoryError
 from src.exceptions.project_stickers import ProjectStickersRepositoryError
 from src.exceptions.projects import ProjectNotFoundError, ProjectsRepositoryError
 from src.exceptions.task_activity import TaskActivityRepositoryError
+from src.exceptions.task_attachments import TaskAttachmentsRepositoryError
 from src.exceptions.task_comments import TaskCommentsRepositoryError
 from src.exceptions.task_dependencies import TaskDependenciesRepositoryError
 from src.exceptions.tasks import TasksRepositoryError
@@ -55,8 +61,11 @@ from src.schemas.analytics import (
     AnalyticsSignalsSchema,
     AnalyticsTaskRefSchema,
 )
+from src.schemas.project_risks import ProjectRiskFilters, ProjectRiskSchema
 from src.services.db_scope import AnalyticsDbScope, AnalyticsDbScopeFactory
+from src.services.project_risks import build_risk_summary
 from src.services.tasks import build_task_key
+from src.utils.checklists import checklist_context
 from src.utils.deadlines import DUE_SOON_DAYS, is_task_due_soon, is_task_overdue
 
 logger = logging.getLogger(__name__)
@@ -67,7 +76,6 @@ MAX_COMPLETION_TOKENS = 6000
 # нужна лишь защита от контекста, который модель не примет целиком.
 MAX_CONTEXT_CHARS = 90_000
 STALE_TASK_DAYS = 14
-DESCRIPTION_TASKS_LIMIT = 25
 NAME_LIMIT = 302
 
 # Портфельная сводка отвечает на вопрос «за какой проект браться сейчас»,
@@ -76,15 +84,6 @@ NAME_LIMIT = 302
 # контексте занимают наравне с активными.
 PORTFOLIO_STATUSES = frozenset({ProjectStatus.ACTIVE})
 
-# Сколько проблемных задач показывается по каждому проекту портфеля: это
-# доказательство оценки, а не список работ.
-PORTFOLIO_ATTENTION_TASKS = 6
-# Сколько недавно закрытых задач подтверждает движение по проекту.
-PORTFOLIO_PROGRESS_TASKS = 4
-# Ближайшие и просроченные вехи проекта в портфельном срезе.
-PORTFOLIO_MILESTONES = 3
-PORTFOLIO_DESCRIPTION_CHARS = 240
-
 RepositoryErrors = (
     AnalyticsReportsRepositoryError,
     DocumentLinksRepositoryError,
@@ -92,8 +91,10 @@ RepositoryErrors = (
     MilestonesRepositoryError,
     ProjectStagesRepositoryError,
     ProjectStickersRepositoryError,
+    ProjectRiskRepositoryError,
     ProjectsRepositoryError,
     TaskActivityRepositoryError,
+    TaskAttachmentsRepositoryError,
     TaskCommentsRepositoryError,
     TaskDependenciesRepositoryError,
     TasksRepositoryError,
@@ -115,31 +116,38 @@ class _Limits:
     sticker_chars: int
     activity: int
     description_chars: int
+    risks: int
+    items: int
 
 
-# Проектный анализ тратит весь бюджет на один проект, портфельный делит его
-# между всеми: иначе один крупный проект вытеснит из среза остальные.
+# Начинаем со всех записей и ограниченных текстовых фрагментов. Численные
+# лимиты ниже используются при переполнении, чтобы один крупный проект
+# не вытеснил остальные проекты или целый вид источников.
 PROJECT_LIMITS = _Limits(
     tasks=180,
     comments_per_task=3,
-    comment_chars=500,
+    comment_chars=1000,
     documents=12,
-    document_chars=1200,
+    document_chars=6000,
     stickers=40,
-    sticker_chars=400,
+    sticker_chars=1200,
     activity=50,
-    description_chars=400,
+    description_chars=2000,
+    risks=20,
+    items=100,
 )
 PORTFOLIO_LIMITS = _Limits(
     tasks=60,
     comments_per_task=2,
-    comment_chars=350,
+    comment_chars=600,
     documents=4,
-    document_chars=500,
+    document_chars=3000,
     stickers=15,
-    sticker_chars=280,
+    sticker_chars=800,
     activity=20,
-    description_chars=250,
+    description_chars=1000,
+    risks=6,
+    items=40,
 )
 
 
@@ -158,6 +166,12 @@ class _ProjectSlice:
     stickers: list[ProjectSticker]
     documents: list[Document]
     document_task_ids: dict[int, list[int]] = field(default_factory=dict)
+    risks: list[ProjectRisk] = field(default_factory=list)
+    risk_groups: list[dict[str, Any]] = field(default_factory=list)
+    members: list[ProjectMember] = field(default_factory=list)
+    participants: dict[int, list[TaskParticipant]] = field(default_factory=dict)
+    attachments: dict[int, list[TaskAttachment]] = field(default_factory=dict)
+    activity_total: int = 0
 
 
 class AnalyticsService:
@@ -241,7 +255,7 @@ class AnalyticsService:
 
         Raises:
             ProjectNotFoundError: Если проект недоступен пользователю.
-            AnalyticsEmptyScopeError: Если в выбранной области нет задач.
+            AnalyticsEmptyScopeError: Если в области нет содержательных данных проекта.
             KnowledgeProviderError: Если LLM-сервис недоступен.
             AnalyticsGenerationError: Если ответ модели непригоден.
             AnalyticsServiceError: Если собрать данные не удалось.
@@ -267,9 +281,20 @@ class AnalyticsService:
             logger.error("❌ Ошибка сбора данных для аналитического свода.", exc_info=True)
             raise AnalyticsServiceError(str(error)) from error
 
-        if not any(project_slice.tasks for project_slice in slices):
+        if not any(
+            item.tasks
+            or item.risks
+            or item.documents
+            or item.stickers
+            or item.nodes
+            or item.milestones
+            or item.project.description_md
+            or item.project.start_date
+            or item.project.due_date
+            for item in slices
+        ):
             raise AnalyticsEmptyScopeError(
-                error_details=f"В области анализа (project_id={project_id}) нет задач.",
+                error_details=f"В области анализа (project_id={project_id}) нет данных проекта.",
             )
 
         signals = _build_signals(slices=slices, today=today)
@@ -350,9 +375,7 @@ class AnalyticsService:
             return [project]
 
         available = [
-            project
-            for project in await db.projects.get_all()
-            if project.id in allowed_ids
+            project for project in await db.projects.get_all() if project.id in allowed_ids
         ]
         if not available:
             raise AnalyticsEmptyScopeError(
@@ -377,57 +400,42 @@ class AnalyticsService:
         project: Project,
         scope: AnalyticsScope,
     ) -> _ProjectSlice:
-        """Загружает всё, что относится к одному проекту анализа.
+        """Читает одинаковые виды источников для проекта и портфеля.
 
-        Портфельная сводка читает только то, из чего считаются показатели и
-        список проблемных задач: комментарии, документы, стикеры, историю и
-        ИСР она всё равно не показывает, а на десяти проектах это десятки
-        лишних запросов и лишний объём в контексте модели.
+        Связи читаются пакетно; все нужные отношения загружены до закрытия
+        DB-области. Ограничение контекста применяется после сбора, когда
+        известен размер всего портфеля. История ограничена свежими событиями.
         """
-        deep = scope is AnalyticsScope.PROJECT
-        limits = PROJECT_LIMITS if deep else PORTFOLIO_LIMITS
+        limits = PROJECT_LIMITS if scope is AnalyticsScope.PROJECT else PORTFOLIO_LIMITS
         stages = await db.stages.get_by_project(project_id=project.id)
         tasks = await db.tasks.get_by_project(project_id=project.id)
         dependencies = await db.dependencies.get_by_project(project_id=project.id)
         milestones = await db.milestones.get_by_project(project_id=project.id)
-
-        if not deep:
-            return _ProjectSlice(
-                project=project,
-                stages=stages,
-                tasks=tasks,
-                comments={},
-                activity=[],
-                dependencies=dependencies,
-                nodes=[],
-                milestones=milestones,
-                stickers=[],
-                documents=[],
-                document_task_ids={},
-            )
+        risk_groups = await db.risks.get_aggregates(
+            project_ids={project.id}, filters=ProjectRiskFilters(), today=date.today()
+        )
+        risks = await db.risks.get_by_project(project_id=project.id)
+        members = await db.members.get_for_project(project_id=project.id)
 
         activity = await db.activity.get_recent_by_project(
             project_id=project.id,
             limit=limits.activity,
         )
+        activity_total = await db.activity.get_count_by_project(project_id=project.id)
         nodes = await db.wbs_nodes.get_by_project(project_id=project.id)
         stickers = await db.stickers.list_by_project_id(project_id=project.id)
         documents = await db.documents.get_by_project(project_id=project.id)
 
-        # Комментарии берём только к задачам, которые попадут в срез: у
-        # проекта с сотнями закрытых задач остальные всё равно не пригодятся.
-        selected_tasks = _select_tasks(
-            tasks=tasks,
-            stages=stages,
-            limit=limits.tasks,
-            today=date.today(),
-        )
-        comments = await db.comments.get_for_tasks(
-            task_ids={task.id for task in selected_tasks}
-        )
+        task_ids = {task.id for task in tasks}
+        comments = await db.comments.get_for_tasks(task_ids=task_ids)
         comments_by_task: dict[int, list[TaskComment]] = {}
         for comment in comments:
             comments_by_task.setdefault(comment.task_id, []).append(comment)
+        participants = await db.participants.get_by_task_ids(task_ids=sorted(task_ids))
+        attachments = await db.attachments.get_for_tasks(task_ids=task_ids)
+        attachments_by_task: dict[int, list[TaskAttachment]] = {}
+        for attachment in attachments:
+            attachments_by_task.setdefault(attachment.task_id, []).append(attachment)
 
         links = await db.document_links.get_for_documents(
             document_ids={document.id for document in documents}
@@ -448,6 +456,12 @@ class AnalyticsService:
             stickers=stickers,
             documents=documents,
             document_task_ids=document_task_ids,
+            risks=risks,
+            risk_groups=risk_groups,
+            members=members,
+            participants=participants,
+            attachments=attachments_by_task,
+            activity_total=activity_total,
         )
 
 
@@ -515,10 +529,35 @@ def _build_signals(slices: list[_ProjectSlice], today: date) -> AnalyticsSignals
             and milestone.due_date < today
         )
 
-    return AnalyticsSignalsSchema(**totals)
+    risk_summary = build_risk_summary(
+        [group for project_slice in slices for group in project_slice.risk_groups]
+    )
+    return AnalyticsSignalsSchema(**totals, **risk_summary.model_dump())
 
 
 # Блок сборки среза для модели.
+
+
+# Имена совпадают с entity_counts в сохранённом отчёте.
+_ENTITY_LABELS = {
+    "checklists": "чек-листы задач",
+    "checklist_items": "пункты чек-листов",
+    "tasks": "задачи",
+    "comments": "комментарии",
+    "documents": "документы",
+    "document_links": "связи документов с задачами",
+    "stickers": "стикеры",
+    "sticker_links": "связи стикеров с задачами",
+    "wbs_nodes": "разделы ИСР",
+    "milestones": "вехи",
+    "activity": "события истории",
+    "risks": "риски",
+    "stages": "стадии",
+    "members": "участники команды",
+    "participants": "ролевые назначения задач",
+    "attachments": "метаданные вложений",
+    "dependencies": "зависимости задач",
+}
 
 
 def _build_content(
@@ -527,204 +566,91 @@ def _build_content(
     signals: AnalyticsSignalsSchema,
     today: date,
 ) -> tuple[str, AnalyticsContextSchema]:
-    """Собирает JSON-срез рабочего пространства и описание его границ.
+    """Собирает оба анализа из одинаковых источников в пределах бюджета.
 
-    У портфеля и у проекта разные вопросы, поэтому и срезы разные.
-    Портфельный — сводка по каждому проекту: показатели, ближайшие вехи и
-    несколько задач как доказательство. Он компактен по построению и в
-    пересборке не нуждается.
-
-    Проектный срез сначала строится по полным лимитам; если он не влезает в
-    бюджет контекста, пересобирается по ужатым. Так модель получает максимум
-    данных, а пользователь — честное перечисление того, что не вошло.
+    Сначала включаются все записи с текстовыми фрагментами. При переполнении
+    лимиты последовательно уменьшаются для каждого проекта и вида данных.
+    Счётчики всегда относятся к полному снимку, а границы видны и модели,
+    и пользователю. Ни один проект или вид источника целиком не отбрасывается.
     """
-    if scope is AnalyticsScope.PORTFOLIO:
-        payload, context = _render_portfolio(slices=slices, signals=signals, today=today)
-        return json.dumps(payload, ensure_ascii=False), context
+    base = PROJECT_LIMITS if scope is AnalyticsScope.PROJECT else PORTFOLIO_LIMITS
+    limits = _all_records_limits(slices, base)
+    compressed = False
+    while True:
+        payload, context = _render(
+            slices=slices, limits=limits, scope=scope, signals=signals, today=today
+        )
+        if compressed:
+            context.truncated = True
+            context.omitted.append(
+                "срез пересобран по ужатым лимитам: полный объём данных не помещается "
+                "в контекст модели"
+            )
+        payload["context"] = context.model_dump(mode="json")
+        content = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(content) <= MAX_CONTEXT_CHARS:
+            return content, context
+        tighter = _tighten(limits)
+        if tighter == limits:
+            raise AnalyticsGenerationError(
+                "Даже минимальный срез превышает бюджет контекста; "
+                "выполните анализ отдельных проектов."
+            )
+        limits = tighter
+        compressed = True
 
-    base = PROJECT_LIMITS
-    payload, context = _render(
-        slices=slices, limits=base, scope=scope, signals=signals, today=today
-    )
-    content = json.dumps(payload, ensure_ascii=False)
-    if len(content) <= MAX_CONTEXT_CHARS:
-        return content, context
 
-    tight = _tighten(base)
-    payload, context = _render(
-        slices=slices,
-        limits=tight,
-        scope=scope,
-        signals=signals,
-        today=today,
+def _all_records_limits(slices: list[_ProjectSlice], base: _Limits) -> _Limits:
+    """Вмещает все прочитанные записи до проверки общего бюджета."""
+    return replace(
+        base,
+        tasks=max((len(item.tasks) for item in slices), default=1) or 1,
+        comments_per_task=max(
+            (len(rows) for item in slices for rows in item.comments.values()), default=1
+        )
+        or 1,
+        documents=max((len(item.documents) for item in slices), default=1) or 1,
+        stickers=max((len(item.stickers) for item in slices), default=1) or 1,
+        risks=max((len(item.risks) for item in slices), default=1) or 1,
+        items=max(
+            (
+                len(rows)
+                for item in slices
+                for rows in (
+                    item.stages,
+                    item.nodes,
+                    item.milestones,
+                    item.members,
+                    item.dependencies,
+                    *(
+                        (getattr(task, "checklist", None) or {}).get("items", [])
+                        for task in item.tasks
+                    ),
+                    *item.attachments.values(),
+                    *item.participants.values(),
+                )
+            ),
+            default=1,
+        )
+        or 1,
     )
-    context.omitted.append(
-        "срез пересобран по ужатым лимитам: полный объём данных не помещается в контекст модели"
-    )
-    return json.dumps(payload, ensure_ascii=False), context
 
 
 def _tighten(limits: _Limits) -> _Limits:
-    """Вдвое ужимает срез, сильнее всего — документы: они самые объёмные."""
+    """Ужимает все списки и тексты, сохраняя хотя бы одну запись каждого вида."""
     return _Limits(
-        tasks=max(limits.tasks // 2, 20),
+        tasks=max(limits.tasks // 2, 1),
         comments_per_task=max(limits.comments_per_task // 2, 1),
-        comment_chars=max(limits.comment_chars // 2, 150),
-        documents=max(limits.documents // 3, 2),
-        document_chars=max(limits.document_chars // 3, 200),
-        stickers=max(limits.stickers // 2, 5),
-        sticker_chars=max(limits.sticker_chars // 2, 120),
-        activity=max(limits.activity // 2, 10),
-        description_chars=max(limits.description_chars // 2, 120),
+        comment_chars=max(limits.comment_chars // 2, 80),
+        documents=max(limits.documents // 2, 1),
+        document_chars=max(limits.document_chars // 2, 200),
+        stickers=max(limits.stickers // 2, 1),
+        sticker_chars=max(limits.sticker_chars // 2, 80),
+        activity=max(limits.activity // 2, 1),
+        description_chars=max(limits.description_chars // 2, 80),
+        risks=max(limits.risks // 2, 1),
+        items=max(limits.items // 2, 1),
     )
-
-
-def _render_portfolio(
-    slices: list[_ProjectSlice],
-    signals: AnalyticsSignalsSchema,
-    today: date,
-) -> tuple[dict[str, Any], AnalyticsContextSchema]:
-    """Строит портфельный срез: паспорт и показатели каждого проекта.
-
-    Здесь нет ни комментариев, ни документов, ни истории: на уровне
-    портфеля они не помогают выбрать проект, а бюджет контекста тратят
-    быстрее всего. Вместо них — показатели проекта, его ближайшие вехи и
-    несколько задач, которые эти показатели объясняют.
-    """
-    rendered_projects: list[dict[str, Any]] = []
-    counts_tasks = 0
-    counts_milestones = 0
-    omitted: list[str] = []
-
-    for project_slice in slices:
-        project_signals = _build_signals(slices=[project_slice], today=today)
-        done_stage_ids = _done_stage_ids(project_slice.stages)
-        stage_names = {stage.id: stage.name for stage in project_slice.stages}
-        blocked_by = _blocked_by(
-            dependencies=project_slice.dependencies,
-            done_stage_ids=done_stage_ids,
-            tasks=project_slice.tasks,
-            project_key=project_slice.project.key,
-        )
-
-        attention_source = [
-            task for task in project_slice.tasks if task.stage_id not in done_stage_ids
-        ]
-        attention_tasks = _select_tasks(
-            tasks=attention_source,
-            stages=project_slice.stages,
-            limit=PORTFOLIO_ATTENTION_TASKS,
-            today=today,
-        )
-        rendered_attention = [
-            {
-                "key": build_task_key(project_key=project_slice.project.key, number=task.number),
-                "title": task.title,
-                "stage": stage_names.get(task.stage_id, "—"),
-                "priority": task.priority.value,
-                "assignee": task.assignee,
-                "due": task.due_date.isoformat() if task.due_date else None,
-                "days_overdue": (today - task.due_date).days
-                if task.due_date and task.due_date < today
-                else None,
-                "stale_days": (datetime.now(UTC) - task.updated_at).days
-                if task.updated_at
-                else None,
-                "blocked_by": blocked_by.get(task.id) or None,
-            }
-            for task in attention_tasks
-        ]
-        counts_tasks += len(rendered_attention)
-
-        # Движение по проекту подтверждается недавно закрытыми задачами:
-        # без него оценка держится на одних просрочках.
-        recent_done = sorted(
-            (task for task in project_slice.tasks if task.stage_id in done_stage_ids),
-            key=lambda task: task.updated_at or datetime.min.replace(tzinfo=UTC),
-            reverse=True,
-        )[:PORTFOLIO_PROGRESS_TASKS]
-        rendered_progress = [
-            {
-                "key": build_task_key(project_key=project_slice.project.key, number=task.number),
-                "title": task.title,
-                "closed_around": task.updated_at.date().isoformat() if task.updated_at else None,
-            }
-            for task in recent_done
-        ]
-        counts_tasks += len(rendered_progress)
-
-        # Вехи сортируются по близости срока: просроченные и ближайшие
-        # решают судьбу проекта, дальние на сегодняшний выбор не влияют.
-        milestones = sorted(
-            (
-                milestone
-                for milestone in project_slice.milestones
-                if milestone.status is not ProjectMilestoneStatus.ACHIEVED
-            ),
-            key=lambda milestone: milestone.due_date,
-        )[:PORTFOLIO_MILESTONES]
-        rendered_milestones = [
-            {
-                "title": milestone.title,
-                "due": milestone.due_date.isoformat(),
-                "status": milestone.status.value,
-                "days_left": (milestone.due_date - today).days,
-            }
-            for milestone in milestones
-        ]
-        counts_milestones += len(rendered_milestones)
-
-        skipped = len(project_slice.tasks) - len(rendered_attention) - len(rendered_progress)
-        if skipped > 0:
-            omitted.append(
-                f"{project_slice.project.key}: в сводку вошли "
-                f"{len(rendered_attention) + len(rendered_progress)} из "
-                f"{len(project_slice.tasks)} задач — самые проблемные и недавно закрытые"
-            )
-
-        rendered_projects.append(
-            {
-                "key": project_slice.project.key,
-                "name": project_slice.project.name,
-                "status": project_slice.project.status.value,
-                "description": _cut(
-                    project_slice.project.description_md or "",
-                    PORTFOLIO_DESCRIPTION_CHARS,
-                )
-                or None,
-                "start_date": project_slice.project.start_date.isoformat()
-                if project_slice.project.start_date
-                else None,
-                "due_date": project_slice.project.due_date.isoformat()
-                if project_slice.project.due_date
-                else None,
-                "signals": project_signals.model_dump(mode="json"),
-                "milestones": rendered_milestones,
-                "attention_tasks": rendered_attention,
-                "recently_closed": rendered_progress,
-            }
-        )
-
-    payload = {
-        "today": today.isoformat(),
-        "scope": AnalyticsScope.PORTFOLIO.value,
-        "signals": signals.model_dump(mode="json"),
-        "projects": rendered_projects,
-    }
-    context = AnalyticsContextSchema(
-        projects=len(slices),
-        tasks_total=sum(len(project_slice.tasks) for project_slice in slices),
-        tasks_included=counts_tasks,
-        comments_included=0,
-        documents_included=0,
-        stickers_included=0,
-        wbs_nodes_included=0,
-        milestones_included=counts_milestones,
-        activity_included=0,
-        truncated=bool(omitted),
-        omitted=omitted,
-    )
-    return payload, context
 
 
 def _render(
@@ -734,23 +660,45 @@ def _render(
     signals: AnalyticsSignalsSchema,
     today: date,
 ) -> tuple[dict[str, Any], AnalyticsContextSchema]:
-    """Строит срез и статистику включённого по заданным лимитам."""
+    """Передаёт содержание и связи сущностей вместе с точным учётом сокращений."""
     soon_until = today + timedelta(days=DUE_SOON_DAYS)
-    counts = dict.fromkeys(
-        ("tasks", "comments", "documents", "stickers", "nodes", "milestones", "activity"),
-        0,
-    )
+    coverage = {key: {"total": 0, "included": 0} for key in _ENTITY_LABELS}
     omitted: list[str] = []
     rendered_projects: list[dict[str, Any]] = []
 
     for project_slice in slices:
+        shortened = 0
+        project_coverage: dict[str, dict[str, int]] = {}
+
+        def clip(value: str | None, chars: int = limits.description_chars) -> str | None:
+            nonlocal shortened
+            if value is None:
+                return None
+            if len(value.strip()) > chars:
+                shortened += 1
+            return _cut(value, chars)
+
+        def track(
+            name: str,
+            total: int,
+            included: int,
+            target: dict[str, dict[str, int]] = project_coverage,
+        ) -> None:
+            target[name] = {"total": total, "included": included}
+            coverage[name]["total"] += total
+            coverage[name]["included"] += included
+
         done_stage_ids = _done_stage_ids(project_slice.stages)
         stage_names = {stage.id: stage.name for stage in project_slice.stages}
         node_paths = _node_paths(project_slice.nodes)
+        task_keys = {
+            task.id: build_task_key(project_key=project_slice.project.key, number=task.number)
+            for task in project_slice.tasks
+        }
         selected_tasks = _select_tasks(
             tasks=project_slice.tasks,
             stages=project_slice.stages,
-            limit=limits.tasks,
+            limit=len(project_slice.tasks),
             today=today,
         )
         blocked_by = _blocked_by(
@@ -759,169 +707,328 @@ def _render(
             tasks=project_slice.tasks,
             project_key=project_slice.project.key,
         )
-
         rendered_tasks = []
-        for index, task in enumerate(selected_tasks):
+        for task in selected_tasks[: limits.tasks]:
             is_done = task.stage_id in done_stage_ids
-            comments = project_slice.comments.get(task.id, [])[-limits.comments_per_task :]
-            counts["comments"] += len(comments)
-            entry: dict[str, Any] = {
-                "key": build_task_key(project_key=project_slice.project.key, number=task.number),
-                "title": task.title,
-                "stage": stage_names.get(task.stage_id, "—"),
+            entry = {
+                "key": task_keys[task.id],
+                "title": clip(task.title),
+                "description": clip(task.description_md),
+                "stage": clip(stage_names.get(task.stage_id, "—")),
                 "done": is_done,
                 "priority": task.priority.value,
-                "assignee": task.assignee or None,
+                "assignee": clip(task.assignee) or None,
                 "role": task.role.value if task.role else None,
-                "start": task.start_date.isoformat() if task.start_date else None,
-                "due": task.due_date.isoformat() if task.due_date else None,
-                "updated": task.updated_at.date().isoformat() if task.updated_at else None,
-                "wbs": node_paths.get(task.wbs_node_id) if task.wbs_node_id else None,
+                "start": _iso(task.start_date),
+                "due": _iso(task.due_date),
+                "baseline_start": _iso(task.baseline_start_date),
+                "baseline_due": _iso(task.baseline_due_date),
+                "completed_at": _iso(task.completed_at),
+                "updated": _iso(task.updated_at),
+                "wbs": clip(node_paths.get(task.wbs_node_id)),
             }
             if is_task_overdue(due_date=task.due_date, is_done=is_done, today=today):
                 entry["overdue_days"] = (today - task.due_date).days
             if is_task_due_soon(
-                due_date=task.due_date,
-                is_done=is_done,
-                today=today,
-                soon_until=soon_until,
+                due_date=task.due_date, is_done=is_done, today=today, soon_until=soon_until
             ):
                 entry["due_soon"] = True
             if task.id in blocked_by:
-                entry["blocked_by"] = blocked_by[task.id]
-            if index < DESCRIPTION_TASKS_LIMIT and task.description_md:
-                entry["description"] = _cut(task.description_md, limits.description_chars)
-            if comments:
-                entry["comments"] = [
-                    {
-                        "when": comment.created_at.date().isoformat(),
-                        "who": comment.author_name or "—",
-                        "text": _cut(comment.body_md, limits.comment_chars),
-                    }
-                    for comment in comments
-                ]
+                entry["blocked_by"] = blocked_by[task.id][: limits.items]
             rendered_tasks.append(entry)
-        counts["tasks"] += len(rendered_tasks)
+        track("tasks", len(project_slice.tasks), len(rendered_tasks))
+        checklist_tasks = [
+            task for task in selected_tasks if getattr(task, "checklist", None) is not None
+        ]
+        rendered_checklists = []
+        for task in checklist_tasks[: limits.tasks]:
+            data = checklist_context(
+                task.checklist, limit=limits.items, chars=limits.description_chars
+            )
+            if any(
+                len(item["text"]) > limits.description_chars for item in task.checklist["items"]
+            ):
+                shortened += 1
+            rendered_checklists.append({"task": task_keys[task.id], **data})
+        track("checklists", len(checklist_tasks), len(rendered_checklists))
+        track(
+            "checklist_items",
+            sum(len(task.checklist["items"]) for task in checklist_tasks),
+            sum(item["included_items"] for item in rendered_checklists),
+        )
+        # Источники выбираются независимо от карточек задач: комментарий
+        # или файл закрытой задачи не должен исчезнуть целиком при ужатии.
+        rendered_comments = [
+            {
+                "task": task_keys[task.id],
+                "when": _iso(comment.created_at),
+                "who": clip(comment.author_name),
+                "text": clip(comment.body_md, limits.comment_chars),
+            }
+            for task in [task for task in selected_tasks if project_slice.comments.get(task.id)][
+                : limits.tasks
+            ]
+            for comment in project_slice.comments[task.id][-limits.comments_per_task :]
+        ]
+        rendered_participants = [
+            _member_identity(participant.project_member)
+            | {"task": task_keys[task.id], "role": participant.role.value}
+            for task in [
+                task for task in selected_tasks if project_slice.participants.get(task.id)
+            ][: limits.tasks]
+            for participant in project_slice.participants[task.id][: limits.items]
+        ]
+        rendered_attachments = [
+            {
+                "task": task_keys[task.id],
+                "name": clip(attachment.original_name),
+                "content_type": clip(attachment.content_type),
+                "size_bytes": attachment.size,
+                "uploaded_at": _iso(attachment.created_at),
+            }
+            for task in [task for task in selected_tasks if project_slice.attachments.get(task.id)][
+                : limits.tasks
+            ]
+            for attachment in project_slice.attachments[task.id][: limits.items]
+        ]
+        track("comments", sum(map(len, project_slice.comments.values())), len(rendered_comments))
+        track(
+            "participants",
+            sum(map(len, project_slice.participants.values())),
+            len(rendered_participants),
+        )
+        track(
+            "attachments",
+            sum(map(len, project_slice.attachments.values())),
+            len(rendered_attachments),
+        )
 
         selected_documents = _select_documents(
             documents=project_slice.documents,
             document_task_ids=project_slice.document_task_ids,
             limit=limits.documents,
         )
-        task_keys_by_id = {
-            task.id: build_task_key(project_key=project_slice.project.key, number=task.number)
-            for task in project_slice.tasks
-        }
         rendered_documents = [
             {
-                "title": document.title,
-                "linked_tasks": [
-                    task_keys_by_id[task_id]
-                    for task_id in project_slice.document_task_ids.get(document.id, [])
-                    if task_id in task_keys_by_id
-                ],
-                "excerpt": _cut(document.content_md, limits.document_chars),
+                "slug": document.slug,
+                "title": clip(document.title),
+                "linked_tasks": _linked_keys(
+                    project_slice.document_task_ids.get(document.id, []), task_keys, limits.items
+                ),
+                "excerpt": clip(document.content_md, limits.document_chars),
             }
             for document in selected_documents
         ]
-        counts["documents"] += len(rendered_documents)
-
+        track("documents", len(project_slice.documents), len(rendered_documents))
+        track(
+            "document_links",
+            sum(map(len, project_slice.document_task_ids.values())),
+            sum(len(item["linked_tasks"]) for item in rendered_documents),
+        )
         rendered_stickers = [
             {
-                "author": sticker.created_by_display_name_snapshot,
-                "when": sticker.created_at.date().isoformat() if sticker.created_at else None,
-                "text": _cut(sticker.body, limits.sticker_chars),
-                "tasks": [
-                    task_keys_by_id[link.task_id]
-                    for link in sticker.task_links
-                    if link.task_id in task_keys_by_id
-                ],
+                "id": sticker.id,
+                "author": clip(sticker.created_by_display_name_snapshot),
+                "when": _iso(sticker.created_at),
+                "text": clip(sticker.body, limits.sticker_chars),
+                "tasks": _linked_keys(
+                    [link.task_id for link in sticker.task_links], task_keys, limits.items
+                ),
             }
-            for sticker in project_slice.stickers[: limits.stickers]
+            for sticker in sorted(project_slice.stickers, key=lambda item: not item.task_links)[
+                : limits.stickers
+            ]
         ]
-        counts["stickers"] += len(rendered_stickers)
-
+        track("stickers", len(project_slice.stickers), len(rendered_stickers))
+        track(
+            "sticker_links",
+            sum(len(item.task_links) for item in project_slice.stickers),
+            sum(len(item["tasks"]) for item in rendered_stickers),
+        )
         wbs_counts = _wbs_task_counts(project_slice.tasks)
         rendered_nodes = [
-            f"{node_paths[node.id]} ({wbs_counts.get(node.id, 0)} задач)"
-            for node in project_slice.nodes
-            if node.id in node_paths
+            {
+                "id": node.id,
+                "parent_id": node.parent_id,
+                "title": clip(node.title),
+                "path": clip(node_paths.get(node.id)),
+                "tasks_count": wbs_counts.get(node.id, 0),
+            }
+            for node in project_slice.nodes[: limits.items]
         ]
-        counts["nodes"] += len(rendered_nodes)
-
+        track("wbs_nodes", len(project_slice.nodes), len(rendered_nodes))
         rendered_milestones = [
             {
-                "title": milestone.title,
-                "due": milestone.due_date.isoformat(),
+                "id": milestone.id,
+                "title": clip(milestone.title),
+                "description": clip(milestone.description_md),
+                "due": _iso(milestone.due_date),
                 "status": milestone.status.value,
+                "wbs": clip(node_paths.get(milestone.wbs_node_id)),
                 "days_left": (milestone.due_date - today).days,
             }
-            for milestone in project_slice.milestones
+            for milestone in sorted(
+                project_slice.milestones,
+                key=lambda item: (item.status is ProjectMilestoneStatus.ACHIEVED, item.due_date),
+            )[: limits.items]
         ]
-        counts["milestones"] += len(rendered_milestones)
-
+        track("milestones", len(project_slice.milestones), len(rendered_milestones))
         rendered_activity = [
             {
-                "when": event.created_at.date().isoformat(),
-                "task": task_keys_by_id.get(event.task_id, "—"),
+                "when": _iso(event.created_at),
+                "task": task_keys[event.task_id],
                 "event": event.event_type.value,
-                "from": event.from_value,
-                "to": event.to_value,
+                "from": clip(event.from_value),
+                "to": clip(event.to_value),
             }
-            for event in project_slice.activity
-            if event.task_id in task_keys_by_id
+            for event in project_slice.activity[: limits.activity]
+            if event.task_id in task_keys
         ]
-        counts["activity"] += len(rendered_activity)
+        track("activity", project_slice.activity_total, len(rendered_activity))
+        rendered_risks = _render_risks(project_slice, limit=limits.risks)
+        for item in rendered_risks:
+            for name in ("title", "description", "mitigation_plan", "response_plan"):
+                item[name] = clip(item[name])
+        track(
+            "risks", build_risk_summary(project_slice.risk_groups).total_risks, len(rendered_risks)
+        )
 
-        skipped_tasks = len(project_slice.tasks) - len(rendered_tasks)
-        if skipped_tasks > 0:
-            omitted.append(
-                f"{project_slice.project.key}: в анализ вошли {len(rendered_tasks)} из "
-                f"{len(project_slice.tasks)} задач — сначала просроченные, срочные и активные"
-            )
-        skipped_documents = len(project_slice.documents) - len(rendered_documents)
-        if skipped_documents > 0:
-            omitted.append(
-                f"{project_slice.project.key}: разобраны {len(rendered_documents)} из "
-                f"{len(project_slice.documents)} документов — приоритет у связанных с задачами"
-            )
-
+        rendered_stages = [
+            {
+                "id": stage.id,
+                "name": clip(stage.name),
+                "is_done": stage.is_done_stage,
+                "order": stage.order_index,
+            }
+            for stage in project_slice.stages[: limits.items]
+        ]
+        track("stages", len(project_slice.stages), len(rendered_stages))
+        rendered_members = [
+            _member_identity(member) | {"role": member.role.value}
+            for member in project_slice.members[: limits.items]
+        ]
+        track("members", len(project_slice.members), len(rendered_members))
+        rendered_dependencies = [
+            {
+                "predecessor": task_keys[item.predecessor_task_id],
+                "successor": task_keys[item.successor_task_id],
+                "type": item.dependency_type.value,
+                "lag_days": item.lag_days,
+            }
+            for item in project_slice.dependencies[: limits.items]
+            if item.predecessor_task_id in task_keys and item.successor_task_id in task_keys
+        ]
+        track("dependencies", len(project_slice.dependencies), len(rendered_dependencies))
         rendered_projects.append(
             {
                 "key": project_slice.project.key,
-                "name": project_slice.project.name,
+                "name": clip(project_slice.project.name),
                 "status": project_slice.project.status.value,
-                "description": _cut(project_slice.project.description_md or "", 800) or None,
-                "stages": [stage.name for stage in project_slice.stages],
+                "description": clip(project_slice.project.description_md),
+                "start_date": _iso(project_slice.project.start_date),
+                "due_date": _iso(project_slice.project.due_date),
+                "signals": _build_signals(slices=[project_slice], today=today).model_dump(
+                    mode="json"
+                ),
+                "stages": rendered_stages,
+                "team": rendered_members,
                 "wbs": rendered_nodes,
                 "milestones": rendered_milestones,
                 "tasks": rendered_tasks,
+                "checklists": rendered_checklists,
+                "comments": rendered_comments,
+                "participants": rendered_participants,
+                "attachments": rendered_attachments,
+                "dependencies": rendered_dependencies,
                 "stickers": rendered_stickers,
                 "documents": rendered_documents,
                 "recent_activity": rendered_activity,
+                "registered_risks": rendered_risks,
+                "entity_counts": project_coverage,
             }
         )
+        gaps = [
+            f"{_ENTITY_LABELS[name]} {count['included']} из {count['total']}"
+            for name, count in project_coverage.items()
+            if count["included"] < count["total"]
+        ]
+        if gaps:
+            omitted.append(f"{project_slice.project.key}: в контекст вошли " + "; ".join(gaps))
+        if shortened:
+            omitted.append(
+                f"{project_slice.project.key}: сокращено текстовых фрагментов — {shortened}; "
+                "многоточие означает, что передано начало текста"
+            )
 
-    payload = {
+    context = AnalyticsContextSchema(
+        projects=len(slices),
+        tasks_total=coverage["tasks"]["total"],
+        tasks_included=coverage["tasks"]["included"],
+        comments_included=coverage["comments"]["included"],
+        documents_included=coverage["documents"]["included"],
+        stickers_included=coverage["stickers"]["included"],
+        wbs_nodes_included=coverage["wbs_nodes"]["included"],
+        milestones_included=coverage["milestones"]["included"],
+        activity_included=coverage["activity"]["included"],
+        risks_total=signals.total_risks,
+        risks_included=coverage["risks"]["included"],
+        entity_counts=coverage,
+        truncated=bool(omitted),
+        omitted=omitted,
+    )
+    return {
         "today": today.isoformat(),
         "scope": scope.value,
         "signals": signals.model_dump(mode="json"),
         "projects": rendered_projects,
+    }, context
+
+
+def _linked_keys(task_ids: list[int], task_keys: dict[int, str], limit: int) -> list[str]:
+    """Сохраняет только реальные связи с задачами текущего проекта."""
+    return [task_keys[task_id] for task_id in task_ids if task_id in task_keys][:limit]
+
+
+def _iso(value: date | datetime | None) -> str | None:
+    """Сериализует календарные даты и фактическое время без потери точности."""
+    return value.isoformat() if value else None
+
+
+def _member_identity(member: ProjectMember) -> dict[str, str]:
+    """Передаёт только рабочую идентичность без контактов, паролей и аватара."""
+    user = member.user
+    return {
+        "username": user.username,
+        "name": " ".join(filter(None, (user.last_name, user.first_name, user.middle_name))),
     }
-    context = AnalyticsContextSchema(
-        projects=len(slices),
-        tasks_total=sum(len(project_slice.tasks) for project_slice in slices),
-        tasks_included=counts["tasks"],
-        comments_included=counts["comments"],
-        documents_included=counts["documents"],
-        stickers_included=counts["stickers"],
-        wbs_nodes_included=counts["nodes"],
-        milestones_included=counts["milestones"],
-        activity_included=counts["activity"],
-        truncated=bool(omitted),
-        omitted=omitted,
+
+
+def _render_risks(project_slice: _ProjectSlice, *, limit: int) -> list[dict[str, Any]]:
+    """Добавляет текущий реестр, ответственных и реальные ключи связанных задач."""
+    task_keys = {
+        task.id: build_task_key(project_key=project_slice.project.key, number=task.number)
+        for task in project_slice.tasks
+    }
+    members = {member.user_id: member for member in project_slice.members}
+    risks = sorted(
+        project_slice.risks,
+        key=lambda item: (
+            item.status == "CLOSED",
+            {"HIGH": 0, "MEDIUM": 1, "LOW": 2}[item.risk_level],
+            item.review_date or date.max,
+            -item.id,
+        ),
     )
-    return payload, context
+    result = []
+    for risk in risks[:limit]:
+        item = ProjectRiskSchema.model_validate(risk).model_dump(
+            mode="json", exclude={"created_at", "updated_at", "id", "project_id"}
+        )
+        item["task_key"] = task_keys.get(item.pop("task_id"))
+        owner = members.get(item.pop("owner_user_id"))
+        item["owner"] = _member_identity(owner) if owner else None
+        result.append(item)
+    return result
 
 
 def _select_tasks(

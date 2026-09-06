@@ -34,6 +34,8 @@ async def test_save_and_get_for_task_on_real_postgres(
 
     assert [item.id for item in result] == [event.id]
     assert result[0].event_type == TaskActivityEventType.STAGE_CHANGED
+    assert await activity_repository.get_count_by_project(project_id=stage.project_id) == 1
+    assert await activity_repository.get_count_by_project(project_id=stage.project_id + 1000) == 0
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 import { Link2, Pencil, Trash2 } from "lucide-react";
 import type { Node, NodeProps } from "@xyflow/react";
+import { NodeResizer } from "@xyflow/react";
 import { cn } from "@/lib/cn";
 import { formatDateTime } from "@/lib/dates";
 import type { ProjectSticker } from "@/lib/board/stickers";
@@ -15,6 +16,7 @@ export interface ProjectStickerNodeData extends Record<string, unknown> {
     onEdit: (sticker: ProjectSticker) => void;
     onDelete: (sticker: ProjectSticker) => void;
     onOpenTask: (taskId: number) => void;
+    onResize: (sticker: ProjectSticker, width: number, height: number) => void;
 }
 
 export type ProjectStickerCanvasNode = Node<ProjectStickerNodeData, "sticker">;
@@ -27,6 +29,7 @@ export function ProjectStickerCard({
     onEdit,
     onDelete,
     onOpenTask,
+    onResize,
 }: ProjectStickerNodeData) {
     const edited = sticker.updated_at !== sticker.created_at;
 
@@ -34,8 +37,14 @@ export function ProjectStickerCard({
         <article
             className={cn("project-sticker-card", `project-sticker-card--${sticker.color}`)}
             aria-label={`Стикер: ${sticker.body.slice(0, 80)}`}
-            title="Перетащите стикер за свободную область карточки"
+            title="Перетащите стикер за свободную область; изменяйте размер за угол"
         >
+            <NodeResizer minWidth={160} minHeight={160} maxWidth={520} maxHeight={520}
+                keepAspectRatio={false} color="var(--color-accent)"
+                handleStyle={{ width: 17, height: 17, borderWidth: 2, borderRadius: 4 }}
+                lineStyle={{ borderWidth: 2, opacity: 0.75 }}
+                onResizeEnd={(_, params) => onResize(sticker, params.width, params.height)} />
+            <span className="project-sticker-card__resize-hint" aria-hidden="true">↘</span>
             <div className="project-sticker-card__tape" aria-hidden="true" />
             <p className="project-sticker-card__body nowheel scrollbar-thin">{sticker.body}</p>
 

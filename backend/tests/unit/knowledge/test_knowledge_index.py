@@ -16,6 +16,7 @@ from src.exceptions.knowledge import KnowledgeProviderError
 from src.knowledge.documents import build_attachment_chunks, build_comment_document
 from src.repositories.documents import DocumentsRepository
 from src.repositories.milestones import MilestonesRepository
+from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
@@ -67,6 +68,9 @@ def build_service(tmp_path):
         vision=vision,
     )
     service = KnowledgeIndexService(
+        risks_repository=AsyncMock(
+            spec=ProjectRiskRepository, get_by_project=AsyncMock(return_value=[])
+        ),
         projects_repository=projects,
         tasks_repository=tasks,
         wbs_nodes_repository=nodes,
@@ -99,13 +103,23 @@ def make_job(operation: KnowledgeIndexOperation, entity_type: KnowledgeEntityTyp
 async def test_task_context_is_replaced_or_deleted_as_a_whole(tmp_path) -> None:
     """Обновление задачи заменяет её точку, исчезнувшая задача уносит весь свой контекст."""
 
-    service, _, _, runtime, _, _ = build_service(tmp_path)
+    service, _, task, runtime, _, _ = build_service(tmp_path)
+    task.checklist = {
+        "title": "Приёмка",
+        "items": [
+            {"text": "Согласовать поля API", "is_completed": True},
+            {"text": "Обновить контракт", "is_completed": False},
+        ],
+    }
 
     await service.process(make_job(KnowledgeIndexOperation.UPSERT, KnowledgeEntityType.TASK))
 
     runtime.qdrant_client.delete_task_context.assert_not_awaited()
     runtime.qdrant_client.delete_entity.assert_not_awaited()
     runtime.qdrant_client.upsert_documents.assert_awaited_once()
+    indexed = runtime.qdrant_client.upsert_documents.await_args.kwargs["documents"]
+    assert "[x] Согласовать поля API" in indexed[0].text
+    assert "[ ] Обновить контракт" in indexed[0].text
 
     service, _, _, runtime, _, _ = build_service(tmp_path)
     service.tasks_repository.get_by_id.return_value = None
@@ -191,8 +205,13 @@ def test_document_text_does_not_depend_on_mutable_task_title(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(('entity_type', 'entity_id'), [(KnowledgeEntityType.DOCUMENT, 9), (KnowledgeEntityType.ATTACHMENT, 11)])
-async def test_multichunk_entity_replaces_its_chunks_and_fails_on_missing_vision(tmp_path, entity_type: KnowledgeEntityType, entity_id: int) -> None:
+@pytest.mark.parametrize(
+    ("entity_type", "entity_id"),
+    [(KnowledgeEntityType.DOCUMENT, 9), (KnowledgeEntityType.ATTACHMENT, 11)],
+)
+async def test_multichunk_entity_replaces_its_chunks_and_fails_on_missing_vision(
+    tmp_path, entity_type: KnowledgeEntityType, entity_id: int
+) -> None:
     """Многочанковая сущность удаляет старые чанки перед записью, недоступная модель зрения роняет задание."""
 
     service, project, task, runtime, documents, attachments = build_service(tmp_path)
@@ -243,9 +262,7 @@ async def test_multichunk_entity_replaces_its_chunks_and_fails_on_missing_vision
         created_at=datetime.now(UTC),
     )
     (tmp_path / storage_name).write_bytes(b"\x89PNG\r\n\x1a\nvision-fixture")
-    runtime.vision.extract_image_text.side_effect = VisionClientError(
-        "vision API недоступен"
-    )
+    runtime.vision.extract_image_text.side_effect = VisionClientError("vision API недоступен")
 
     with pytest.raises(KnowledgeProviderError):
         await service.process(

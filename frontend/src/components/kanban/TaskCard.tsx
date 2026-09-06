@@ -1,5 +1,5 @@
 import { forwardRef } from "react";
-import { MessageSquare } from "lucide-react";
+import { AlertTriangle, MessageSquare } from "lucide-react";
 import type { Task } from "@/lib/types";
 import { cn } from "@/lib/cn";
 import { PriorityBadge } from "@/components/ui/Badge";
@@ -19,6 +19,7 @@ function toPlainText(markdown: string): string {
 
 interface TaskCardProps {
     task: Task;
+    riskCount?: number;
     breadcrumb?: string | null;
     isDone?: boolean;
     isSelected?: boolean;
@@ -36,6 +37,7 @@ interface TaskCardProps {
 export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(function TaskCard(
     {
         task,
+        riskCount = 0,
         breadcrumb,
         isDone = false,
         isSelected = false,
@@ -73,7 +75,9 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(function TaskC
                 className="flex w-full min-w-0 flex-col gap-2 px-3.5 py-3 text-left outline-none"
             >
                 <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-[11px] text-muted">{task.key}</span>
+                    <span className="inline-flex items-center gap-2 font-mono text-[11px] text-muted">{task.key}
+                        {riskCount > 0 && <span aria-label={`Активных рисков: ${riskCount}`} title={`Активных рисков: ${riskCount}`} className="inline-flex items-center gap-1 text-warning"><AlertTriangle size={11} aria-hidden="true" />{riskCount}</span>}
+                    </span>
                     <PriorityBadge priority={task.priority} />
                 </div>
 

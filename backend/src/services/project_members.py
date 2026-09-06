@@ -1,7 +1,10 @@
 import logging
 
+from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.project_members import ProjectMember, ProjectRole
 from src.db.models.task_participants import TaskParticipantRole
+from src.exceptions.knowledge import KnowledgeEventsServiceError
+from src.exceptions.project_risks import ProjectRiskRepositoryError
 from src.exceptions.projects import (
     ProjectMemberAlreadyExistsError,
     ProjectMemberAlreadyExistsRepositoryError,
@@ -15,12 +18,14 @@ from src.exceptions.tasks import TasksRepositoryError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.exceptions.users import UsersRepositoryError
 from src.repositories.project_members import ProjectMembersRepository
+from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.task_participants import TaskParticipantsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.users import UsersRepository
 from src.schemas.project_members import ProjectMemberSchema
 from src.services.auth import to_user_summary
+from src.services.knowledge_events import KnowledgeEvents
 from src.services.users import UsersService
 
 logger = logging.getLogger(__name__)
@@ -30,6 +35,8 @@ RepositoryErrors = (
     TasksRepositoryError,
     UsersRepositoryError,
     UnitOfWorkRepositoryError,
+    ProjectRiskRepositoryError,
+    KnowledgeEventsServiceError,
 )
 
 
@@ -44,6 +51,8 @@ class ProjectMembersService:
         tasks_repository: TasksRepository,
         unit_of_work: UnitOfWork,
         users_service: UsersService,
+        risks_repository: ProjectRiskRepository,
+        knowledge_events: KnowledgeEvents,
     ):
         self.members_repository = members_repository
         self.users_repository = users_repository
@@ -51,6 +60,8 @@ class ProjectMembersService:
         self.tasks_repository = tasks_repository
         self.unit_of_work = unit_of_work
         self.users_service = users_service
+        self.risks_repository = risks_repository
+        self.knowledge_events = knowledge_events
 
     async def get_member_list(self, project_id: int) -> list[ProjectMemberSchema]:
         """Возвращает только участников указанного доступного проекта."""
@@ -149,7 +160,9 @@ class ProjectMembersService:
     async def remove_member(self, project_id: int, user_id: int) -> None:
         """Удаляет участника и его назначения, не позволяя удалить владельца."""
         try:
-            member = await self.members_repository.get(project_id=project_id, user_id=user_id)
+            member = await self.members_repository.get(
+                project_id=project_id, user_id=user_id, for_update=True
+            )
             if member is None:
                 raise ProjectMemberNotFoundError(user_id=user_id)
             if member.role is ProjectRole.OWNER:
@@ -163,6 +176,12 @@ class ProjectMembersService:
                 task_ids=[assignment.task_id for assignment in executor_assignments]
             )
             # Все ролевые назначения удалятся через FK ON DELETE CASCADE.
+            risk_ids = await self.risks_repository.clear_owner(
+                project_id=project_id, user_id=user_id
+            )
+            await self.knowledge_events.upsert_many(
+                project_id=project_id, entity_type=KnowledgeEntityType.RISK, entity_ids=risk_ids
+            )
             await self.members_repository.delete(member=member)
             await self.unit_of_work.commit()
         except RepositoryErrors as error:
@@ -171,6 +190,7 @@ class ProjectMembersService:
                 project_id,
                 exc_info=True,
             )
+            await self.unit_of_work.rollback()
             raise ProjectsServiceError(str(error)) from error
 
 

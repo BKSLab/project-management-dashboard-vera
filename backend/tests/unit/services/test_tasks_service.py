@@ -87,6 +87,8 @@ def make_task(
         number=number,
         title="Реализовать фильтрацию",
         description_md=description_md,
+        checklist=None,
+        checklist_revision=0,
         priority=priority,
         role=None,
         assignee=assignee,

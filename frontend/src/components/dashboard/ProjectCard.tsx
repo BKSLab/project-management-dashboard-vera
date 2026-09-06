@@ -70,6 +70,9 @@ export function ProjectCard({ project }: { project: DashboardProject }) {
                     </div>
                 </div>
 
+                {project.risks && (project.risks.high_risks > 0 || project.risks.occurred_risks > 0) && (
+                    <p className="inline-flex items-center gap-1 text-[11px] text-danger"><AlertTriangle size={11} aria-hidden="true" />{project.risks.high_risks} HIGH рисков{project.risks.occurred_risks > 0 && ` · ${project.risks.occurred_risks} реализовались`}</p>
+                )}
                 {project.next_due_date && (
                     <p className="text-[11px] text-muted">
                         Ближайший срок:{" "}

@@ -22,6 +22,7 @@ from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_members import ProjectMembersRepository
+from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
@@ -40,6 +41,7 @@ from src.services.knowledge_events import KnowledgeEvents
 from src.services.milestones import MilestonesService
 from src.services.project_members import ProjectMembersService
 from src.services.project_query import ProjectQueryService
+from src.services.project_risks import ProjectRiskService
 from src.services.task_comments import TaskCommentsService
 from src.services.tasks import TasksService
 from src.services.users import UsersService
@@ -64,6 +66,7 @@ class ToolServices:
     milestones: MilestonesService
     calendar: CalendarService
     members: ProjectMembersService
+    risks: ProjectRiskService
 
 
 def build_project_query_scope(
@@ -120,7 +123,7 @@ def build_access_service(session: AsyncSession) -> AccessService:
     )
 
 
-def build_members_service(session: AsyncSession) -> ProjectMembersService:
+def build_members_service(session: AsyncSession, settings: Settings) -> ProjectMembersService:
     """Создаёт сервис команды проекта для разрешения исполнителя."""
     return ProjectMembersService(
         members_repository=ProjectMembersRepository(session),
@@ -128,6 +131,8 @@ def build_members_service(session: AsyncSession) -> ProjectMembersService:
         participants_repository=TaskParticipantsRepository(session),
         tasks_repository=TasksRepository(session),
         unit_of_work=UnitOfWork(session),
+        risks_repository=ProjectRiskRepository(session),
+        knowledge_events=build_knowledge_events(session, settings),
         users_service=UsersService(
             users_repository=UsersRepository(session),
             avatar_storage=None,
@@ -187,6 +192,19 @@ def build_milestones_service(session: AsyncSession, settings: Settings) -> Miles
     )
 
 
+def build_risks_service(session: AsyncSession, settings: Settings) -> ProjectRiskService:
+    """Собирает тот же сценарий рисков и outbox, что используется HTTP."""
+    return ProjectRiskService(
+        risks_repository=ProjectRiskRepository(session),
+        tasks_repository=TasksRepository(session),
+        members_repository=ProjectMembersRepository(session),
+        projects_repository=ProjectsRepository(session),
+        access_service=build_access_service(session),
+        knowledge_events=build_knowledge_events(session, settings),
+        unit_of_work=UnitOfWork(session),
+    )
+
+
 def build_tool_services(
     *,
     session: AsyncSession,
@@ -215,5 +233,6 @@ def build_tool_services(
         comments=build_comments_service(session, settings),
         milestones=build_milestones_service(session, settings),
         calendar=build_calendar_service(session),
-        members=build_members_service(session),
+        members=build_members_service(session, settings),
+        risks=build_risks_service(session, settings),
     )

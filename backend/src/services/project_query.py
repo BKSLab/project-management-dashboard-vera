@@ -20,6 +20,7 @@ from src.exceptions.projects import ProjectNotFoundError, ProjectsServiceError
 from src.exceptions.tasks import TaskNotFoundError
 from src.knowledge.documents import build_wbs_paths
 from src.services.db_scope import ProjectQueryScope, ProjectQueryScopeFactory
+from src.utils.checklists import checklist_context
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ class TaskSummaryDto:
     priority: str
     assignee: str | None
     due_date: date | None
+    checklist: dict | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,9 +401,7 @@ class ProjectQueryService:
                 MilestoneDto(
                     title="Дедлайн проекта",
                     due_date=project.due_date,
-                    status=(
-                        "ACHIEVED" if str(project.status.value) == "COMPLETED" else "PLANNED"
-                    ),
+                    status=("ACHIEVED" if str(project.status.value) == "COMPLETED" else "PLANNED"),
                     description=None,
                     is_system=True,
                 )
@@ -440,6 +440,34 @@ class ProjectQueryService:
         async with self.scope() as db:
             project = await self._require_project(db, project_id=project_id)
             return project.key
+
+    async def get_task_keys(self, *, project_id: int, task_ids: set[int]) -> dict[int, str]:
+        """Разрешает ключи связанных задач одним пакетным чтением.
+
+        Args:
+            project_id: Доступный проект.
+            task_ids: Идентификаторы связанных задач.
+
+        Returns:
+            Ключи только существующих задач указанного проекта.
+
+        Raises:
+            ProjectsServiceError: Ошибка чтения связей.
+        """
+        try:
+            async with self.scope() as db:
+                project = await self._require_project(db, project_id=project_id)
+                tasks = await db.tasks.get_by_ids(task_ids)
+                return {
+                    task.id: build_task_key(project.key, task.number)
+                    for task in tasks
+                    if task.project_id == project_id
+                }
+        except RepositoryError as error:
+            logger.exception(
+                "❌ Не удалось получить ключи связанных задач проекта id=%s.", project_id
+            )
+            raise ProjectsServiceError(str(error)) from error
 
     @staticmethod
     async def _require_project(db: ProjectQueryScope, *, project_id: int) -> Project:
@@ -481,6 +509,7 @@ def _project_summary(project) -> ProjectSummaryDto:
 def _task_summary(task, *, project_key: str, stage) -> TaskSummaryDto:
     """Собирает краткую карточку задачи из модели."""
     return TaskSummaryDto(
+        checklist=checklist_context(getattr(task, "checklist", None)),
         task_key=build_task_key(project_key, task.number),
         title=task.title,
         stage=stage.name if stage else None,

@@ -7,11 +7,13 @@ import { TaskCard } from "@/components/kanban/TaskCard";
 
 function DraggableTask({
     task,
+    riskCount,
     isDone,
     isSelected,
     onOpen,
 }: {
     task: Task;
+    riskCount: number;
     isDone: boolean;
     isSelected: boolean;
     onOpen: (taskId: number) => void;
@@ -22,6 +24,7 @@ function DraggableTask({
         <TaskCard
             ref={setNodeRef}
             task={task}
+            riskCount={riskCount}
             isDone={isDone}
             isSelected={isSelected}
             className={cn(isDragging && "opacity-40")}
@@ -32,6 +35,7 @@ function DraggableTask({
 }
 
 interface ColumnProps {
+    riskCounts: Record<string, number>;
     stage: ProjectStage;
     tasks: Task[];
     selectedTaskId: number | null;
@@ -42,7 +46,7 @@ interface ColumnProps {
  * Колонка доски: лёгкая шапка со счётчиком и цветным маркером стадии.
  * Колонка не заливается цветом статуса (раздел 7 дизайн-гайда).
  */
-export function Column({ stage, tasks, selectedTaskId, onTaskOpen }: ColumnProps) {
+export function Column({ stage, tasks, selectedTaskId, onTaskOpen, riskCounts }: ColumnProps) {
     const { setNodeRef, isOver } = useDroppable({ id: stage.id });
 
     return (
@@ -72,6 +76,7 @@ export function Column({ stage, tasks, selectedTaskId, onTaskOpen }: ColumnProps
                     <DraggableTask
                         key={task.id}
                         task={task}
+                        riskCount={riskCounts[task.id] ?? 0}
                         isDone={stage.is_done_stage}
                         isSelected={task.id === selectedTaskId}
                         onOpen={onTaskOpen}

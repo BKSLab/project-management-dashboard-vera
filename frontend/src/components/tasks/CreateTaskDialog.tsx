@@ -21,6 +21,9 @@ import { ErrorMessage } from "@/components/ui/States";
 import { TaskDateRangePicker } from "@/components/tasks/TaskDateRangePicker";
 import { TaskDocumentsField } from "@/components/tasks/TaskDocumentsField";
 import { TaskPeopleFields } from "@/components/tasks/TaskPeopleFields";
+import { TaskChecklistField } from "@/components/tasks/TaskChecklistField";
+import { checklistInput, isChecklistValid } from "@/lib/checklists";
+import type { TaskChecklist } from "@/lib/checklists";
 
 interface CreateTaskDialogProps {
     projectId: number;
@@ -49,6 +52,8 @@ export function CreateTaskDialog({
     const toast = useToast();
     const [title, setTitle] = useState("");
     const [description, setDescription] = useState("");
+    const [checklist, setChecklist] = useState<TaskChecklist | null>(null);
+    const [checklistBusy, setChecklistBusy] = useState(false);
     const [priority, setPriority] = useState<TaskPriority>("MEDIUM");
     const [stageId, setStageId] = useState<string>("");
     const [startDate, setStartDate] = useState("");
@@ -84,6 +89,7 @@ export function CreateTaskDialog({
     function reset() {
         setTitle("");
         setDescription("");
+        setChecklist(null);
         setPriority("MEDIUM");
         setStageId("");
         setStartDate("");
@@ -101,6 +107,7 @@ export function CreateTaskDialog({
             const task = await api.post<Task>(endpoints.projectTasks(projectId), {
                 title: title.trim(),
                 description_md: description.trim() || null,
+                checklist: checklistInput(checklist),
                 priority,
                 stage_id: selectedStageId === "" ? null : Number(selectedStageId),
                 wbs_node_id: wbsNodeId,
@@ -162,6 +169,7 @@ export function CreateTaskDialog({
                     title: title.trim(),
                     description_md: description.trim(),
                     document_ids: selectedDocumentIds,
+                    ...(isChecklistValid(checklist) ? { checklist: checklistInput(checklist) } : {}),
                 }),
             );
             for (const file of newDocumentFiles) {
@@ -172,7 +180,7 @@ export function CreateTaskDialog({
         onSuccess: (result) => setDescription(result.description_md),
     });
 
-    const isBusy = createMutation.isPending || rephraseMutation.isPending;
+    const isBusy = createMutation.isPending || rephraseMutation.isPending || checklistBusy;
 
     return (
         <Modal
@@ -196,6 +204,7 @@ export function CreateTaskDialog({
                         variant="primary"
                         disabled={
                             title.trim() === "" ||
+                            checklistBusy || !isChecklistValid(checklist) ||
                             createMutation.isPending ||
                             rephraseMutation.isPending ||
                             membersQuery.isPending
@@ -337,6 +346,11 @@ export function CreateTaskDialog({
                         )}
                     </Field>
                 </div>
+
+                <TaskChecklistField projectId={projectId} title={title} description={description}
+                    documentIds={selectedDocumentIds} files={newDocumentFiles}
+                    value={checklist} onChange={setChecklist} onBusyChange={setChecklistBusy}
+                    disabled={createMutation.isPending || rephraseMutation.isPending} />
 
                 <section className="flex flex-col gap-3" aria-labelledby="task-people-heading">
                     <p

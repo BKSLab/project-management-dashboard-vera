@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.db.models.projects import ProjectStatus
 from src.schemas.enums import TaskPriority
+from src.schemas.project_risks import ProjectRiskSummarySchema
 
 
 class DashboardTotalsSchema(BaseModel):
@@ -33,6 +34,9 @@ class DashboardProjectSchema(BaseModel):
     """Карточка проекта на общем дашборде."""
 
     model_config = ConfigDict(from_attributes=True)
+    risks: ProjectRiskSummarySchema = Field(
+        default_factory=ProjectRiskSummarySchema, description="Сигналы проектного реестра рисков."
+    )
 
     id: int = Field(..., description="Идентификатор проекта.", examples=[1])
     key: str = Field(..., description="Короткий код проекта.", examples=["PROJ"])

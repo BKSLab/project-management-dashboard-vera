@@ -19,6 +19,7 @@ from src.exceptions.clients import (
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
+from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
@@ -91,6 +92,7 @@ def build_service(*, semantic_available: bool = True):
     stages.get_by_project.return_value = [stage]
     tasks = AsyncMock(spec=TasksRepository)
     tasks.search_ranked.return_value = [task]
+    tasks.get_by_ids.return_value = [task]
     nodes = AsyncMock(spec=WbsNodesRepository)
     nodes.get_by_project.return_value = []
     documents = AsyncMock(spec=DocumentsRepository)
@@ -134,6 +136,12 @@ def build_service(*, semantic_available: bool = True):
     projects = AsyncMock(spec=ProjectsRepository)
     projects.get_by_id.return_value = project
     db = ProjectAgentScope(
+        risks=AsyncMock(
+            spec=ProjectRiskRepository,
+            get_page=AsyncMock(return_value=[]),
+            get_by_ids=AsyncMock(return_value=[]),
+            get_aggregates=AsyncMock(return_value=[]),
+        ),
         projects=projects,
         stages=stages,
         tasks=tasks,
@@ -250,6 +258,12 @@ async def test_model_selected_statistics_tool_is_executed() -> None:
 @pytest.mark.asyncio
 async def test_hybrid_context_merges_lexical_and_vector_candidates() -> None:
     service, project, runtime, db = build_service()
+    db.tasks.get_by_ids.return_value[0].checklist = {
+        "title": "Приёмка",
+        "items": [
+            {"text": "Согласовать владельцев рисков", "is_completed": True},
+        ],
+    }
     now = datetime.now(UTC)
     document = Document(
         id=5,
@@ -281,7 +295,7 @@ async def test_hybrid_context_merges_lexical_and_vector_candidates() -> None:
                 "entity_id": "7",
                 "task_id": "7",
                 "title": "PROJ-12 · Подготовить паспорт рисков",
-                "text": "Семантический фрагмент задачи.",
+                "text": "[ ] Согласовать владельцев рисков",
             },
         ),
     ]
@@ -294,7 +308,12 @@ async def test_hybrid_context_merges_lexical_and_vector_candidates() -> None:
     assert retrieval[0]["current_data"]["slug"] == "risk-register"
     assert retrieval[0]["semantic_fragment"]["text"] == "Семантический фрагмент реестра."
     assert retrieval[1]["current_data"]["task_key"] == "PROJ-12"
-    assert retrieval[1]["semantic_fragment"]["text"] == "Семантический фрагмент задачи."
+    assert retrieval[1]["semantic_fragment"]["description"] == "Согласовать владельцев рисков"
+    assert "text" not in retrieval[1]["semantic_fragment"]
+    for source in (retrieval[1]["current_data"], retrieval[1]["semantic_fragment"]):
+        assert source["checklist"]["items"] == [
+            {"text": "Согласовать владельцев рисков", "is_completed": True}
+        ]
 
 
 @pytest.mark.asyncio
@@ -484,7 +503,9 @@ async def test_agent_preview_tool_calls_read_only_scenario_service() -> None:
 
     runtime.llm_client.get_structured_response.side_effect = select_preview
 
-    answer = await service.ask(project_id=project.id, question="Что если сдвинуть PROJ-12?", history=[])
+    answer = await service.ask(
+        project_id=project.id, question="Что если сдвинуть PROJ-12?", history=[]
+    )
 
     assert "не применены" in answer.answer
     db.scenario.preview.assert_awaited_once_with(

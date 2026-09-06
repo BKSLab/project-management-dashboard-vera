@@ -22,12 +22,15 @@ class ProjectMembersRepository:
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
 
-    async def get(self, project_id: int, user_id: int) -> ProjectMember | None:
+    async def get(
+        self, project_id: int, user_id: int, *, for_update: bool = False
+    ) -> ProjectMember | None:
         """Возвращает участие пользователя в проекте.
 
         Args:
             project_id: Идентификатор проекта.
             user_id: Идентификатор пользователя.
+            for_update: Сериализовать назначение риска и удаление участника.
 
         Returns:
             Найденное участие или ``None``, если доступа нет.
@@ -36,14 +39,15 @@ class ProjectMembersRepository:
             ProjectsRepositoryError: Если запрос к БД завершился ошибкой.
         """
         try:
-            result: Result = await self.db_session.execute(
-                select(ProjectMember).where(
-                    and_(
-                        ProjectMember.project_id == project_id,
-                        ProjectMember.user_id == user_id,
-                    )
+            statement = select(ProjectMember).where(
+                and_(
+                    ProjectMember.project_id == project_id,
+                    ProjectMember.user_id == user_id,
                 )
             )
+            if for_update:
+                statement = statement.with_for_update()
+            result: Result = await self.db_session.execute(statement)
             return result.scalar_one_or_none()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()

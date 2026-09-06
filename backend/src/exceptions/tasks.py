@@ -26,6 +26,27 @@ class TasksServiceError(ServiceError):
     detail = "Не удалось выполнить операцию с задачами."
 
 
+class TaskChecklistConflictError(TasksServiceError):
+    """Кто-то уже изменил чек-лист после получения карточки."""
+
+    status_code = status.HTTP_409_CONFLICT
+    detail = "Чек-лист уже изменён. Обновите его и повторите правки."
+
+
+class TaskChecklistValidationError(TasksServiceError):
+    """Пункты или версия чек-листа не соответствуют контракту."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    detail = "Проверьте пункты и текущую версию чек-листа."
+
+
+class TaskChecklistGenerationError(TasksServiceError):
+    """Модель не вернула допустимое предложение."""
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    detail = "Не удалось сформировать чек-лист. Попробуйте ещё раз."
+
+
 class TaskNotFoundError(TasksServiceError):
     """Задача не найдена."""
 

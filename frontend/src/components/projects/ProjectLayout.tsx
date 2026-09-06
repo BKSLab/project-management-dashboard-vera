@@ -9,7 +9,6 @@ import { ProjectStatusBadge, StatusDot } from "@/components/ui/Badge";
 import { IconButton } from "@/components/ui/Button";
 import { ProgressBar } from "@/components/ui/Progress";
 import { EmptyState, ErrorMessage, Skeleton } from "@/components/ui/States";
-import { TaskDrawer } from "@/components/tasks/TaskDrawer";
 
 const TABS = [
     { path: "", label: "Пульс", end: true },
@@ -18,6 +17,7 @@ const TABS = [
     { path: "tasks", label: "Задачи", end: false },
     { path: "calendar", label: "Календарь", end: false },
     { path: "structure", label: "Структура", end: false },
+    { path: "risks", label: "Риски", end: false },
     { path: "whiteboard", label: "Доска", end: false },
     { path: "docs", label: "Документы", end: false },
     { path: "knowledge", label: "AI-вики", end: false },
@@ -155,7 +155,6 @@ export function ProjectLayout() {
                 <Outlet context={{ project }} />
             </div>
 
-            <TaskDrawer />
         </div>
     );
 }

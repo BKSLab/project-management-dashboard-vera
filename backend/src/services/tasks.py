@@ -1,6 +1,8 @@
 import logging
 from datetime import UTC, datetime
 
+from pydantic import ValidationError
+
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.project_members import ProjectMember, ProjectRole
 from src.db.models.task_activity import TaskActivityEventType
@@ -17,6 +19,8 @@ from src.exceptions.storage import TaskAttachmentStorageError
 from src.exceptions.task_activity import TaskActivityRepositoryError
 from src.exceptions.task_comments import TaskCommentsRepositoryError
 from src.exceptions.tasks import (
+    TaskChecklistConflictError,
+    TaskChecklistValidationError,
     TaskDateRangeError,
     TaskNotFoundError,
     TaskNumberAllocationError,
@@ -41,13 +45,15 @@ from src.repositories.task_participants import TaskParticipantsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.wbs_nodes import WbsNodesRepository
+from src.schemas.task_checklists import TaskChecklistSchema
 from src.schemas.tasks import TaskParticipantSchema, TaskSchema
 from src.services.auth import to_user_summary
 from src.services.knowledge_events import KnowledgeEvents
 from src.storage.task_attachments import TaskAttachmentStorage
+from src.utils.checklists import checklist_text
 
 logger = logging.getLogger(__name__)
-TASK_SEMANTIC_FIELDS = frozenset({"title", "description_md"})
+TASK_SEMANTIC_FIELDS = frozenset({"title", "description_md", "checklist"})
 TASK_PARTICIPANT_FIELDS = frozenset({"executor_id", "reporter_id", "observer_ids"})
 
 POSITION_STEP = 1000.0
@@ -217,6 +223,9 @@ class TasksService:
         try:
             project = await self._get_project(project_id=project_id)
             payload = dict(data)
+            if "checklist" in payload:
+                payload["checklist"] = _normalize_checklist(payload["checklist"])
+                payload["checklist_revision"] = 1 if payload["checklist"] is not None else 0
             participant_data = self._extract_participant_data(payload)
             if created_by_user_id is not None and participant_data.get("reporter_id") is None:
                 participant_data["reporter_id"] = created_by_user_id
@@ -273,6 +282,7 @@ class TasksService:
             return await self._to_task_schema(task=task, project_key=project.key)
         except RepositoryErrors as error:
             logger.error("❌ Ошибка создания задачи в проекте id=%s.", project_id, exc_info=True)
+            await self.unit_of_work.rollback()
             raise TasksServiceError(str(error)) from error
 
     async def update_task(
@@ -295,9 +305,24 @@ class TasksService:
             TasksServiceError: Если обновить задачу не удалось.
         """
         try:
-            task = await self._get_task(task_id=task_id)
-            project = await self._get_project(project_id=task.project_id)
             payload = dict(data)
+            if "checklist" in payload:
+                expected_revision = payload.pop("checklist_revision", None)
+                if type(expected_revision) is not int or expected_revision < 0:
+                    raise TaskChecklistValidationError("Не указана текущая версия чек-листа.")
+                payload["checklist"] = _normalize_checklist(payload["checklist"])
+                task = await self.tasks_repository.get_for_update(task_id=task_id)
+                if task is None:
+                    raise TaskNotFoundError(task_id=task_id)
+                if task.checklist_revision != expected_revision:
+                    await self.unit_of_work.rollback()
+                    raise TaskChecklistConflictError("Версия чек-листа изменилась.")
+                payload["checklist_revision"] = expected_revision + 1
+            else:
+                if "checklist_revision" in payload:
+                    raise TaskChecklistValidationError("Нельзя менять версию отдельно.")
+                task = await self._get_task(task_id=task_id)
+            project = await self._get_project(project_id=task.project_id)
             participant_patch = self._extract_participant_data(payload)
             self._validate_schedule(
                 start_date=payload.get("start_date", task.start_date),
@@ -337,9 +362,7 @@ class TasksService:
 
             await self._record_field_changes(task=task, data=payload)
             updated = (
-                await self.tasks_repository.update(task=task, data=payload)
-                if payload
-                else task
+                await self.tasks_repository.update(task=task, data=payload) if payload else task
             )
             if assignments is not None:
                 await self._replace_participants(
@@ -356,6 +379,7 @@ class TasksService:
             return await self._to_task_schema(task=updated, project_key=project.key)
         except RepositoryErrors as error:
             logger.error("❌ Ошибка обновления задачи id=%s.", task_id, exc_info=True)
+            await self.unit_of_work.rollback()
             raise TasksServiceError(str(error)) from error
 
     async def move_task(
@@ -531,11 +555,7 @@ class TasksService:
     @staticmethod
     def _extract_participant_data(payload: dict) -> dict:
         """Извлекает API-поля участников, чтобы они не попали в ORM Task."""
-        return {
-            field: payload.pop(field)
-            for field in TASK_PARTICIPANT_FIELDS
-            if field in payload
-        }
+        return {field: payload.pop(field) for field in TASK_PARTICIPANT_FIELDS if field in payload}
 
     async def _resolve_participant_assignments(
         self,
@@ -552,8 +572,7 @@ class TasksService:
         if reporter_id is not None:
             requested.append((TaskParticipantRole.REPORTER, reporter_id))
         requested.extend(
-            (TaskParticipantRole.OBSERVER, user_id)
-            for user_id in dict.fromkeys(observer_ids)
+            (TaskParticipantRole.OBSERVER, user_id) for user_id in dict.fromkeys(observer_ids)
         )
         if not requested:
             return [], {}
@@ -624,6 +643,13 @@ class TasksService:
 
     async def _record_field_changes(self, task: Task, data: dict) -> None:
         """Фиксирует изменения значимых полей задачи в истории."""
+        if "checklist" in data and data["checklist"] != task.checklist:
+            await self.activity_repository.save(
+                task_id=task.id,
+                event_type=TaskActivityEventType.CHECKLIST_CHANGED,
+                from_value=(checklist_text(task.checklist).splitlines() or [None])[0],
+                to_value=(checklist_text(data["checklist"]).splitlines() or [None])[0],
+            )
         if "due_date" in data and data["due_date"] != task.due_date:
             await self.activity_repository.save(
                 task_id=task.id,
@@ -679,7 +705,6 @@ class TasksService:
         if start_date is not None and due_date is not None and start_date > due_date:
             raise TaskDateRangeError()
 
-
     async def _replace_participants(self, task_id: int, assignments: list[dict]) -> None:
         """Заменяет ролевые назначения задачи: удаление и вставка.
 
@@ -689,6 +714,7 @@ class TasksService:
         """
         await self.participants_repository.delete_for_task(task_id)
         await self.participants_repository.save_many(task_id, assignments)
+
 
 def build_task_key(project_key: str, number: int) -> str:
     """Возвращает отображаемый идентификатор задачи вида ``PROJ-142``."""
@@ -723,6 +749,8 @@ def to_task_schema(
         key=build_task_key(project_key=project_key, number=task.number),
         title=task.title,
         description_md=task.description_md,
+        checklist=getattr(task, "checklist", None),
+        checklist_revision=getattr(task, "checklist_revision", None) or 0,
         priority=task.priority,
         role=task.role,
         assignee=task.assignee,
@@ -742,6 +770,16 @@ def to_task_schema(
         created_at=task.created_at,
         updated_at=task.updated_at,
     )
+
+
+def _normalize_checklist(value: dict | None) -> dict | None:
+    """Проверяет агрегат также для внутренних клиентов и переводит UUID в JSON."""
+    if value is None:
+        return None
+    try:
+        return TaskChecklistSchema.model_validate(value).model_dump(mode="json")
+    except ValidationError as error:
+        raise TaskChecklistValidationError(str(error)) from error
 
 
 def to_task_participant_schema(participant: TaskParticipant) -> TaskParticipantSchema:

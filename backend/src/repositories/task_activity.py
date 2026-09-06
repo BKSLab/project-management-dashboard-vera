@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import Result, select
+from sqlalchemy import Result, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,6 +63,34 @@ class TaskActivityRepository:
             logger.error("❌ Не удалось получить историю проекта id=%s.", project_id, exc_info=True)
             raise TaskActivityRepositoryError(
                 f"Ошибка получения истории проекта id={project_id}."
+            ) from error
+
+    async def get_count_by_project(self, *, project_id: int) -> int:
+        """Считает всю историю для указания границ аналитического среза.
+
+        Args:
+            project_id: Проект области анализа.
+
+        Returns:
+            Число событий всех задач проекта.
+
+        Raises:
+            TaskActivityRepositoryError: Ошибка чтения истории.
+        """
+        try:
+            result = await self.db_session.execute(
+                select(func.count(TaskActivity.id))
+                .join(Task, Task.id == TaskActivity.task_id)
+                .where(Task.project_id == project_id)
+            )
+            return result.scalar_one()
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось посчитать историю проекта id=%s.", project_id, exc_info=True
+            )
+            raise TaskActivityRepositoryError(
+                f"Ошибка подсчёта истории проекта id={project_id}."
             ) from error
 
     async def get_recent_due_date_changes(

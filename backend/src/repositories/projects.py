@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import Result, func, select
+from sqlalchemy import Result, func, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,24 @@ class ProjectsRepository:
 
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
+
+    async def touch(self, project_id: int) -> None:
+        """Отмечает изменение содержимого проекта в общей транзакции.
+
+        Args:
+            project_id: Проект изменённого риска.
+
+        Raises:
+            ProjectsRepositoryError: Если обновить время не удалось.
+        """
+        try:
+            await self.db_session.execute(
+                update(Project).where(Project.id == project_id).values(updated_at=func.now())
+            )
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось обновить время проекта id=%s.", project_id, exc_info=True)
+            raise ProjectsRepositoryError("Ошибка обновления времени проекта.") from error
 
     async def get_all(self) -> list[Project]:
         """Возвращает проекты в порядке отображения.

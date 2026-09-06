@@ -108,11 +108,18 @@ class ProjectStickersService:
     ) -> ProjectStickerSchema:
         """Сохраняет положение стикера отдельно от версии его содержимого."""
         try:
+            position_changes = {
+                "project_id": project_id,
+                "sticker_id": sticker_id,
+                "canvas_x": data.canvas_x,
+                "canvas_y": data.canvas_y,
+            }
+            if data.width is not None:
+                position_changes["width"] = data.width
+            if data.height is not None:
+                position_changes["height"] = data.height
             moved = await self.stickers_repository.update_position(
-                project_id=project_id,
-                sticker_id=sticker_id,
-                canvas_x=data.canvas_x,
-                canvas_y=data.canvas_y,
+                **position_changes,
             )
             if not moved:
                 raise ProjectStickerNotFoundError(sticker_id)
@@ -226,6 +233,8 @@ def _to_sticker_schema(sticker: ProjectSticker) -> ProjectStickerSchema:
         color=sticker.color,
         canvas_x=sticker.canvas_x,
         canvas_y=sticker.canvas_y,
+        width=getattr(sticker, "width", 230.0),
+        height=getattr(sticker, "height", 230.0),
         created_by_user_id=sticker.created_by_user_id,
         created_by_username_snapshot=sticker.created_by_username_snapshot,
         created_by_display_name_snapshot=sticker.created_by_display_name_snapshot,

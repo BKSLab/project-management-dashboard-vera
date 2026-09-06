@@ -115,9 +115,7 @@ class ProjectStickersRepository:
             await self.db_session.flush()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()
-            logger.error(
-                "❌ Не удалось изменить связи стикера id=%s.", sticker_id, exc_info=True
-            )
+            logger.error("❌ Не удалось изменить связи стикера id=%s.", sticker_id, exc_info=True)
             raise ProjectStickersRepositoryError(
                 f"Ошибка изменения связей стикера id={sticker_id}."
             ) from error
@@ -205,6 +203,8 @@ class ProjectStickersRepository:
         sticker_id: int,
         canvas_x: float,
         canvas_y: float,
+        width: float | None = None,
+        height: float | None = None,
     ) -> bool:
         """Перемещает стикер, не меняя ревизию и дату его содержимого.
 
@@ -221,19 +221,22 @@ class ProjectStickersRepository:
             ProjectStickersRepositoryError: Если перемещение не удалось.
         """
         try:
+            values: dict[str, Any] = {
+                "canvas_x": canvas_x,
+                "canvas_y": canvas_y,
+                "updated_at": ProjectSticker.updated_at,
+            }
+            if width is not None:
+                values["width"] = width
+            if height is not None:
+                values["height"] = height
             statement = (
                 update(ProjectSticker)
                 .where(
                     ProjectSticker.id == sticker_id,
                     ProjectSticker.project_id == project_id,
                 )
-                .values(
-                    canvas_x=canvas_x,
-                    canvas_y=canvas_y,
-                    # ``updated_at`` имеет ORM onupdate, но движение по холсту
-                    # не является правкой текста стикера.
-                    updated_at=ProjectSticker.updated_at,
-                )
+                .values(**values)
                 .returning(ProjectSticker.id)
             )
             result: Result = await self.db_session.execute(statement)

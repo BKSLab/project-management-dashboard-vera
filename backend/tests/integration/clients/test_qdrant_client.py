@@ -181,6 +181,7 @@ async def test_task_upsert_preserves_comment_and_attachment_points(qdrant_url: s
     ]
     embedding_client = SimpleNamespace(get_embeddings=AsyncMock(return_value=[[1.0, 0.0, 0.0]]))
     service = KnowledgeIndexService(
+        risks_repository=SimpleNamespace(),
         projects_repository=SimpleNamespace(),
         tasks_repository=SimpleNamespace(),
         wbs_nodes_repository=SimpleNamespace(),

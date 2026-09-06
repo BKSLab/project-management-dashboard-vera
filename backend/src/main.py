@@ -21,11 +21,15 @@ from src.api.v1.endpoints.documents import router as documents_router
 from src.api.v1.endpoints.knowledge import router as knowledge_router
 from src.api.v1.endpoints.milestones import router as milestones_router
 from src.api.v1.endpoints.project_members import router as project_members_router
+from src.api.v1.endpoints.project_risks import router as project_risks_router
 from src.api.v1.endpoints.project_stages import router as project_stages_router
 from src.api.v1.endpoints.project_stickers import router as project_stickers_router
 from src.api.v1.endpoints.projects import router as projects_router
+from src.api.v1.endpoints.risk_formulation import router as risk_formulation_router
+from src.api.v1.endpoints.risk_suggestions import router as risk_suggestions_router
 from src.api.v1.endpoints.task_activity import router as task_activity_router
 from src.api.v1.endpoints.task_attachments import router as task_attachments_router
+from src.api.v1.endpoints.task_checklists import router as task_checklists_router
 from src.api.v1.endpoints.task_comments import router as task_comments_router
 from src.api.v1.endpoints.task_dependencies import router as task_dependencies_router
 from src.api.v1.endpoints.task_documents import router as task_documents_router
@@ -169,6 +173,10 @@ async def validation_exception_handler(
 
 
 for api_router in (
+    project_risks_router,
+    risk_suggestions_router,
+    risk_formulation_router,
+    task_checklists_router,
     auth_router,
     users_router,
     api_tokens_router,

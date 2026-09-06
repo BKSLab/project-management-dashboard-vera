@@ -13,6 +13,15 @@ from fastapi.routing import APIRoute
 from main import app
 
 FROZEN_ROUTES: set[tuple[str, str]] = {
+    ("POST", "/api/v1/projects/{project_id}/tasks/checklist-suggestion"),
+    ("GET", "/api/v1/projects/{project_id}/risks"),
+    ("POST", "/api/v1/projects/{project_id}/risks"),
+    ("GET", "/api/v1/projects/{project_id}/risks/summary"),
+    ("GET", "/api/v1/projects/{project_id}/risks/task-counts"),
+    ("POST", "/api/v1/projects/{project_id}/risks/suggestions"),
+    ("GET", "/api/v1/projects/{project_id}/risks/{risk_id}"),
+    ("PATCH", "/api/v1/projects/{project_id}/risks/{risk_id}"),
+    ("DELETE", "/api/v1/projects/{project_id}/risks/{risk_id}"),
     ("POST", "/api/v1/auth/login"),
     ("POST", "/api/v1/auth/logout"),
     ("GET", "/api/v1/auth/me"),
@@ -114,6 +123,8 @@ SESSION_ONLY_ROUTES: set[tuple[str, str]] = {
 
 # POST, которые ничего не меняют: расчёт, предпросмотр и поиск.
 READ_ONLY_POST_ROUTES: set[tuple[str, str]] = {
+    ("POST", "/api/v1/projects/{project_id}/tasks/checklist-suggestion"),
+    ("POST", "/api/v1/projects/{project_id}/risks/suggestions"),
     ("POST", "/api/v1/projects/{project_id}/calendar/scenarios/preview"),
     ("POST", "/api/v1/projects/{project_id}/tasks/rephrase"),
     ("POST", "/api/v1/projects/{project_id}/wbs/suggestion"),
@@ -155,14 +166,19 @@ def test_non_get_routes_are_fully_classified() -> None:
     overlap = [
         pair
         for pair in explicit
-        if sum(pair in group for group in (PUBLIC_ROUTES, SESSION_ONLY_ROUTES, READ_ONLY_POST_ROUTES)) > 1
+        if sum(
+            pair in group for group in (PUBLIC_ROUTES, SESSION_ONLY_ROUTES, READ_ONLY_POST_ROUTES)
+        )
+        > 1
     ]
     assert not overlap, f"Маршрут попал в несколько классов: {sorted(overlap)}"
-    assert explicit <= non_get, f"Классифицирован несуществующий маршрут: {sorted(explicit - non_get)}"
+    assert explicit <= non_get, (
+        f"Классифицирован несуществующий маршрут: {sorted(explicit - non_get)}"
+    )
 
     mutations = non_get - explicit
-    assert len(non_get) == 56, f"Изменилось число изменяющих маршрутов: {len(non_get)}"
-    assert len(mutations) == 47, f"Изменилось число доменных мутаций: {len(mutations)}"
+    assert len(non_get) == 61, f"Изменилось число изменяющих маршрутов: {len(non_get)}"
+    assert len(mutations) == 50, f"Изменилось число доменных мутаций: {len(mutations)}"
 
 
 def test_every_route_has_unique_method_and_path() -> None:

@@ -13,10 +13,12 @@ from src.exceptions.projects import (
     ProjectOwnerRemovalError,
 )
 from src.repositories.project_members import ProjectMembersRepository
+from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.task_participants import TaskParticipantsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.users import UsersRepository
+from src.services.knowledge_events import KnowledgeEvents
 from src.services.project_members import ProjectMembersService
 from src.services.users import UsersService
 
@@ -64,6 +66,8 @@ def build_service(
         tasks_repository=tasks or AsyncMock(spec=TasksRepository),
         unit_of_work=unit_of_work or AsyncMock(spec=UnitOfWork),
         users_service=users_service or AsyncMock(spec=UsersService),
+        risks_repository=AsyncMock(spec=ProjectRiskRepository),
+        knowledge_events=AsyncMock(spec=KnowledgeEvents),
     )
 
 

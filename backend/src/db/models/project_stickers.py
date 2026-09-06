@@ -89,6 +89,12 @@ class ProjectSticker(Base, TimestampMixin):
         doc="Координата Y левого верхнего угла стикера на холсте.",
         comment="Координата Y стикера на Project Board.",
     )
+    width: Mapped[float] = mapped_column(
+        Float, nullable=False, default=230.0, doc="Ширина стикера на холсте."
+    )
+    height: Mapped[float] = mapped_column(
+        Float, nullable=False, default=230.0, doc="Высота стикера на холсте."
+    )
     created_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,

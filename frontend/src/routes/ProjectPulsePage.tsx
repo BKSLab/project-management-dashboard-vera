@@ -20,6 +20,8 @@ import { ErrorMessage, Skeleton } from "@/components/ui/States";
 import { TaskLine } from "@/components/tasks/TaskLine";
 import { PulseBoard } from "@/components/pulse/PulseBoard";
 import { PulseFacts, StageBreakdown } from "@/components/pulse/PulseBreakdown";
+import { RiskSummaryPanel } from "@/components/risks/RiskSummaryPanel";
+import { useRiskSummary } from "@/lib/useRisks";
 
 const UPCOMING_LIMIT = 8;
 
@@ -44,6 +46,7 @@ function Description({ markdown }: { markdown: string }) {
  */
 export function ProjectPulsePage() {
   const project = useProjectOutlet();
+  const risks = useRiskSummary(project.id);
   const setSelectedTaskId = useUiStore((state) => state.setSelectedTaskId);
 
   const statsQuery = useQuery({
@@ -87,12 +90,7 @@ export function ProjectPulsePage() {
         <PulseBoard
           projectId={project.id}
           onOpenTask={setSelectedTaskId}
-          dataUpdatedAt={latestUpdate(tasksQuery.data ?? [])}
-          blockedReason={
-            stats && stats.total_tasks === 0
-              ? "В проекте пока нет задач"
-              : undefined
-          }
+          dataUpdatedAt={latestUpdate([...(tasksQuery.data ?? []), project, ...(risks.data?.latest_update ? [{ updated_at: risks.data.latest_update }] : [])])}
           metrics={
             statsQuery.isPending ? (
               <Skeleton className="h-[88px] w-full rounded-none" />
@@ -132,9 +130,11 @@ export function ProjectPulsePage() {
             ) : undefined
           }
           breakdown={
-            stats && stats.stage_breakdown.length > 0 ? (
-              <StageBreakdown stages={stats.stage_breakdown} />
-            ) : undefined
+            <div className="flex flex-col gap-4">
+              {stats && stats.stage_breakdown.length > 0 && <StageBreakdown stages={stats.stage_breakdown} />}
+              {risks.data && <RiskSummaryPanel summary={risks.data} projectKey={project.key} />}
+              {risks.error && <ErrorMessage title="Риски недоступны" message={risks.error.message} />}
+            </div>
           }
           facts={
             <PulseFacts

@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.db.models.task_participants import TaskParticipantRole
 from src.schemas.enums import TaskPriority, TaskRole
+from src.schemas.task_checklists import TaskChecklistSchema
 from src.schemas.users import UserSummarySchema
 
 
@@ -22,6 +23,11 @@ class TaskParticipantSchema(BaseModel):
 
 class TaskSchema(BaseModel):
     """Задача проекта с агрегированным контекстом."""
+
+    checklist: TaskChecklistSchema | None = Field(None, description="Чек-лист задачи или null.")
+    checklist_revision: int = Field(
+        0, ge=0, description="Текущая версия чек-листа для записи.", examples=[2]
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -115,6 +121,8 @@ class TaskSchema(BaseModel):
 class TaskCompactSchema(BaseModel):
     """Компактное представление задачи для пула ИСР и canvas."""
 
+    checklist: TaskChecklistSchema | None = Field(None, description="Чек-лист задачи, если создан.")
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int = Field(..., description="Уникальный идентификатор задачи.", examples=[142])
@@ -158,6 +166,10 @@ class TaskCompactSchema(BaseModel):
 
 class TaskCreateSchema(BaseModel):
     """Тело запроса для создания задачи."""
+
+    checklist: TaskChecklistSchema | None = Field(
+        None, description="Чек-лист, сохраняемый атомарно с задачей."
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -255,6 +267,9 @@ class TaskRephraseFile:
 class TaskRephraseRequestSchema(BaseModel):
     """Черновик и выбранный контекст для переформулирования описания."""
 
+    checklist: TaskChecklistSchema | None = Field(
+        None, description="Текущий черновик чек-листа задачи."
+    )
     title: str = Field("", max_length=512, description="Название новой или существующей задачи.")
     description_md: str = Field(
         ...,
@@ -282,6 +297,27 @@ class TaskRephraseResultSchema(BaseModel):
 
 class TaskUpdateSchema(BaseModel):
     """Тело запроса для частичного обновления задачи."""
+
+    checklist: TaskChecklistSchema | None = Field(
+        None,
+        description="Полный чек-лист в новом порядке; null удаляет, отсутствие поля сохраняет.",
+    )
+    checklist_revision: int | None = Field(
+        None,
+        ge=0,
+        strict=True,
+        description="Ожидаемая версия; обязательна при любом изменении чек-листа.",
+        examples=[2],
+    )
+
+    @model_validator(mode="after")
+    def validate_checklist_revision(self):
+        changes = "checklist" in self.model_fields_set
+        if changes and self.checklist_revision is None:
+            raise ValueError("Для изменения чек-листа укажите checklist_revision.")
+        if not changes and "checklist_revision" in self.model_fields_set:
+            raise ValueError("Версию чек-листа нельзя изменять отдельно.")
+        return self
 
     model_config = ConfigDict(json_schema_extra={"example": {"priority": "URGENT"}})
 

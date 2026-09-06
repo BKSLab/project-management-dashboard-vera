@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
     Bot,
+    ShieldAlert,
     Database,
     Diamond,
     FileText,
@@ -53,6 +54,7 @@ function MarkdownAnswer({ content }: { content: string }) {
 }
 
 function sourceIcon(source: KnowledgeSource) {
+    if (source.entity_type === "risk") return <ShieldAlert size={13} />;
     if (source.entity_type === "document") return <FileText size={13} />;
     if (source.entity_type === "comment") return <MessageSquare size={13} />;
     if (source.entity_type === "attachment") return <Paperclip size={13} />;
@@ -137,6 +139,10 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
     }
 
     function openSource(source: KnowledgeSource) {
+        if (source.entity_type === "risk") {
+            useUiStore.getState().setSelectedRisk({ projectId: project.id, riskId: source.entity_id });
+            return;
+        }
         if (source.task_id !== null) {
             setSelectedTaskId(source.task_id);
             return;

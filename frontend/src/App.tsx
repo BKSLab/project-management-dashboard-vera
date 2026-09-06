@@ -14,6 +14,7 @@ import { DocumentDetailPage } from "@/routes/DocumentDetailPage";
 import { ProjectSettingsPage } from "@/routes/ProjectSettingsPage";
 import { ProjectKnowledgePage } from "@/routes/ProjectKnowledgePage";
 import { ProjectPulsePage } from "@/routes/ProjectPulsePage";
+import { ProjectRisksPage } from "@/routes/ProjectRisksPage";
 import { McpPage } from "@/routes/McpPage";
 import { ProfilePage } from "@/routes/ProfilePage";
 import { LoginPage } from "@/routes/LoginPage";
@@ -86,6 +87,7 @@ function ProtectedApp() {
                         <Route path="team" element={<ProjectTeamPage />} />
                         <Route path="board" element={<BoardPage />} />
                         <Route path="tasks" element={<TasksListPage />} />
+                        <Route path="risks" element={<ProjectRisksPage />} />
                         <Route
                             path="calendar"
                             element={

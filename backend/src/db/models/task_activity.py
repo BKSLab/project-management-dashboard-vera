@@ -25,6 +25,7 @@ class TaskActivityEventType(str, enum.Enum):
     ASSIGNEE_CHANGED = "ASSIGNEE_CHANGED"
     WBS_NODE_CHANGED = "WBS_NODE_CHANGED"
     COMMENT_ADDED = "COMMENT_ADDED"
+    CHECKLIST_CHANGED = "CHECKLIST_CHANGED"
 
 
 class TaskActivity(Base):

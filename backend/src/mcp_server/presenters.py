@@ -70,6 +70,7 @@ def task_summary(task: TaskSummaryDto) -> dict:
     """Возвращает краткую карточку задачи для списка."""
     return {
         "task_key": task.task_key,
+        "checklist": task.checklist,
         "title": task.title,
         "stage": task.stage,
         "is_done": task.is_done,

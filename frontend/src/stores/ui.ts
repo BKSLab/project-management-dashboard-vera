@@ -6,6 +6,8 @@ interface UiState {
     /** Открытая карточка задачи — общая для канбана, списка и структуры. */
     selectedTaskId: number | null;
     setSelectedTaskId: (taskId: number | null) => void;
+    selectedRisk: { projectId: number; riskId: number } | null;
+    setSelectedRisk: (risk: { projectId: number; riskId: number } | null) => void;
 
     sidebarCollapsed: boolean;
     toggleSidebar: () => void;
@@ -21,7 +23,9 @@ interface UiState {
 
 export const useUiStore = create<UiState>((set) => ({
     selectedTaskId: null,
-    setSelectedTaskId: (taskId) => set({ selectedTaskId: taskId }),
+    setSelectedTaskId: (taskId) => set(taskId === null ? { selectedTaskId: null } : { selectedTaskId: taskId, selectedRisk: null }),
+    selectedRisk: null,
+    setSelectedRisk: (risk) => set(risk === null ? { selectedRisk: null } : { selectedRisk: risk, selectedTaskId: null }),
 
     sidebarCollapsed: false,
     toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),

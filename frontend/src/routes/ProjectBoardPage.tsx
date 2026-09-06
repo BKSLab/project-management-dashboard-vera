@@ -117,6 +117,8 @@ export function ProjectBoardPage() {
                         ...sticker,
                         canvas_x: moved.canvas_x,
                         canvas_y: moved.canvas_y,
+                        width: moved.width,
+                        height: moved.height,
                     }
                     : sticker,
                 ),
@@ -168,6 +170,7 @@ export function ProjectBoardPage() {
             onCreate={(input) => createMutation.mutateAsync(input)}
             onUpdate={(sticker, input) => updateMutation.mutateAsync({ sticker, input })}
             onMove={(sticker, position) => moveMutation.mutateAsync({ sticker, position })}
+            onResize={(sticker, size) => moveMutation.mutateAsync({ sticker, position: { canvas_x: sticker.canvas_x, canvas_y: sticker.canvas_y, ...size } })}
             onDelete={(sticker) => deleteMutation.mutateAsync(sticker)}
         />
     );

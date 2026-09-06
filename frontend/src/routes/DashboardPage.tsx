@@ -10,6 +10,7 @@ import {
 import { api, endpoints, queryKeys } from "@/lib/api";
 import { formatFullDate } from "@/lib/dates";
 import { latestUpdate } from "@/lib/pulse";
+import { RISK_SIGNAL_LABELS } from "@/lib/risks";
 import type { Dashboard } from "@/lib/types";
 import { Page } from "@/components/layout/AppShell";
 import { LinkButton } from "@/components/ui/Button";
@@ -20,7 +21,6 @@ import { PulseBoard } from "@/components/pulse/PulseBoard";
 import { PortfolioScope, PulseFacts } from "@/components/pulse/PulseBreakdown";
 import { ProjectCard } from "@/components/dashboard/ProjectCard";
 import { TaskRow } from "@/components/dashboard/TaskRow";
-import { TaskDrawer } from "@/components/tasks/TaskDrawer";
 import { useUiStore } from "@/stores/ui";
 
 function DashboardSkeleton() {
@@ -64,6 +64,8 @@ export function DashboardPage() {
     (project) => project.status === "ACTIVE",
   );
   const shownProjects = activeProjects.slice(0, PROJECTS_ON_PORTFOLIO);
+  const riskAttention = activeProjects.filter((project) => (project.risks?.signals.length ?? 0) > 0)
+    .sort((first, second) => (second.risks?.high_risks ?? 0) - (first.risks?.high_risks ?? 0));
 
   return (
     <Page>
@@ -204,9 +206,15 @@ export function DashboardPage() {
             facts={
               <PulseFacts
                 title="Требуют внимания"
-                count={dashboardQuery.data.attention_tasks.length}
-                empty="Просроченных и ближайших сроков нет."
+                count={dashboardQuery.data.attention_tasks.length + riskAttention.length}
+                empty="Срочных задач и сигналов по рискам нет."
               >
+                {riskAttention.map((project) => (
+                  <Link key={project.id} to={`/projects/${project.key}/risks`} className="mb-1 flex items-center justify-between gap-3 rounded-control px-3 py-2 text-[12px] hover:bg-hover">
+                    <span className="truncate text-primary">{project.name}</span>
+                    <span className="text-right text-warning">{project.risks?.signals.map((signal) => `${RISK_SIGNAL_LABELS[signal.code]}: ${signal.count}`).join(" · ")}</span>
+                  </Link>
+                ))}
                 {dashboardQuery.data.attention_tasks.map((task) => (
                   <TaskRow
                     key={task.id}
@@ -244,7 +252,6 @@ export function DashboardPage() {
         </>
       )}
 
-      <TaskDrawer />
     </Page>
   );
 }

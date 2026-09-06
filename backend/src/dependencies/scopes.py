@@ -27,6 +27,7 @@ from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_members import ProjectMembersRepository
+from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.project_stickers import ProjectStickersRepository
 from src.repositories.projects import ProjectsRepository
@@ -34,6 +35,7 @@ from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.task_dependencies import TaskDependenciesRepository
+from src.repositories.task_participants import TaskParticipantsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.users import UsersRepository
@@ -56,10 +58,92 @@ from src.services.db_scope import (
 from src.services.document_links import DocumentLinksService
 from src.services.documents import DocumentsService
 from src.services.knowledge_events import KnowledgeEvents
+from src.services.risk_suggestions import RiskSuggestionScope, RiskSuggestionScopeFactory
 from src.services.task_attachments import TaskAttachmentsService
+from src.services.task_checklist_suggestions import (
+    ChecklistSuggestionScope,
+    ChecklistSuggestionScopeFactory,
+)
 from src.storage.task_attachments import TaskAttachmentStorage
 
 SessionFactory = async_sessionmaker[AsyncSession]
+
+
+def build_checklist_suggestion_scope(
+    *, session_factory: SessionFactory, settings: Settings
+) -> ChecklistSuggestionScopeFactory:
+    """Собирает авторизацию и чтение контекста задачи до внешнего вызова."""
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[ChecklistSuggestionScope]:
+        async with session_factory() as session:
+            yield ChecklistSuggestionScope(
+                auth=AuthService(
+                    users_repository=UsersRepository(session), tokens_repository=ApiTokensRepository(session),
+                    invite_code=settings.auth.registration_invite_code.get_secret_value(),
+                ),
+                access=AccessService(
+                    members_repository=ProjectMembersRepository(session), tasks_repository=TasksRepository(session),
+                    stages_repository=ProjectStagesRepository(session), documents_repository=DocumentsRepository(session),
+                    comments_repository=TaskCommentsRepository(session), links_repository=DocumentLinksRepository(session),
+                ),
+                projects=ProjectsRepository(session), tasks=TasksRepository(session),
+                documents=DocumentsRepository(session), links=DocumentLinksRepository(session),
+                attachments=TaskAttachmentsRepository(session),
+            )
+    return scope
+
+
+def get_checklist_suggestion_scope(settings: SettingsDep) -> ChecklistSuggestionScopeFactory:
+    """Возвращает короткую область генерации чек-листа."""
+    return build_checklist_suggestion_scope(session_factory=async_session_factory, settings=settings)
+
+
+ChecklistSuggestionScopeDep = Annotated[ChecklistSuggestionScopeFactory, Depends(get_checklist_suggestion_scope)]
+
+
+def build_risk_suggestion_scope(
+    *, session_factory: SessionFactory, settings: Settings
+) -> RiskSuggestionScopeFactory:
+    """Собирает чтение и авторизацию AI-предложений в одной короткой области."""
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[RiskSuggestionScope]:
+        async with session_factory() as session:
+            yield RiskSuggestionScope(
+                activity=TaskActivityRepository(session),
+                milestones=MilestonesRepository(session),
+                dependencies=TaskDependenciesRepository(session),
+                auth=AuthService(
+                    users_repository=UsersRepository(session),
+                    tokens_repository=ApiTokensRepository(session),
+                    invite_code=settings.auth.registration_invite_code.get_secret_value(),
+                ),
+                access=AccessService(
+                    members_repository=ProjectMembersRepository(session),
+                    tasks_repository=TasksRepository(session),
+                    stages_repository=ProjectStagesRepository(session),
+                    documents_repository=DocumentsRepository(session),
+                    comments_repository=TaskCommentsRepository(session),
+                    links_repository=DocumentLinksRepository(session),
+                ),
+                projects=ProjectsRepository(session),
+                tasks=TasksRepository(session),
+                stages=ProjectStagesRepository(session),
+                comments=TaskCommentsRepository(session),
+                documents=DocumentsRepository(session),
+                nodes=WbsNodesRepository(session),
+                risks=ProjectRiskRepository(session),
+            )
+
+    return scope
+
+
+def get_risk_suggestion_scope(settings: SettingsDep) -> RiskSuggestionScopeFactory:
+    """Возвращает фабрику короткой области AI-предложений рисков."""
+    return build_risk_suggestion_scope(session_factory=async_session_factory, settings=settings)
+
+
+RiskSuggestionScopeDep = Annotated[RiskSuggestionScopeFactory, Depends(get_risk_suggestion_scope)]
 
 
 def build_attachment_download_scope(
@@ -206,9 +290,7 @@ def build_task_description_scope(
     return scope
 
 
-def get_task_description_scope() -> (
-    Callable[[], AbstractAsyncContextManager[TaskDescriptionScope]]
-):
+def get_task_description_scope() -> Callable[[], AbstractAsyncContextManager[TaskDescriptionScope]]:
     """Возвращает фабрику области для переформулирования черновика."""
     return build_task_description_scope(session_factory=async_session_factory)
 
@@ -229,6 +311,9 @@ def build_analytics_scope(
     async def scope() -> AsyncIterator[AnalyticsDbScope]:
         async with session_factory() as session:
             yield AnalyticsDbScope(
+                attachments=TaskAttachmentsRepository(session),
+                participants=TaskParticipantsRepository(session),
+                risks=ProjectRiskRepository(session),
                 reports=AnalyticsReportsRepository(session),
                 projects=ProjectsRepository(session),
                 members=ProjectMembersRepository(session),
@@ -270,6 +355,7 @@ def build_project_agent_scope(
     async def scope() -> AsyncIterator[ProjectAgentScope]:
         async with session_factory() as session:
             yield ProjectAgentScope(
+                risks=ProjectRiskRepository(session),
                 projects=ProjectsRepository(session),
                 stages=ProjectStagesRepository(session),
                 tasks=TasksRepository(session),

@@ -27,12 +27,15 @@ from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_members import ProjectMembersRepository
+from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.project_stickers import ProjectStickersRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
+from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.task_dependencies import TaskDependenciesRepository
+from src.repositories.task_participants import TaskParticipantsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.wbs_nodes import WbsNodesRepository
@@ -75,10 +78,13 @@ class AnalyticsDbScope:
     """
 
     reports: AnalyticsReportsRepository
+    risks: ProjectRiskRepository
     projects: ProjectsRepository
     members: ProjectMembersRepository
     stages: ProjectStagesRepository
     tasks: TasksRepository
+    attachments: TaskAttachmentsRepository
+    participants: TaskParticipantsRepository
     comments: TaskCommentsRepository
     activity: TaskActivityRepository
     dependencies: TaskDependenciesRepository
@@ -95,6 +101,7 @@ class ProjectAgentScope:
     """Одна короткая область сценария Project Agent."""
 
     projects: ProjectsRepository
+    risks: ProjectRiskRepository
     stages: ProjectStagesRepository
     tasks: TasksRepository
     wbs_nodes: WbsNodesRepository
@@ -134,9 +141,7 @@ class TaskDocumentImportScope:
     unit_of_work: UnitOfWork
 
 
-TaskDocumentImportScopeFactory = Callable[
-    [], AbstractAsyncContextManager[TaskDocumentImportScope]
-]
+TaskDocumentImportScopeFactory = Callable[[], AbstractAsyncContextManager[TaskDocumentImportScope]]
 
 
 @dataclass(frozen=True, slots=True)

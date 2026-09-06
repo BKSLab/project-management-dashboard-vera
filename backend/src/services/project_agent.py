@@ -43,9 +43,16 @@ from src.schemas.knowledge import (
     KnowledgeSourceSchema,
     KnowledgeStatusSchema,
 )
+from src.schemas.project_risks import (
+    ProjectRiskFilters,
+    ProjectRiskSchema,
+    ProjectRiskSummarySchema,
+)
 from src.services.calendar import MAX_CALENDAR_RANGE_DAYS
 from src.services.db_scope import ProjectAgentScope, ProjectAgentScopeFactory
+from src.services.project_risks import build_risk_summary
 from src.services.tasks import build_task_key
+from src.utils.checklists import checklist_context
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +76,7 @@ class StructuredToolName(StrEnum):
     CALENDAR = "get_calendar"
     UPCOMING_DEADLINES = "get_upcoming_deadlines"
     PROJECT_RISKS = "get_project_risks"
+    REGISTERED_RISKS = "list_project_risks"
     MILESTONES = "get_milestones"
     SCHEDULE_DRIFT = "get_schedule_drift"
     PREVIEW_SCHEDULE_CHANGE = "preview_schedule_change"
@@ -93,7 +101,7 @@ class AgentToolPlan(BaseModel):
     calls: list[AgentToolCall] = Field(default_factory=list, max_length=7)
     search_query: str | None = Field(default=None, max_length=2000)
     entity_type: (
-        Literal["project", "task", "document", "comment", "attachment", "milestone"] | None
+        Literal["project", "task", "document", "comment", "attachment", "milestone", "risk"] | None
     ) = None
 
 
@@ -121,6 +129,9 @@ class _AgentDatabaseContext:
     calendar_results: dict[StructuredToolName, Any] = field(default_factory=dict)
     milestones: list[Any] = field(default_factory=list)
     scenario_preview: Any | None = None
+    ranked_risks: list[Any] = field(default_factory=list)
+    registered_risks: list[Any] = field(default_factory=list)
+    risk_summary: ProjectRiskSummarySchema | None = None
 
 
 class _SourceRegistry:
@@ -294,6 +305,13 @@ class ProjectAgentService:
                     nodes=nodes,
                     tool_plan=tool_plan,
                 )
+                if entity_type in (None, "risk"):
+                    database_context.ranked_risks = await db.risks.get_page(
+                        project_id=project.id,
+                        filters=ProjectRiskFilters(search=retrieval_query[:255]),
+                        page=1,
+                        page_size=MAX_TOOL_TASKS,
+                    )
         except RepositoryError as error:
             raise ProjectAgentError(str(error)) from error
 
@@ -302,9 +320,7 @@ class ProjectAgentService:
             try:
                 phase_started_at = perf_counter()
                 try:
-                    query_vector = await self.embedding_client.get_embedding(
-                        retrieval_query
-                    )
+                    query_vector = await self.embedding_client.get_embedding(retrieval_query)
                 finally:
                     phases_ms["embedding"] = self._elapsed_ms(phase_started_at)
                 phase_started_at = perf_counter()
@@ -327,6 +343,46 @@ class ProjectAgentService:
                     exc_info=True,
                 )
 
+        # Индекс даёт кандидатов, но риски могли измениться или исчезнуть после
+        # индексации. Проверяем весь набор одним коротким SQL-запросом.
+        risk_ids = {
+            int(str(hit.payload["entity_id"]))
+            for hit in semantic_hits
+            if hit.payload.get("entity_type") == "risk"
+            and str(hit.payload.get("entity_id", "")).isdigit()
+            and 0 < int(str(hit.payload["entity_id"])) <= 2147483647
+        }
+        semantic_risks: dict[int, Any] = {}
+        task_ids = {
+            int(str(hit.payload["entity_id"]))
+            for hit in semantic_hits
+            if hit.payload.get("entity_type") == "task"
+            and str(hit.payload.get("entity_id", "")).isdigit()
+            and 0 < int(str(hit.payload["entity_id"])) <= 2147483647
+        }
+        semantic_task_records: dict[int, Any] = {}
+        if risk_ids or task_ids:
+            try:
+                async with self.scope() as db:
+                    semantic_risks = (
+                        {
+                            risk.id: risk
+                            for risk in await db.risks.get_by_ids(
+                                project_id=project.id, risk_ids=risk_ids
+                            )
+                        }
+                        if risk_ids
+                        else {}
+                    )
+                    if task_ids:
+                        semantic_task_records = {
+                            task.id: task
+                            for task in await db.tasks.get_by_ids(task_ids)
+                            if task.project_id == project.id
+                        }
+            except RepositoryError as error:
+                raise ProjectAgentError(str(error)) from error
+
         registry = _SourceRegistry()
         postgres_context = self._build_postgres_context(
             project=project,
@@ -335,10 +391,26 @@ class ProjectAgentService:
         )
         task_candidates = postgres_context.pop("retrieved_tasks")
         document_candidates = postgres_context.pop("retrieved_documents")
-        semantic_candidates = self._build_semantic_context(semantic_hits, registry)
+        risk_candidates = postgres_context.pop("retrieved_risks")
+        semantic_candidates = self._build_semantic_context(
+            semantic_hits,
+            registry,
+            semantic_risks=semantic_risks,
+            semantic_tasks={
+                task.id: self._task_context(
+                    task=task,
+                    project=project,
+                    stage_by_id={stage.id: stage for stage in database_context.stages},
+                    wbs_paths=build_wbs_paths(database_context.nodes),
+                    registry=registry,
+                )
+                for task in semantic_task_records.values()
+            },
+        )
         retrieval_context = self._build_hybrid_context(
             task_candidates=task_candidates,
             document_candidates=document_candidates,
+            risk_candidates=risk_candidates,
             semantic_candidates=semantic_candidates,
             registry=registry,
         )
@@ -526,6 +598,20 @@ class ProjectAgentService:
                     project_id=project_id,
                     today=current_date,
                 )
+            elif tool_call.name is StructuredToolName.REGISTERED_RISKS:
+                context.risk_summary = build_risk_summary(
+                    await db.risks.get_aggregates(
+                        project_ids={project_id},
+                        filters=ProjectRiskFilters(),
+                        today=current_date,
+                    )
+                )
+                context.registered_risks = await db.risks.get_page(
+                    project_id=project_id,
+                    filters=ProjectRiskFilters(),
+                    page=1,
+                    page_size=MAX_TOOL_TASKS,
+                )
             elif tool_call.name is StructuredToolName.TASKS_BY_STATUS:
                 stage = (
                     stages_by_name.get(normalized_stage.casefold()) if normalized_stage else None
@@ -557,15 +643,12 @@ class ProjectAgentService:
                     {item.task_id for item in context.activity}
                 )
                 context.activity_tasks = {task.id: task for task in activity_tasks}
-            elif (
-                tool_call.name
-                in {
-                    StructuredToolName.CALENDAR,
-                    StructuredToolName.UPCOMING_DEADLINES,
-                    StructuredToolName.PROJECT_RISKS,
-                    StructuredToolName.SCHEDULE_DRIFT,
-                }
-            ):
+            elif tool_call.name in {
+                StructuredToolName.CALENDAR,
+                StructuredToolName.UPCOMING_DEADLINES,
+                StructuredToolName.PROJECT_RISKS,
+                StructuredToolName.SCHEDULE_DRIFT,
+            }:
                 date_from, date_to = _agent_calendar_range(
                     tool_call=tool_call,
                     project=project,
@@ -660,8 +743,17 @@ class ProjectAgentService:
                 for document in context.ranked_documents[:MAX_RETRIEVED_DOCUMENTS]
             ],
             "tool_results": {},
+            "retrieved_risks": [
+                self._risk_context(risk, registry) for risk in context.ranked_risks
+            ],
         }
         tools: dict[str, Any] = result["tool_results"]
+        if context.risk_summary is not None:
+            tools[StructuredToolName.REGISTERED_RISKS.value] = {
+                "summary": context.risk_summary.model_dump(mode="json"),
+                "items": [self._risk_context(risk, registry) for risk in context.registered_risks],
+                "truncated": context.risk_summary.total_risks > len(context.registered_risks),
+            }
         if context.statistics is not None:
             statistics = context.statistics
             tools[StructuredToolName.PROJECT_STATISTICS.value] = {
@@ -890,6 +982,7 @@ class ProjectAgentService:
             "task_key": build_task_key(project.key, task.number),
             "title": task.title[:512],
             "description": (task.description_md or "")[:TEXT_FRAGMENT_LIMIT],
+            "checklist": checklist_context(getattr(task, "checklist", None)),
             "stage": stage.name[:255] if stage is not None else None,
             "is_done": bool(stage and stage.is_done_stage),
             "priority": task.priority.value,
@@ -943,10 +1036,32 @@ class ProjectAgentService:
             document_slug=document.slug[:255],
         )
 
+    @staticmethod
+    def _risk_context(risk: Any, registry: _SourceRegistry) -> dict[str, Any]:
+        """Сериализует текущую запись реестра и проверяемый источник риска."""
+        source = KnowledgeSourceSchema(
+            source_id=f"risk:{risk.id}",
+            entity_type="risk",
+            entity_id=risk.id,
+            title=f"{risk.key} · {risk.title}",
+            excerpt=risk.description[:SOURCE_EXCERPT_LIMIT],
+        )
+        data = ProjectRiskSchema.model_validate(risk).model_dump(mode="json")
+        for name in ("description", "mitigation_plan", "response_plan"):
+            data[name] = data[name][:TEXT_FRAGMENT_LIMIT]
+        return {
+            "kind": "current_registered_risk",
+            "source_handle": registry.register(source),
+            **data,
+        }
+
     def _build_semantic_context(
         self,
         hits: list[KnowledgeSearchHit],
         registry: _SourceRegistry,
+        *,
+        semantic_risks: dict[int, Any] | None = None,
+        semantic_tasks: dict[int, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Преобразует Qdrant hits в JSON с непредсказуемыми source handles."""
         result: list[dict[str, Any]] = []
@@ -966,6 +1081,7 @@ class ProjectAgentService:
                 "comment",
                 "attachment",
                 "milestone",
+                "risk",
             }:
                 continue
             if source_id != f"{entity_type}:{entity_id}":
@@ -973,6 +1089,18 @@ class ProjectAgentService:
             if source_id in seen_sources:
                 continue
             seen_sources.add(source_id)
+            if entity_type == "task" and semantic_tasks is not None:
+                current = semantic_tasks.get(entity_id)
+                if current is not None:
+                    result.append({**current, "score": round(hit.score, 6)})
+                continue
+            if entity_type == "risk":
+                risk = (semantic_risks or {}).get(entity_id)
+                if risk is not None:
+                    result.append(
+                        {**self._risk_context(risk, registry), "score": round(hit.score, 6)}
+                    )
+                continue
             excerpt = str(payload.get("text") or "")[:TEXT_FRAGMENT_LIMIT]
             source = registry.update(
                 source_id,
@@ -1017,6 +1145,7 @@ class ProjectAgentService:
         document_candidates: list[dict[str, Any]],
         semantic_candidates: list[dict[str, Any]],
         registry: _SourceRegistry,
+        risk_candidates: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Объединяет PostgreSQL FTS и Qdrant-кандидатов по RRF."""
 
@@ -1032,11 +1161,12 @@ class ProjectAgentService:
             [
                 source_ids(task_candidates),
                 source_ids(document_candidates),
+                source_ids(risk_candidates or []),
                 source_ids(semantic_candidates),
             ]
         )
         lexical_by_source: dict[str, dict[str, Any]] = {}
-        for candidate in [*task_candidates, *document_candidates]:
+        for candidate in [*task_candidates, *document_candidates, *(risk_candidates or [])]:
             source = registry.resolve(candidate["source_handle"])
             if source is not None:
                 lexical_by_source.setdefault(source.source_id, candidate)

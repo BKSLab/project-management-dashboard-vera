@@ -13,6 +13,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, endpoints, queryKeys } from "@/lib/api";
 import type { ProjectStage, Task } from "@/lib/types";
 import { useToast } from "@/lib/toast";
+import { useRiskTaskCounts } from "@/lib/useRisks";
 import { Column } from "@/components/kanban/Column";
 import { TaskCard } from "@/components/kanban/TaskCard";
 
@@ -42,6 +43,7 @@ export function Board({
     onTaskOpen,
 }: BoardProps) {
     const queryClient = useQueryClient();
+    const riskCounts = useRiskTaskCounts(projectId);
     const toast = useToast();
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -129,6 +131,7 @@ export function Board({
                         <Column
                             key={stage.id}
                             stage={stage}
+                            riskCounts={riskCounts.data ?? {}}
                             tasks={tasksByStage.get(stage.id) ?? []}
                             selectedTaskId={selectedTaskId}
                             onTaskOpen={onTaskOpen}
@@ -140,7 +143,7 @@ export function Board({
             <DragOverlay>
                 {activeTask && (
                     <div className="w-[300px]">
-                        <TaskCard task={activeTask} isDragging onOpen={() => undefined} />
+                        <TaskCard task={activeTask} riskCount={riskCounts.data?.[activeTask.id] ?? 0} isDragging onOpen={() => undefined} />
                     </div>
                 )}
             </DragOverlay>

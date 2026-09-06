@@ -72,7 +72,7 @@ async def get_analytics_report(
     response_description="Сформированный аналитический свод.",
     responses={
         404: {"description": "Проект не найден."},
-        409: {"description": "В выбранной области нет задач."},
+        409: {"description": "В выбранной области нет содержательных данных проекта."},
         502: {"description": "Модель не вернула пригодный свод."},
         503: {"description": "AI-сервис временно недоступен."},
         500: SERVER_ERROR_RESPONSE,

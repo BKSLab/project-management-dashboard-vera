@@ -41,6 +41,8 @@ DEPENDENCIES = SRC / "dependencies"
 # Сценарии с медленным внешним вызовом. Каждый обязан работать через
 # короткую область базы, а не через репозитории, живущие вместе с ним.
 EXTERNAL_CALL_SERVICES = {
+    "risk_suggestions.py": "RiskSuggestionService",
+    "task_checklist_suggestions.py": "TaskChecklistSuggestionService",
     "analytics.py": "AnalyticsService",
     "project_agent.py": "ProjectAgentService",
     "task_descriptions.py": "TaskDescriptionService",
@@ -133,9 +135,7 @@ def test_settings_are_read_only_in_declared_composition_points() -> None:
         for line in calls_named(parse(path), "get_settings")
     ]
 
-    assert not offenders, (
-        "Настройки читаются вне разрешённых точек сборки: " + ", ".join(offenders)
-    )
+    assert not offenders, "Настройки читаются вне разрешённых точек сборки: " + ", ".join(offenders)
 
 
 def test_pending_settings_readers_still_need_the_exception() -> None:
@@ -239,8 +239,8 @@ def test_required_dependencies_have_no_none_default() -> None:
                 if is_none_default and looks_required:
                     offenders.append(f"{where(path, node.lineno)} {node.name}({argument.arg})")
 
-    assert not offenders, (
-        "Обязательные зависимости объявлены необязательными: " + ", ".join(offenders)
+    assert not offenders, "Обязательные зависимости объявлены необязательными: " + ", ".join(
+        offenders
     )
 
 
@@ -354,9 +354,7 @@ def test_no_dead_reraise_of_own_errors_remains() -> None:
                 # действительно нужна, чтобы своя ошибка прошла наверх.
                 if any("Exception" in item or "BaseException" in item for item in later_types):
                     continue
-                offenders.append(
-                    f"{where(path, handler.lineno)} ({ast.unparse(handler.type)})"
-                )
+                offenders.append(f"{where(path, handler.lineno)} ({ast.unparse(handler.type)})")
 
     assert not offenders, "Мёртвые клаузы `except ...: raise`: " + ", ".join(offenders)
 
@@ -399,8 +397,7 @@ def test_service_with_external_call_works_through_a_short_db_scope() -> None:
             offenders.append(f"{class_name} импортирует SQLAlchemy")
 
     assert not offenders, (
-        "Сервисы с внешним вызовом работают не через короткую область: "
-        + "; ".join(offenders)
+        "Сервисы с внешним вызовом работают не через короткую область: " + "; ".join(offenders)
     )
 
 
@@ -476,6 +473,6 @@ def test_dependencies_are_declared_through_aliases() -> None:
                 )
             )
 
-    assert not offenders, (
-        "Зависимость объявлена в сигнатуре вместо `...Dep`-алиаса: " + ", ".join(offenders)
+    assert not offenders, "Зависимость объявлена в сигнатуре вместо `...Dep`-алиаса: " + ", ".join(
+        offenders
     )

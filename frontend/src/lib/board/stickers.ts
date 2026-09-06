@@ -2,6 +2,7 @@ import type { ProjectMember, Task, UserSummary } from "@/lib/types";
 import { fullName, initials } from "@/lib/types";
 
 export type ProjectStickerColor = "neutral" | "yellow" | "blue" | "green" | "red" | "violet";
+export type ProjectStickerSize = "small" | "medium" | "large";
 
 export interface ProjectSticker {
     id: number;
@@ -10,6 +11,8 @@ export interface ProjectSticker {
     color: ProjectStickerColor;
     canvas_x: number;
     canvas_y: number;
+    width?: number;
+    height?: number;
     created_by_user_id: number | null;
     created_by_username_snapshot: string;
     created_by_display_name_snapshot: string;
@@ -23,11 +26,15 @@ export interface ProjectStickerInput {
     body: string;
     color: ProjectStickerColor;
     task_ids: number[];
+    width?: number;
+    height?: number;
 }
 
 export interface ProjectStickerPositionInput {
     canvas_x: number;
     canvas_y: number;
+    width?: number;
+    height?: number;
 }
 
 export type ProjectStickerCreateInput = ProjectStickerInput & ProjectStickerPositionInput;
@@ -53,6 +60,13 @@ export const STICKER_COLOR_OPTIONS: StickerColorOption[] = [
 export const STICKER_TASK_RESULTS_LIMIT = 5;
 export const STICKER_NODE_WIDTH = 230;
 export const STICKER_NODE_HEIGHT = 230;
+export const STICKER_SIZE_PRESETS: Record<ProjectStickerSize, { width: number; height: number; label: string }> = {
+    small: { width: 180, height: 180, label: "Маленький" },
+    medium: { width: 230, height: 230, label: "Средний" },
+    large: { width: 340, height: 280, label: "Большой" },
+};
+export const MIN_STICKER_SIZE = 160;
+export const MAX_STICKER_SIZE = 520;
 export const STICKER_NODE_GAP = 28;
 const MAX_STICKER_COORDINATE = 1_000_000;
 
@@ -173,10 +187,14 @@ function clampStickerCoordinate(value: number): number {
 export function normalizeStickerPosition(position: {
     x: number;
     y: number;
+    width?: number;
+    height?: number;
 }): ProjectStickerPositionInput {
     return {
         canvas_x: clampStickerCoordinate(position.x),
         canvas_y: clampStickerCoordinate(position.y),
+        ...(position.width !== undefined ? { width: Math.max(MIN_STICKER_SIZE, Math.min(MAX_STICKER_SIZE, position.width)) } : {}),
+        ...(position.height !== undefined ? { height: Math.max(MIN_STICKER_SIZE, Math.min(MAX_STICKER_SIZE, position.height)) } : {}),
     };
 }
 
@@ -184,19 +202,26 @@ function positionsOverlap(
     candidate: ProjectStickerPositionInput,
     sticker: ProjectSticker,
 ): boolean {
-    return candidate.canvas_x < sticker.canvas_x + STICKER_NODE_WIDTH + STICKER_NODE_GAP
-        && candidate.canvas_x + STICKER_NODE_WIDTH + STICKER_NODE_GAP > sticker.canvas_x
-        && candidate.canvas_y < sticker.canvas_y + STICKER_NODE_HEIGHT + STICKER_NODE_GAP
-        && candidate.canvas_y + STICKER_NODE_HEIGHT + STICKER_NODE_GAP > sticker.canvas_y;
+    const width = candidate.width ?? STICKER_NODE_WIDTH;
+    const height = candidate.height ?? STICKER_NODE_HEIGHT;
+    const stickerWidth = sticker.width ?? STICKER_NODE_WIDTH;
+    const stickerHeight = sticker.height ?? STICKER_NODE_HEIGHT;
+    return candidate.canvas_x < sticker.canvas_x + stickerWidth + STICKER_NODE_GAP
+        && candidate.canvas_x + width + STICKER_NODE_GAP > sticker.canvas_x
+        && candidate.canvas_y < sticker.canvas_y + stickerHeight + STICKER_NODE_GAP
+        && candidate.canvas_y + height + STICKER_NODE_GAP > sticker.canvas_y;
 }
 
 /** Находит рядом с центром viewport свободное место для нового стикера. */
 export function findAvailableStickerPosition(
     stickers: ProjectSticker[],
     origin: { x: number; y: number },
+    dimensions: { width?: number; height?: number } = {},
 ): ProjectStickerPositionInput {
-    const stepX = STICKER_NODE_WIDTH + STICKER_NODE_GAP;
-    const stepY = STICKER_NODE_HEIGHT + STICKER_NODE_GAP;
+    const width = dimensions.width ?? STICKER_NODE_WIDTH;
+    const height = dimensions.height ?? STICKER_NODE_HEIGHT;
+    const stepX = width + STICKER_NODE_GAP;
+    const stepY = height + STICKER_NODE_GAP;
     const maxRing = Math.ceil(Math.sqrt(stickers.length + 1)) + 3;
 
     for (let ring = 0; ring <= maxRing; ring += 1) {
@@ -206,6 +231,8 @@ export function findAvailableStickerPosition(
                 const candidate = normalizeStickerPosition({
                     x: origin.x + column * stepX,
                     y: origin.y + row * stepY,
+                    width,
+                    height,
                 });
                 if (!stickers.some((sticker) => positionsOverlap(candidate, sticker))) {
                     return candidate;
@@ -225,6 +252,8 @@ export function normalizeStickerInput(input: ProjectStickerInput): ProjectSticke
         body: input.body.trim(),
         color: input.color,
         task_ids: [...new Set(input.task_ids)],
+        ...(input.width !== undefined ? { width: input.width } : {}),
+        ...(input.height !== undefined ? { height: input.height } : {}),
     };
 }
 

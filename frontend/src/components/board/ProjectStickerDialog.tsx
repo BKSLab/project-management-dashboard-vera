@@ -14,6 +14,8 @@ import {
     type ProjectSticker,
     type ProjectStickerColor,
     type ProjectStickerInput,
+    STICKER_SIZE_PRESETS,
+    type ProjectStickerSize,
 } from "@/lib/board/stickers";
 import type { Task } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
@@ -47,6 +49,9 @@ export function ProjectStickerDialog({
     const [body, setBody] = useState(sticker?.body ?? "");
     const [color, setColor] = useState<ProjectStickerColor>(sticker?.color ?? "yellow");
     const [taskIds, setTaskIds] = useState<number[]>(sticker?.task_ids ?? []);
+    const initialSize: ProjectStickerSize = sticker && (sticker.width ?? 230) <= 200 ? "small" : sticker && (sticker.width ?? 230) >= 300 ? "large" : "medium";
+    const [size, setSize] = useState<ProjectStickerSize>(initialSize);
+    const dimensions = sticker ? {} : STICKER_SIZE_PRESETS[size];
     const [taskSearch, setTaskSearch] = useState("");
     const requestedTaskSearch = taskSearch.trim();
     const [debouncedTaskSearch, setDebouncedTaskSearch] = useState("");
@@ -67,7 +72,7 @@ export function ProjectStickerDialog({
         enabled: serverSearchEnabled,
         retry: 1,
     });
-    const normalized = normalizeStickerInput({ body, color, task_ids: taskIds });
+    const normalized = normalizeStickerInput({ body, color, task_ids: taskIds, ...dimensions });
     const canSubmit = normalized.body.length > 0
         && normalized.body.length <= MAX_BODY_LENGTH
         && (!sticker || stickerHasChanges(sticker, normalized));
@@ -182,6 +187,20 @@ export function ProjectStickerDialog({
                         ))}
                     </div>
                 </fieldset>
+
+                {!sticker && <fieldset className="flex flex-col gap-2">
+                    <legend className="text-[11px] font-medium text-secondary">Размер</legend>
+                    <div className="flex flex-wrap gap-2">
+                        {(Object.entries(STICKER_SIZE_PRESETS) as [ProjectStickerSize, typeof STICKER_SIZE_PRESETS.medium][]).map(([value, option]) => (
+                            <button key={value} type="button" aria-pressed={size === value}
+                                className={cn("project-sticker-size", size === value && "project-sticker-size--active")}
+                                onClick={() => setSize(value)}>
+                                {option.label}<span>{option.width}×{option.height}</span>
+                            </button>
+                        ))}
+                    </div>
+                    <p className="text-[11px] text-muted">После размещения размер можно изменить прямо на холсте.</p>
+                </fieldset>}
 
                 <fieldset className="flex min-h-0 flex-col gap-2">
                     <legend className="text-[11px] font-medium text-secondary">

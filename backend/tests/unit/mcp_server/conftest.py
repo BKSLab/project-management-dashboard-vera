@@ -27,6 +27,7 @@ from src.services.calendar import CalendarService
 from src.services.milestones import MilestonesService
 from src.services.project_members import ProjectMembersService
 from src.services.project_query import ProjectQueryService
+from src.services.project_risks import ProjectRiskService
 from src.services.task_comments import TaskCommentsService
 from src.services.tasks import TasksService
 
@@ -75,6 +76,7 @@ def make_services() -> ToolServices:
         milestones=AsyncMock(spec=MilestonesService),
         calendar=AsyncMock(spec=CalendarService),
         members=AsyncMock(spec=ProjectMembersService),
+        risks=AsyncMock(spec=ProjectRiskService),
     )
 
 
@@ -119,6 +121,8 @@ def tools(services: ToolServices, monkeypatch: pytest.MonkeyPatch):
             settings=get_settings(),
         )
 
-    for module in (srv, wt, ctx):
+    from src.mcp_server import risk_tools
+
+    for module in (srv, wt, ctx, risk_tools):
         monkeypatch.setattr(module, "tool_context", fake_tool_context, raising=False)
     return install

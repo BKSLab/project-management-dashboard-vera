@@ -16,10 +16,12 @@ class AnalyticsServiceError(ServiceError):
 
 
 class AnalyticsEmptyScopeError(AnalyticsServiceError):
-    """Анализировать нечего: в выбранной области нет задач."""
+    """В области нет описания, сроков, работ и других содержательных данных."""
 
     status_code = status.HTTP_409_CONFLICT
-    detail = "Пока нечего анализировать: в выбранных проектах нет задач."
+    detail = (
+        "Пока нечего анализировать: добавьте описание проекта, задачи, документы, вехи или риски."
+    )
 
 
 class AnalyticsGenerationError(AnalyticsServiceError):

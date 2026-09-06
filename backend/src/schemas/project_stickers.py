@@ -9,6 +9,8 @@ MAX_STICKER_BODY_LENGTH = 2000
 MAX_STICKER_TASKS = 20
 MAX_STICKER_COORDINATE = 1_000_000.0
 DEFAULT_STICKER_COORDINATE = 40.0
+MIN_STICKER_SIZE = 160.0
+MAX_STICKER_SIZE = 520.0
 
 
 class ProjectStickerCreateSchema(BaseModel):
@@ -28,6 +30,12 @@ class ProjectStickerCreateSchema(BaseModel):
         DEFAULT_STICKER_COORDINATE,
         ge=-MAX_STICKER_COORDINATE,
         le=MAX_STICKER_COORDINATE,
+    )
+    width: float = Field(
+        230.0, ge=MIN_STICKER_SIZE, le=MAX_STICKER_SIZE, description="Ширина стикера."
+    )
+    height: float = Field(
+        230.0, ge=MIN_STICKER_SIZE, le=MAX_STICKER_SIZE, description="Высота стикера."
     )
 
     @field_validator("body")
@@ -96,6 +104,12 @@ class ProjectStickerPositionUpdateSchema(BaseModel):
         ge=-MAX_STICKER_COORDINATE,
         le=MAX_STICKER_COORDINATE,
     )
+    width: float | None = Field(
+        None, ge=MIN_STICKER_SIZE, le=MAX_STICKER_SIZE, description="Новая ширина."
+    )
+    height: float | None = Field(
+        None, ge=MIN_STICKER_SIZE, le=MAX_STICKER_SIZE, description="Новая высота."
+    )
 
 
 class ProjectStickerSchema(BaseModel):
@@ -109,6 +123,8 @@ class ProjectStickerSchema(BaseModel):
     color: ProjectStickerColor
     canvas_x: float
     canvas_y: float
+    width: float = Field(230.0, ge=MIN_STICKER_SIZE, le=MAX_STICKER_SIZE)
+    height: float = Field(230.0, ge=MIN_STICKER_SIZE, le=MAX_STICKER_SIZE)
     created_by_user_id: int | None
     created_by_username_snapshot: str
     created_by_display_name_snapshot: str

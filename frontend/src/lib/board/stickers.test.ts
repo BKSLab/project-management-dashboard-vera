@@ -10,6 +10,7 @@ import {
     searchStickerTasks,
     stickerAuthorLabel,
     stickerHasChanges,
+    STICKER_SIZE_PRESETS,
     type ProjectSticker,
 } from "@/lib/board/stickers";
 
@@ -127,6 +128,15 @@ describe("project board stickers", () => {
         expect(normalizeStickerPosition({ x: 12.345, y: Number.POSITIVE_INFINITY })).toEqual({
             canvas_x: 12.3,
             canvas_y: 0,
+        });
+    });
+
+    it("provides three size presets and clamps free resize bounds", () => {
+        expect(STICKER_SIZE_PRESETS.small.width).toBeLessThan(STICKER_SIZE_PRESETS.medium.width);
+        expect(STICKER_SIZE_PRESETS.large.width).toBeGreaterThan(STICKER_SIZE_PRESETS.medium.width);
+        expect(normalizeStickerPosition({ x: 10, y: 20, width: 50, height: 900 })).toMatchObject({
+            width: 160,
+            height: 520,
         });
     });
 

@@ -695,6 +695,7 @@ def _to_compact_task(task: Task, project_key: str, is_done: bool) -> TaskCompact
     return TaskCompactSchema(
         id=task.id,
         key=build_task_key(project_key=project_key, number=task.number),
+        checklist=getattr(task, "checklist", None),
         title=task.title,
         stage_id=task.stage_id,
         wbs_node_id=task.wbs_node_id,

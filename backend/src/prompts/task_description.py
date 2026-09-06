@@ -1,4 +1,5 @@
 from src.prompts.base import build_system_prompt
+from src.prompts.task_checklist import CHECKLIST_ANALYSIS_RULES
 
 _TASK_DESCRIPTION_INSTRUCTIONS = """Сейчас ты доводишь до рабочего вида черновик описания
 одной задачи. Твой опыт нужен здесь для формулировки, а не для планирования: ты делаешь
@@ -20,4 +21,4 @@ _TASK_DESCRIPTION_INSTRUCTIONS = """Сейчас ты доводишь до ра
 
 Верни только JSON вида {"description_md": "переформулированный текст"}."""
 
-TASK_DESCRIPTION_REPHRASE_PROMPT = build_system_prompt(_TASK_DESCRIPTION_INSTRUCTIONS)
+TASK_DESCRIPTION_REPHRASE_PROMPT = build_system_prompt(_TASK_DESCRIPTION_INSTRUCTIONS + "\n" + CHECKLIST_ANALYSIS_RULES)

@@ -8,15 +8,21 @@ import pytest
 
 from src.clients.llm import LlmClient
 from src.db.models.analytics_reports import AnalyticsReport
+from src.db.models.project_members import ProjectRole
 from src.db.models.project_milestones import ProjectMilestoneStatus
 from src.db.models.projects import ProjectStatus
+from src.db.models.task_activity import TaskActivityEventType
+from src.db.models.task_dependencies import TaskDependencyType
+from src.db.models.task_participants import TaskParticipantRole
 from src.db.models.tasks import TaskPriority
 from src.exceptions.analytics import AnalyticsEmptyScopeError, AnalyticsServiceError
 from src.exceptions.projects import ProjectNotFoundError, ProjectsRepositoryError
+from src.exceptions.task_attachments import TaskAttachmentsRepositoryError
 from src.prompts.analytics import (
     ANALYTICS_PORTFOLIO_SYSTEM_PROMPT,
     ANALYTICS_PROJECT_SYSTEM_PROMPT,
 )
+from src.repositories.project_risks import ProjectRiskRepository
 from src.schemas.analytics import (
     AnalyticsDraftSchema,
     AnalyticsFindingDraftSchema,
@@ -27,8 +33,9 @@ from src.schemas.analytics import (
     AnalyticsScope,
     AnalyticsSeverity,
 )
-from src.services.analytics import PORTFOLIO_ATTENTION_TASKS, AnalyticsService
+from src.services.analytics import MAX_CONTEXT_CHARS, AnalyticsService
 from src.services.db_scope import AnalyticsDbScope
+from tests.unit.services.test_project_risks_service import risk
 
 TODAY = date.today()
 USER_ID = 7
@@ -92,6 +99,9 @@ def task(
         assignee=assignee,
         start_date=None,
         due_date=due_date,
+        baseline_start_date=None,
+        baseline_due_date=None,
+        completed_at=None,
         updated_at=datetime.now(UTC) - timedelta(days=updated_days_ago),
     )
 
@@ -135,7 +145,7 @@ def build_service(
     milestones: list | None = None,
     llm_response: AnalyticsDraftSchema | None = None,
     saved_report: AnalyticsReport | None = None,
-) -> tuple[AnalyticsService, AsyncMock]:
+) -> tuple[AnalyticsService, AsyncMock, AnalyticsDbScope]:
     """Собирает сервис аналитики с подменёнными репозиториями и моделью."""
     projects = [project()] if projects is None else projects
     allowed_ids = {item.id for item in projects} if allowed_ids is None else allowed_ids
@@ -146,6 +156,7 @@ def build_service(
 
     members_repository = AsyncMock()
     members_repository.get_project_ids_for_user.return_value = allowed_ids
+    members_repository.get_for_project.return_value = []
 
     stages_repository = AsyncMock()
     stages_repository.get_by_project.return_value = stages or []
@@ -158,6 +169,7 @@ def build_service(
 
     activity_repository = AsyncMock()
     activity_repository.get_recent_by_project.return_value = []
+    activity_repository.get_count_by_project.return_value = 0
 
     dependencies_repository = AsyncMock()
     dependencies_repository.get_by_project.return_value = dependencies or []
@@ -197,11 +209,18 @@ def build_service(
     llm_client.model = "test-model"
 
     db = AnalyticsDbScope(
+        risks=AsyncMock(
+            spec=ProjectRiskRepository,
+            get_by_project=AsyncMock(return_value=[]),
+            get_aggregates=AsyncMock(return_value=[]),
+        ),
         reports=reports_repository,
         projects=projects_repository,
         members=members_repository,
         stages=stages_repository,
         tasks=tasks_repository,
+        attachments=AsyncMock(get_for_tasks=AsyncMock(return_value=[])),
+        participants=AsyncMock(get_by_task_ids=AsyncMock(return_value={})),
         comments=comments_repository,
         activity=activity_repository,
         dependencies=dependencies_repository,
@@ -221,6 +240,41 @@ def build_service(
     return service, reports_repository, db
 
 
+@pytest.mark.parametrize("portfolio", [False, True])
+async def test_risk_only_project_is_analyzed_with_full_counters_and_no_invented_task_keys(
+    portfolio,
+):
+    from tests.unit.services.test_project_risks_service import risk
+
+    service, reports, db = build_service()
+    db.risks.get_by_project.return_value = [risk(task_id=None)]
+    db.risks.get_aggregates.return_value = [
+        {
+            "project_id": PROJECT_ID,
+            "status": "OPEN",
+            "probability": "HIGH",
+            "impact": "HIGH",
+            "risk_level": "HIGH",
+            "count": 42,
+            "without_owner": 42,
+            "without_mitigation": 42,
+            "due_for_review": 0,
+            "review_overdue": 0,
+            "linked": 0,
+            "ai_suggested": 0,
+            "latest_update": datetime.now(UTC),
+        }
+    ]
+    await service.generate(**actor(), project_id=None if portfolio else PROJECT_ID)
+    content = json.loads(service.llm_client.get_structured_response.await_args.kwargs["content"])
+    entry = content["projects"][0]
+    assert entry["registered_risks"][0]["key"] == "RISK-12"
+    assert entry["registered_risks"][0]["task_key"] is None
+    saved = reports.save.await_args.kwargs["data"]["payload"]
+    assert saved["signals"]["high_risks"] == 42
+    assert saved["signals"]["total_tasks"] == 0
+
+
 @pytest.mark.asyncio
 async def test_generate_counts_signals_from_database_not_from_model() -> None:
     stages = [stage(1, "В работе", False), stage(2, "Готово", True)]
@@ -230,9 +284,19 @@ async def test_generate_counts_signals_from_database_not_from_model() -> None:
         task(13, stage_id=1, due_date=None, assignee=None, updated_days_ago=30),
         task(14, stage_id=2, due_date=TODAY - timedelta(days=9)),
     ]
-    dependencies = [SimpleNamespace(predecessor_task_id=11, successor_task_id=12)]
+    dependencies = [
+        SimpleNamespace(
+            predecessor_task_id=11,
+            successor_task_id=12,
+            dependency_type=TaskDependencyType.FINISH_TO_START,
+            lag_days=2,
+        )
+    ]
     milestones = [
         SimpleNamespace(
+            id=1,
+            description_md="Условия приёмки",
+            wbs_node_id=None,
             title="Веха",
             due_date=TODAY - timedelta(days=1),
             status=ProjectMilestoneStatus.PLANNED,
@@ -283,13 +347,11 @@ async def test_generate_puts_overdue_tasks_first_in_model_context() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_reports_context_boundaries_to_user() -> None:
-    """Портфельная сводка честно называет, сколько задач в неё вошло.
-
-    Портфель берёт от каждого проекта только проблемные и недавно закрытые
-    задачи: пользователь должен видеть, что разбор шёл не по всем 240.
-    """
+    """Большой портфель сообщает и модели, и пользователю границы среза."""
     stages = [stage(1, "В работе", False)]
     tasks = [task(index, stage_id=1) for index in range(1, 121)]
+    for item in tasks:
+        item.description_md = "Подробное описание работы. " * 100
     service, reports_repository, _db = build_service(
         projects=[project(), SimpleNamespace(**vars(project()) | {"id": 2, "key": "SECOND"})],
         stages=stages,
@@ -300,15 +362,22 @@ async def test_generate_reports_context_boundaries_to_user() -> None:
 
     context = reports_repository.save.call_args.kwargs["data"]["context_summary"]
     assert context["tasks_total"] == 240
-    assert context["tasks_included"] == PORTFOLIO_ATTENTION_TASKS * 2
+    assert 0 < context["tasks_included"] < 240
     assert context["truncated"] is True
     assert context["omitted"]
+    content = service.llm_client.get_structured_response.await_args.kwargs["content"]
+    assert len(content) <= MAX_CONTEXT_CHARS
+    assert json.loads(content)["context"] == context
 
 
 @pytest.mark.asyncio
 async def test_generate_distinguishes_empty_scope_absence_and_failure() -> None:
     """Пустой срез, чужой проект и сбой базы отвечают тремя разными ошибками."""
-    service, _, _db = build_service(stages=[stage(1, "В работе", False)], tasks=[])
+    empty = project()
+    empty.description_md = None
+    service, _, _db = build_service(
+        projects=[empty], stages=[stage(1, "В работе", False)], tasks=[]
+    )
     with pytest.raises(AnalyticsEmptyScopeError):
         await service.generate(**actor(), project_id=PROJECT_ID)
 
@@ -430,7 +499,9 @@ async def test_portfolio_takes_only_projects_in_work() -> None:
     Если активных нет вовсе, это не пустой отчёт, а явный отказ.
     """
     active = project()
-    paused = SimpleNamespace(**vars(project()) | {"id": 2, "key": "PAUSE", "status": ProjectStatus.PAUSED})
+    paused = SimpleNamespace(
+        **vars(project()) | {"id": 2, "key": "PAUSE", "status": ProjectStatus.PAUSED}
+    )
     service, reports_repository, _db = build_service(
         projects=[active, paused],
         stages=[stage(1, "В работе", False)],
@@ -479,14 +550,8 @@ async def test_each_scope_gets_its_own_prompt() -> None:
 
 
 @pytest.mark.asyncio
-async def test_portfolio_slice_carries_project_signals_instead_of_task_details() -> None:
-    """Портфельный срез — сводка по проектам, а не разбор их внутренностей.
-
-    По каждому проекту модель получает показатели, ближайшие вехи и
-    несколько задач как доказательство. Комментарии, документы, стикеры,
-    ИСР и история сюда не попадают: на уровне портфеля они не помогают
-    выбрать проект, а бюджет контекста тратят быстрее всего.
-    """
+async def test_portfolio_slice_carries_project_signals_and_task_details() -> None:
+    """Портфель получает полные виды источников и отдельные показатели проектов."""
     stages = [stage(1, "В работе", False), stage(2, "Готово", True)]
     tasks = [
         task(11, stage_id=1, due_date=TODAY - timedelta(days=3)),
@@ -495,6 +560,9 @@ async def test_portfolio_slice_carries_project_signals_instead_of_task_details()
     ]
     milestones = [
         SimpleNamespace(
+            id=1,
+            description_md="Условия приёмки",
+            wbs_node_id=None,
             title="Веха",
             due_date=TODAY - timedelta(days=1),
             status=ProjectMilestoneStatus.PLANNED,
@@ -506,29 +574,341 @@ async def test_portfolio_slice_carries_project_signals_instead_of_task_details()
 
     content = json.loads(service.llm_client.get_structured_response.call_args.kwargs["content"])
     entry = content["projects"][0]
-    assert set(entry) == {
-        "key",
-        "name",
-        "status",
-        "description",
-        "start_date",
-        "due_date",
-        "signals",
-        "milestones",
-        "attention_tasks",
-        "recently_closed",
-    }
+    assert {
+        "registered_risks",
+        "tasks",
+        "comments",
+        "documents",
+        "stickers",
+        "wbs",
+        "recent_activity",
+        "team",
+        "participants",
+        "attachments",
+        "dependencies",
+        "entity_counts",
+        "stages",
+    } <= entry.keys()
     assert entry["signals"]["overdue_tasks"] == 1
     assert entry["signals"]["done_tasks"] == 1
     assert [item["title"] for item in entry["milestones"]] == ["Веха"]
-    # Завершённая задача попадает в подтверждение движения, а не в проблемы.
-    assert [item["key"] for item in entry["attention_tasks"]] == ["PROJ-11", "PROJ-12"]
-    assert [item["key"] for item in entry["recently_closed"]] == ["PROJ-13"]
-    assert entry["attention_tasks"][0]["days_overdue"] == 3
+    assert [item["key"] for item in entry["tasks"]] == ["PROJ-11", "PROJ-12", "PROJ-13"]
+    assert entry["tasks"][0]["overdue_days"] == 3
+    assert entry["tasks"][-1]["done"] is True
+    db.comments.get_for_tasks.assert_awaited_once_with(task_ids={11, 12, 13})
+    db.documents.get_by_project.assert_awaited_once_with(project_id=PROJECT_ID)
+    db.stickers.list_by_project_id.assert_awaited_once_with(project_id=PROJECT_ID)
+    db.activity.get_recent_by_project.assert_awaited_once()
+    db.wbs_nodes.get_by_project.assert_awaited_once_with(project_id=PROJECT_ID)
 
-    # Тяжёлые источники для портфеля даже не читаются.
-    db.comments.get_for_tasks.assert_not_awaited()
-    db.documents.get_by_project.assert_not_awaited()
-    db.stickers.list_by_project_id.assert_not_awaited()
-    db.activity.get_recent_by_project.assert_not_awaited()
-    db.wbs_nodes.get_by_project.assert_not_awaited()
+
+def supply_all_sources(db: AnalyticsDbScope) -> None:
+    """Заполняет каждый вид проектных данных различимым содержанием."""
+    from src.schemas.task_checklists import TaskChecklistSchema
+    for item in db.tasks.get_by_project.return_value:
+        if item.id == 30:
+            item.checklist = TaskChecklistSchema(items=[
+                {"text": "Согласовать приёмку", "is_completed": True},
+                {"text": "Подписать акт", "is_completed": False},
+            ]).model_dump(mode="json")
+    member = SimpleNamespace(
+        id=1,
+        user_id=USER_ID,
+        role=ProjectRole.OWNER,
+        user=SimpleNamespace(
+            username="analyst",
+            last_name="Тестов",
+            first_name="Тест",
+            middle_name=None,
+            password_hash="PRIVATE_HASH",
+            email="private@example.test",
+            phone="PRIVATE_PHONE",
+        ),
+    )
+    db.members.get_for_project.return_value = [member]
+    db.participants.get_by_task_ids.return_value = {
+        30: [SimpleNamespace(project_member=member, role=TaskParticipantRole.EXECUTOR)]
+    }
+    db.attachments.get_for_tasks.return_value = [
+        SimpleNamespace(
+            task_id=30,
+            original_name="Требования.pdf",
+            content_type="application/pdf",
+            size=123,
+            created_at=datetime.now(UTC),
+            storage_key="PRIVATE_STORAGE_KEY",
+        )
+    ]
+    db.comments.get_for_tasks.return_value = [
+        SimpleNamespace(
+            task_id=30,
+            body_md="Комментарий: согласовано с заказчиком.",
+            author_name="Тестов Тест",
+            created_at=datetime.now(UTC),
+        )
+    ]
+    db.documents.get_by_project.return_value = [
+        SimpleNamespace(
+            id=3,
+            title="Требования",
+            slug="requirements",
+            content_md="Документ: условия запуска.",
+        )
+    ]
+    db.document_links.get_for_documents.return_value = [SimpleNamespace(document_id=3, task_id=30)]
+    db.stickers.list_by_project_id.return_value = [
+        SimpleNamespace(
+            id=4,
+            body="Стикер: согласовать окно запуска.",
+            created_by_display_name_snapshot="Автор",
+            created_at=datetime.now(UTC),
+            task_links=[SimpleNamespace(task_id=30)],
+        )
+    ]
+    db.wbs_nodes.get_by_project.return_value = [
+        SimpleNamespace(id=5, title="Запуск", parent_id=None, position=0),
+        SimpleNamespace(id=6, title="Подготовка", parent_id=5, position=0),
+    ]
+    db.milestones.get_by_project.return_value = [
+        SimpleNamespace(
+            id=7,
+            title="Приёмка",
+            description_md="Веха: требуется подпись заказчика.",
+            due_date=TODAY,
+            status=ProjectMilestoneStatus.ACHIEVED,
+            wbs_node_id=6,
+        )
+    ]
+    db.dependencies.get_by_project.return_value = [
+        SimpleNamespace(
+            predecessor_task_id=1,
+            successor_task_id=30,
+            dependency_type=TaskDependencyType.FINISH_TO_START,
+            lag_days=3,
+        )
+    ]
+    db.activity.get_recent_by_project.return_value = [
+        SimpleNamespace(
+            task_id=30,
+            event_type=TaskActivityEventType.DUE_DATE_CHANGED,
+            from_value="2026-09-01",
+            to_value="2026-09-12",
+            created_at=datetime.now(UTC),
+        )
+    ]
+    db.activity.get_count_by_project.return_value = 1
+    # Больше старых жёстких лимитов и портфельного (6), и проектного (20) среза.
+    db.risks.get_by_project.return_value = [
+        risk(
+            id=index,
+            key=f"RISK-{index}",
+            title=f"Риск {index}",
+            task_id=30,
+            owner_user_id=USER_ID,
+            mitigation_plan="Митигация: согласовать резерв.",
+            response_plan="Реагирование: использовать резерв.",
+        )
+        for index in range(1, 25)
+    ]
+    db.risks.get_aggregates.return_value = [
+        {
+            "project_id": PROJECT_ID,
+            "status": "OPEN",
+            "probability": "HIGH",
+            "impact": "HIGH",
+            "risk_level": "HIGH",
+            "count": 24,
+            "without_owner": 0,
+            "without_mitigation": 0,
+            "due_for_review": 0,
+            "review_overdue": 0,
+            "linked": 24,
+            "ai_suggested": 0,
+            "latest_update": datetime.now(UTC),
+        }
+    ]
+
+
+@pytest.mark.parametrize("project_id", [PROJECT_ID, None])
+async def test_both_scopes_include_every_source_with_descriptions_and_links(project_id) -> None:
+    tasks = [task(index, stage_id=1, wbs_node_id=6) for index in range(1, 31)]
+    for item in tasks:
+        item.description_md = f"Описание задачи {item.id}: критерии готовности."
+    tasks[-1].baseline_start_date = TODAY - timedelta(days=10)
+    tasks[-1].baseline_due_date = TODAY - timedelta(days=1)
+    tasks[-1].completed_at = datetime.now(UTC)
+    service, reports, db = build_service(stages=[stage(1, "Работа", False)], tasks=tasks)
+    supply_all_sources(db)
+    active = False
+
+    @asynccontextmanager
+    async def scope():
+        nonlocal active
+        active = True
+        try:
+            yield db
+        finally:
+            active = False
+
+    async def llm(**kwargs):
+        assert active is False
+        db.unit_of_work.commit.assert_not_awaited()
+        return draft([])
+
+    service.scope = scope
+    service.llm_client.get_structured_response.side_effect = llm
+    report = await service.generate(**actor(), project_id=project_id)
+    content = service.llm_client.get_structured_response.await_args.kwargs["content"]
+    entry = json.loads(content)["projects"][0]
+    assert entry["description"] == "Описание проекта."
+    assert entry["checklists"][0]["task"] == "PROJ-30"
+    assert entry["checklists"][0]["completed_items"] == 1
+    assert entry["checklists"][0]["items"][1] == {"text": "Подписать акт", "is_completed": False}
+    assert len(entry["tasks"]) == 30
+    assert all(
+        row["description"] == tasks[int(row["key"].split("-")[1]) - 1].description_md
+        for row in entry["tasks"]
+    )
+    final_task = next(row for row in entry["tasks"] if row["key"] == "PROJ-30")
+    assert final_task["baseline_due"] == tasks[-1].baseline_due_date.isoformat()
+    assert final_task["completed_at"] == tasks[-1].completed_at.isoformat()
+    assert entry["team"] == [{"username": "analyst", "name": "Тестов Тест", "role": "OWNER"}]
+    assert entry["participants"][0]["task"] == "PROJ-30"
+    assert entry["participants"][0]["role"] == "EXECUTOR"
+    assert entry["attachments"][0]["name"] == "Требования.pdf"
+    assert entry["attachments"][0]["task"] == "PROJ-30"
+    assert entry["comments"][0]["text"] == "Комментарий: согласовано с заказчиком."
+    assert entry["documents"][0]["excerpt"] == "Документ: условия запуска."
+    assert entry["documents"][0]["linked_tasks"] == ["PROJ-30"]
+    assert entry["stickers"][0]["text"] == "Стикер: согласовать окно запуска."
+    assert entry["stickers"][0]["tasks"] == ["PROJ-30"]
+    assert entry["wbs"][1]["path"] == "1.1 Подготовка"
+    assert entry["wbs"][1]["parent_id"] == 5
+    assert entry["milestones"][0]["description"] == "Веха: требуется подпись заказчика."
+    assert entry["milestones"][0]["wbs"] == "1.1 Подготовка"
+    assert entry["dependencies"] == [
+        {
+            "predecessor": "PROJ-1",
+            "successor": "PROJ-30",
+            "type": "FINISH_TO_START",
+            "lag_days": 3,
+        }
+    ]
+    assert entry["recent_activity"][0]["to"] == "2026-09-12"
+    assert len(entry["registered_risks"]) == 24
+    for row in entry["registered_risks"]:
+        assert row["description"] == "Поставщик может задержать API."
+        assert row["mitigation_plan"] == "Митигация: согласовать резерв."
+        assert row["response_plan"] == "Реагирование: использовать резерв."
+        assert row["owner"]["username"] == "analyst"
+        assert row["task_key"] == "PROJ-30"
+    assert all(count["total"] == count["included"] > 0 for count in entry["entity_counts"].values())
+    assert not report.context.truncated
+    assert all(
+        token not in content
+        for token in (
+            "PRIVATE_HASH",
+            "private@example.test",
+            "PRIVATE_PHONE",
+            "PRIVATE_STORAGE_KEY",
+        )
+    )
+    assert report.context.model_dump(mode="json") == json.loads(content)["context"]
+    reports.save.assert_awaited_once()
+    db.unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize("project_id", [PROJECT_ID, None])
+async def test_large_context_preserves_source_types_and_explains_every_reduction(
+    project_id,
+) -> None:
+    tasks = [task(index, stage_id=1, updated_days_ago=index) for index in range(1, 301)]
+    for item in tasks:
+        item.description_md = "Большое описание. " * 1000
+    projects = [project()]
+    if project_id is None:
+        projects.append(SimpleNamespace(**vars(project()) | {"id": 2, "key": "SECOND"}))
+    service, _, db = build_service(
+        projects=projects, tasks=tasks, stages=[stage(1, "Работа", False)]
+    )
+    supply_all_sources(db)
+    db.documents.get_by_project.return_value[0].content_md = "Большой документ. " * 10000
+    db.activity.get_count_by_project.return_value = 100
+    report = await service.generate(**actor(), project_id=project_id)
+    content = service.llm_client.get_structured_response.await_args.kwargs["content"]
+    assert len(content) <= MAX_CONTEXT_CHARS
+    payload = json.loads(content)
+    assert len(payload["projects"]) == len(projects)
+    for entry in payload["projects"]:
+        assert all(count["included"] > 0 for count in entry["entity_counts"].values())
+        assert entry["entity_counts"]["tasks"]["total"] == 300
+        assert entry["entity_counts"]["activity"] == {"total": 100, "included": 1}
+        assert entry["comments"][0]["task"].endswith("-30")
+        assert entry["attachments"][0]["task"].endswith("-30")
+        assert entry["documents"][0]["excerpt"].endswith("…")
+    assert report.context.tasks_included < report.context.tasks_total
+    assert report.context.truncated
+    assert report.context.omitted
+    assert payload["context"] == report.context.model_dump(mode="json")
+
+
+@pytest.mark.parametrize("project_id", [PROJECT_ID, None])
+@pytest.mark.parametrize("source", ["description", "documents", "milestones", "wbs", "stickers"])
+async def test_project_without_tasks_can_be_analyzed_from_other_sources(project_id, source) -> None:
+    item = project()
+    item.description_md = None
+    service, _, db = build_service(projects=[item])
+    if source == "description":
+        item.description_md = "Цель проекта: запуск новой услуги."
+    elif source == "documents":
+        db.documents.get_by_project.return_value = [
+            SimpleNamespace(
+                id=1,
+                title="Обоснование",
+                slug="brief",
+                content_md="Цели и ограничения проекта.",
+            )
+        ]
+    elif source == "milestones":
+        db.milestones.get_by_project.return_value = [
+            SimpleNamespace(
+                id=1,
+                title="Запуск",
+                due_date=TODAY,
+                description_md="Первый клиент.",
+                status=ProjectMilestoneStatus.PLANNED,
+                wbs_node_id=None,
+            )
+        ]
+    elif source == "wbs":
+        db.wbs_nodes.get_by_project.return_value = [
+            SimpleNamespace(
+                id=1,
+                title="Подготовка",
+                parent_id=None,
+                position=0,
+            )
+        ]
+    else:
+        db.stickers.list_by_project_id.return_value = [
+            SimpleNamespace(
+                id=1,
+                body="Обсудить рамки проекта.",
+                task_links=[],
+                created_by_display_name_snapshot="Автор",
+                created_at=datetime.now(UTC),
+            )
+        ]
+    report = await service.generate(**actor(), project_id=project_id)
+    assert report.context.tasks_total == 0
+    assert report.context.projects == 1
+    service.llm_client.get_structured_response.assert_awaited_once()
+
+
+async def test_new_source_failure_aborts_analysis_instead_of_silently_omitting_it() -> None:
+    service, reports, db = build_service(tasks=[task(1, 1)])
+    db.attachments.get_for_tasks.side_effect = TaskAttachmentsRepositoryError("Чтение недоступно")
+    with pytest.raises(AnalyticsServiceError):
+        await service.generate(**actor(), project_id=PROJECT_ID)
+    service.llm_client.get_structured_response.assert_not_awaited()
+    reports.save.assert_not_awaited()

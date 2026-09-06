@@ -9,6 +9,7 @@ import {
     useReactFlow,
     type NodeChange,
     type OnNodeDrag,
+    type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Move, Plus, StickyNote } from "lucide-react";
@@ -55,6 +56,7 @@ interface ProjectStickerBoardProps {
         sticker: ProjectSticker,
         position: ProjectStickerPositionInput,
     ) => Promise<ProjectSticker>;
+    onResize: (sticker: ProjectSticker, size: { width: number; height: number }) => Promise<ProjectSticker>;
     onDelete: (sticker: ProjectSticker) => Promise<unknown>;
 }
 
@@ -62,6 +64,8 @@ interface StickerNodeOverride {
     node: ProjectStickerCanvasNode;
     sourceX: number;
     sourceY: number;
+    sourceWidth?: number;
+    sourceHeight?: number;
 }
 
 function mutationMessage(error: unknown, fallback: string): string {
@@ -84,8 +88,8 @@ function createCanvasNode(
         id: String(sticker.id),
         type: "sticker",
         position: persistedPosition(sticker),
-        width: STICKER_NODE_WIDTH,
-        height: STICKER_NODE_HEIGHT,
+        width: sticker.width ?? STICKER_NODE_WIDTH,
+        height: sticker.height ?? STICKER_NODE_HEIGHT,
         draggable: !isMoving,
         deletable: false,
         connectable: false,
@@ -116,9 +120,23 @@ function ProjectStickerBoardInner({
     onCreate,
     onUpdate,
     onMove,
+    onResize,
     onDelete,
 }: ProjectStickerBoardProps) {
     const { getZoom, screenToFlowPosition, setCenter } = useReactFlow();
+    const viewportKey = `project-sticker-board-viewport:${project.id}`;
+    const [savedViewport] = useState<Viewport | null>(() => {
+        try {
+            const value = window.localStorage.getItem(viewportKey);
+            if (!value) return null;
+            const parsed = JSON.parse(value) as Partial<Viewport>;
+            return typeof parsed.x === "number" && Number.isFinite(parsed.x)
+                && typeof parsed.y === "number" && Number.isFinite(parsed.y)
+                && typeof parsed.zoom === "number" && Number.isFinite(parsed.zoom) && parsed.zoom > 0
+                ? { x: parsed.x as number, y: parsed.y as number, zoom: parsed.zoom as number }
+                : null;
+        } catch { return null; }
+    });
     const setSelectedTaskId = useUiStore((state) => state.setSelectedTaskId);
     const canvasRef = useRef<HTMLDivElement>(null);
     const [editor, setEditor] = useState<EditorState>(null);
@@ -151,8 +169,13 @@ function ProjectStickerBoardInner({
             onOpenTask: setSelectedTaskId,
             onEdit: editSticker,
             onDelete: requestDelete,
+            onResize: (item, width, height) => {
+                void onResize(item, { width, height }).catch((error) => {
+                    setPositionError(mutationMessage(error, "Не удалось сохранить размер стикера."));
+                });
+            },
         }),
-        [editSticker, members, project.id, requestDelete, setSelectedTaskId, tasksById],
+        [editSticker, members, onResize, project.id, requestDelete, setSelectedTaskId, tasksById],
     );
     const [nodeOverrides, setNodeOverrides] = useState<Map<string, StickerNodeOverride>>(
         () => new Map(),
@@ -167,7 +190,9 @@ function ProjectStickerBoardInner({
             const override = nodeOverrides.get(next.id);
             if (override === undefined
                 || override.sourceX !== sticker.canvas_x
-                || override.sourceY !== sticker.canvas_y) {
+                || override.sourceY !== sticker.canvas_y
+                || override.sourceWidth !== (sticker.width ?? STICKER_NODE_WIDTH)
+                || override.sourceHeight !== (sticker.height ?? STICKER_NODE_HEIGHT)) {
                 return next;
             }
             return {
@@ -175,6 +200,8 @@ function ProjectStickerBoardInner({
                 position: override.node.position,
                 selected: override.node.selected,
                 measured: override.node.measured,
+                width: override.node.width,
+                height: override.node.height,
             };
         }),
         [movingStickerIds, nodeData, nodeOverrides, stickers],
@@ -208,17 +235,18 @@ function ProjectStickerBoardInner({
                 setEditor(null);
                 return;
             }
-            const position = createPosition ?? findAvailableStickerPosition(
+            const position = findAvailableStickerPosition(
                 stickers,
-                { x: 40, y: 40 },
+                createPosition ? { x: createPosition.canvas_x, y: createPosition.canvas_y } : { x: 40, y: 40 },
+                { width: input.width, height: input.height },
             );
             const created = await onCreate({ ...input, ...position });
             setEditor(null);
             setCreatePosition(null);
             window.setTimeout(() => {
                 void setCenter(
-                    created.canvas_x + STICKER_NODE_WIDTH / 2,
-                    created.canvas_y + STICKER_NODE_HEIGHT / 2,
+                    created.canvas_x + (created.width ?? STICKER_NODE_WIDTH) / 2,
+                    created.canvas_y + (created.height ?? STICKER_NODE_HEIGHT) / 2,
                     { zoom: Math.max(getZoom(), 0.8), duration: 240 },
                 );
             }, 60);
@@ -249,6 +277,8 @@ function ProjectStickerBoardInner({
                     node,
                     sourceX: sticker.canvas_x,
                     sourceY: sticker.canvas_y,
+                    sourceWidth: sticker.width ?? STICKER_NODE_WIDTH,
+                    sourceHeight: sticker.height ?? STICKER_NODE_HEIGHT,
                 }] as const];
         })));
     }, [flowNodes, stickers]);
@@ -307,7 +337,7 @@ function ProjectStickerBoardInner({
                     </div>
                     <p className="mt-1 flex items-center gap-1.5 text-[12px] text-muted">
                         <Move size={12} aria-hidden="true" />
-                        Перетаскивайте стикеры по холсту; свободную область — для навигации
+                        Перетаскивайте стикеры по холсту, меняйте размер за угол; свободная область — для навигации
                     </p>
                 </div>
                 <Button
@@ -356,7 +386,15 @@ function ProjectStickerBoardInner({
                     deleteKeyCode={null}
                     minZoom={0.35}
                     maxZoom={1.5}
-                    fitView
+                    fitView={!savedViewport}
+                    defaultViewport={savedViewport ?? undefined}
+                    onMoveEnd={(_, viewport) => {
+                        try {
+                            window.localStorage.setItem(viewportKey, JSON.stringify(viewport));
+                        } catch {
+                            // Storage can be unavailable in private browsing; the board remains usable.
+                        }
+                    }}
                     fitViewOptions={{ padding: 0.16, maxZoom: 1 }}
                     zoomOnDoubleClick={false}
                     proOptions={{ hideAttribution: true }}

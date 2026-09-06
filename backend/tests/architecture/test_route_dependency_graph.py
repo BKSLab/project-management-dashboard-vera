@@ -29,6 +29,8 @@ SESSION_ONLY_ROUTES = {
 
 # POST, которые ничего не меняют: расчёт, предпросмотр и поиск.
 READ_ONLY_POST_ROUTES = {
+    ("POST", "/api/v1/projects/{project_id}/tasks/checklist-suggestion"),
+    ("POST", "/api/v1/projects/{project_id}/risks/suggestions"),
     ("POST", "/api/v1/projects/{project_id}/calendar/scenarios/preview"),
     ("POST", "/api/v1/projects/{project_id}/tasks/rephrase"),
     ("POST", "/api/v1/projects/{project_id}/wbs/suggestion"),
@@ -42,8 +44,15 @@ STREAMING_ROUTES = {
     ("GET", "/api/v1/tasks/{task_id}/attachments/{attachment_id}/content"),
 }
 
-EXPECTED_NON_GET_TOTAL = 56
-EXPECTED_MUTATION_TOTAL = 47
+# Авторизация этого AI-сценария, как и выдачи файла, целиком выполняется
+# в короткой DB-фазе сервиса и проверяется его контрактными тестами.
+DETACHED_AUTH_ROUTES = STREAMING_ROUTES | {
+    ("POST", "/api/v1/projects/{project_id}/tasks/checklist-suggestion"),
+    ("POST", "/api/v1/projects/{project_id}/risks/suggestions"),
+}
+
+EXPECTED_NON_GET_TOTAL = 61
+EXPECTED_MUTATION_TOTAL = 50
 
 
 def route_dependencies(route: APIRoute) -> set[str]:
@@ -97,12 +106,12 @@ def test_project_scoped_routes_check_project_access() -> None:
         f"{method} {path}"
         for method, path, route in api_routes()
         if "{project_id}" in path
-        and (method, path) not in STREAMING_ROUTES
+        and (method, path) not in DETACHED_AUTH_ROUTES
         and not (route_dependencies(route) & guards)
     ]
 
-    assert not unguarded, (
-        "Маршруты проекта не проверяют доступ:\n  " + "\n  ".join(sorted(unguarded))
+    assert not unguarded, "Маршруты проекта не проверяют доступ:\n  " + "\n  ".join(
+        sorted(unguarded)
     )
 
 
@@ -132,16 +141,16 @@ def test_streaming_routes_keep_no_request_scoped_resources() -> None:
     offenders = [
         f"{method} {path}"
         for method, path, route in api_routes()
-        if (method, path) in STREAMING_ROUTES and "get_db_session" in route_dependencies(route)
+        if (method, path) in DETACHED_AUTH_ROUTES and "get_db_session" in route_dependencies(route)
     ]
 
-    assert not offenders, (
-        "Маршрут с долгоживущим ответом удерживает сессию базы: " + ", ".join(offenders)
+    assert not offenders, "Маршрут с долгоживущим ответом удерживает сессию базы: " + ", ".join(
+        offenders
     )
     # Реестр streaming-маршрутов не расходится с приложением. Реестр ведётся вручную, потому что по декоратору FastAPI нельзя надёжно определить, вернёт ли обработчик `FileResponse`. Значит, он обязан проверяться на существование перечисленных маршрутов.
     actual = {(method, path) for method, path, _ in api_routes()}
 
-    missing = STREAMING_ROUTES - actual
+    missing = DETACHED_AUTH_ROUTES - actual
     assert not missing, f"В реестре перечислены несуществующие маршруты: {missing}"
     # В графе streaming-маршрута нет сервисов, построенных на сессии запроса.
     request_scoped = {
@@ -154,11 +163,11 @@ def test_streaming_routes_keep_no_request_scoped_resources() -> None:
     offenders = [
         f"{method} {path}: {sorted(route_dependencies(route) & request_scoped)}"
         for method, path, route in api_routes()
-        if (method, path) in STREAMING_ROUTES and route_dependencies(route) & request_scoped
+        if (method, path) in DETACHED_AUTH_ROUTES and route_dependencies(route) & request_scoped
     ]
 
-    assert not offenders, (
-        "Долгоживущий ответ зависит от сервисов сессии запроса: " + ", ".join(offenders)
+    assert not offenders, "Долгоживущий ответ зависит от сервисов сессии запроса: " + ", ".join(
+        offenders
     )
 
 
@@ -171,8 +180,8 @@ def test_write_scope_is_required_exactly_where_it_should_be() -> None:
         if "require_write_scope" not in route_dependencies(route)
     ]
 
-    assert not unprotected, (
-        "Маршруты изменяют данные без проверки scope записи:\n  " + "\n  ".join(sorted(unprotected))
+    assert not unprotected, "Маршруты изменяют данные без проверки scope записи:\n  " + "\n  ".join(
+        sorted(unprotected)
     )
     # Расчёт и предпросмотр остаются доступны токену на чтение.
     wrongly_protected = [
@@ -193,8 +202,8 @@ def test_write_scope_is_required_exactly_where_it_should_be() -> None:
         if method == "GET" and "require_write_scope" in route_dependencies(route)
     ]
 
-    assert not wrongly_protected, (
-        "Чтение требует право записи:\n  " + "\n  ".join(sorted(wrongly_protected))
+    assert not wrongly_protected, "Чтение требует право записи:\n  " + "\n  ".join(
+        sorted(wrongly_protected)
     )
 
 
@@ -235,12 +244,12 @@ def test_authentication_is_required_everywhere_except_public_routes() -> None:
     unauthenticated = [
         f"{method} {path}"
         for method, path, route in api_routes()
-        if (method, path) not in PUBLIC_ROUTES | STREAMING_ROUTES
+        if (method, path) not in PUBLIC_ROUTES | DETACHED_AUTH_ROUTES
         and "get_principal" not in route_dependencies(route)
     ]
 
-    assert not unauthenticated, (
-        "Маршруты доступны без аутентификации:\n  " + "\n  ".join(sorted(unauthenticated))
+    assert not unauthenticated, "Маршруты доступны без аутентификации:\n  " + "\n  ".join(
+        sorted(unauthenticated)
     )
     # Управление токенами защищено guard сессии, а не scope записи.
     for method, path, route in api_routes():

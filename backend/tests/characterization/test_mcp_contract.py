@@ -31,6 +31,10 @@ from src.services.project_query import (
 )
 
 EXPECTED_TOOLS = {
+    "list_project_risks",
+    "get_project_risk",
+    "create_project_risk",
+    "update_project_risk",
     "list_projects",
     "get_project",
     "list_tasks",
@@ -53,6 +57,18 @@ EXPECTED_TOOLS = {
 # Обязательные поля каждого инструмента: изменение этого множества ломает
 # уже настроенных внешних клиентов.
 EXPECTED_REQUIRED = {
+    "list_project_risks": {"project_key"},
+    "get_project_risk": {"project_key", "risk_key"},
+    "create_project_risk": {
+        "project_key",
+        "confirmed_by_user",
+        "title",
+        "description",
+        "probability",
+        "impact",
+        "response_strategy",
+    },
+    "update_project_risk": {"project_key", "risk_key", "confirmed_by_user"},
     "list_projects": set(),
     "get_project": {"project_key"},
     "list_tasks": {"project_key"},
@@ -84,9 +100,7 @@ async def test_required_arguments_are_frozen() -> None:
     """Обязательные аргументы каждого инструмента остаются прежними."""
     tools = {tool.name: tool for tool in await mcp_server.list_tools()}
 
-    actual = {
-        name: set(tools[name].input_schema.get("required", [])) for name in EXPECTED_REQUIRED
-    }
+    actual = {name: set(tools[name].input_schema.get("required", [])) for name in EXPECTED_REQUIRED}
 
     assert actual == EXPECTED_REQUIRED
 
@@ -167,6 +181,7 @@ def test_presenter_keys_are_frozen() -> None:
 
     assert set(result) == {
         "task_key",
+        "checklist",
         "title",
         "stage",
         "is_done",
@@ -189,6 +204,7 @@ def test_presenter_keys_are_frozen() -> None:
 
     assert set(result) == {
         "task_key",
+        "checklist",
         "title",
         "stage",
         "is_done",

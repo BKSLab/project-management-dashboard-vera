@@ -1,3 +1,6 @@
+import type { RiskSummary } from "@/lib/risks";
+import type { TaskChecklist } from "@/lib/checklists";
+
 export interface UserSummary {
     id: number;
     username: string;
@@ -149,6 +152,8 @@ export type SearchMatchSource =
     | null;
 
 export interface Task {
+    checklist?: TaskChecklist | null;
+    checklist_revision?: number;
     id: number;
     project_id: number;
     stage_id: number;
@@ -177,6 +182,7 @@ export interface Task {
 }
 
 export interface TaskCompact {
+    checklist?: TaskChecklist | null;
     id: number;
     key: string;
     title: string;
@@ -375,6 +381,7 @@ export interface UnscheduledTasksPage {
 
 export interface TaskCreate {
     title: string;
+    checklist?: TaskChecklist | null;
     description_md?: string | null;
     stage_id?: number | null;
     wbs_node_id?: number | null;
@@ -390,6 +397,8 @@ export interface TaskCreate {
 
 export interface TaskUpdate {
     title?: string;
+    checklist?: TaskChecklist | null;
+    checklist_revision?: number;
     description_md?: string | null;
     priority?: TaskPriority;
     role?: TaskRole | null;
@@ -402,6 +411,7 @@ export interface TaskUpdate {
 }
 
 export type TaskActivityEventType =
+    | "CHECKLIST_CHANGED"
     | "STAGE_CHANGED"
     | "DUE_DATE_CHANGED"
     | "START_DATE_CHANGED"
@@ -547,7 +557,8 @@ export type KnowledgeEntityType =
     | "document"
     | "comment"
     | "attachment"
-    | "milestone";
+    | "milestone"
+    | "risk";
 
 export interface KnowledgeSource {
     source_id: string;
@@ -596,6 +607,7 @@ export interface DashboardTotals {
 }
 
 export interface DashboardProject {
+    risks?: RiskSummary;
     id: number;
     key: string;
     name: string;
@@ -751,7 +763,7 @@ export interface AnalyticsRecommendation {
     tasks: AnalyticsTaskRef[];
 }
 
-export interface AnalyticsSignals {
+export interface AnalyticsSignals extends Partial<RiskSummary> {
     total_tasks: number;
     done_tasks: number;
     overdue_tasks: number;
@@ -765,6 +777,9 @@ export interface AnalyticsSignals {
 }
 
 export interface AnalyticsContext {
+    entity_counts?: Record<string, { total: number; included: number }>;
+    risks_total?: number;
+    risks_included?: number;
     projects: number;
     tasks_total: number;
     tasks_included: number;

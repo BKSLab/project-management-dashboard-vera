@@ -5,6 +5,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from src.db.models.documents import Document
 from src.db.models.project_milestones import ProjectMilestone
+from src.db.models.project_risks import ProjectRisk
 from src.db.models.projects import Project
 from src.db.models.task_attachments import TaskAttachment
 from src.db.models.task_comments import TaskComment
@@ -12,6 +13,7 @@ from src.db.models.tasks import Task
 from src.db.models.wbs_nodes import WbsNode
 from src.knowledge.chunking import chunk_markdown, chunk_text
 from src.services.tasks import build_task_key
+from src.utils.checklists import checklist_text
 
 POINT_NAMESPACE = "task-tracker:knowledge"
 
@@ -80,6 +82,7 @@ def build_task_document(
             f"Название: {task.title}",
             f"Раздел ИСР: {wbs_path}" if wbs_path else "Раздел ИСР: не распределена",
             f"Описание:\n{task.description_md}" if task.description_md else None,
+            checklist_text(getattr(task, "checklist", None)),
         )
         if part
     )
@@ -227,6 +230,45 @@ def build_attachment_chunks(
             },
         )
         for index, chunk in enumerate(chunks)
+    ]
+
+
+def build_risk_chunks(
+    risk: ProjectRisk,
+    *,
+    target_chars: int,
+    overlap_chars: int,
+) -> list[KnowledgeDocument]:
+    """Индексирует описание риска и два плана реагирования.
+
+    Args:
+        risk: Актуальный риск PostgreSQL.
+        target_chars: Целевой размер фрагмента.
+        overlap_chars: Перекрытие соседних фрагментов.
+
+    Returns:
+        Детерминированные фрагменты; оперативные поля агент читает из SQL.
+    """
+    text = (
+        f"# {risk.key} · {risk.title}\n\n{risk.description}\n\n"
+        f"## План снижения\n{risk.mitigation_plan}\n\n"
+        f"## План при наступлении\n{risk.response_plan}"
+    )
+    return [
+        _document(
+            project_id=risk.project_id,
+            entity_type="risk",
+            entity_id=risk.id,
+            chunk_index=index,
+            text=f"{risk.key} · {risk.title}\n{chunk.heading or ''}\n{chunk.text}",
+            title=f"{risk.key} · {risk.title}",
+            updated_at=risk.updated_at.isoformat(),
+            # Риск переживает удаление задачи; он не входит в её индексируемый контекст.
+            extra={"risk_key": risk.key},
+        )
+        for index, chunk in enumerate(
+            chunk_markdown(text, target_chars=target_chars, overlap_chars=overlap_chars)
+        )
     ]
 
 

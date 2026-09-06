@@ -107,7 +107,7 @@ async def get_tasks(
     dependencies=[Depends(require_write_scope), Depends(require_project_access)],
     status_code=status.HTTP_201_CREATED,
     summary="Создать задачу",
-    description="Создаёт задачу в проекте и выдаёт ей сквозной номер вида KEY-42.",
+    description="Создаёт задачу в проекте и выдаёт ей сквозной номер вида KEY-42. Необязательный checklist сохраняется вместе с задачей одной транзакцией.",
     operation_id="createProjectTask",
     response_description="Созданная задача.",
     responses={
@@ -249,10 +249,10 @@ async def get_task(
     dependencies=[Depends(require_write_scope), Depends(require_task_access)],
     status_code=status.HTTP_200_OK,
     summary="Изменить задачу",
-    description="Частично обновляет поля задачи и фиксирует значимые изменения в истории.",
+    description="Частично обновляет поля задачи и фиксирует значимые изменения в истории. Для изменения checklist передайте весь чек-лист и текущую checklist_revision. null удаляет чек-лист, отсутствие поля сохраняет его. Устаревшая версия возвращает 409 без изменений.",
     operation_id="updateTask",
-    response_description="Обновлённая задача.",
-    responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
+    response_description="Обновлённая задача с новой версией чек-листа, если он изменён.",
+    responses={404: NOT_FOUND_RESPONSE, 409: CONFLICT_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
     response_model=TaskSchema,
 )
 async def update_task(

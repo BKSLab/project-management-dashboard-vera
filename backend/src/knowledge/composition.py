@@ -22,6 +22,7 @@ from src.knowledge.worker import IndexServiceFactory, KnowledgeWorker, WorkerCon
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
+from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
@@ -62,6 +63,7 @@ def build_index_service_factory(
         async with session_factory() as session:
             yield KnowledgeIndexService(
                 projects_repository=ProjectsRepository(session),
+                risks_repository=ProjectRiskRepository(session),
                 tasks_repository=TasksRepository(session),
                 wbs_nodes_repository=WbsNodesRepository(session),
                 documents_repository=DocumentsRepository(session),

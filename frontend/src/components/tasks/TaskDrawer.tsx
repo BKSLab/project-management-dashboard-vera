@@ -31,6 +31,8 @@ import { FileUploadControl } from "@/components/files/FileUploadControl";
 import { observerUserIds, participantUserId } from "@/lib/taskParticipants";
 import { useCurrentUser } from "@/lib/useAuth";
 import { TaskPeopleFields } from "@/components/tasks/TaskPeopleFields";
+import { TaskRiskSection } from "@/components/risks/TaskRiskSection";
+import { TaskChecklistSection } from "@/components/tasks/TaskChecklistSection";
 
 const EVENT_LABELS: Record<TaskActivity["event_type"], string> = {
     STAGE_CHANGED: "Стадия",
@@ -42,6 +44,7 @@ const EVENT_LABELS: Record<TaskActivity["event_type"], string> = {
     ASSIGNEE_CHANGED: "Исполнитель",
     WBS_NODE_CHANGED: "Раздел ИСР",
     COMMENT_ADDED: "Добавлен комментарий",
+    CHECKLIST_CHANGED: "Чек-лист изменён",
 };
 
 function MarkdownBlock({ markdown }: { markdown: string }) {
@@ -459,6 +462,8 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                         )}
                     </DrawerSection>
 
+                    <TaskRiskSection projectId={task.project_id} projectKey={task.key.slice(0, task.key.lastIndexOf("-"))} taskId={task.id} />
+                    <TaskChecklistSection task={task} description={isEditingDescription ? descriptionDraft : task.description_md ?? ""} />
                     <DrawerSection title="Документы" count={linksQuery.data?.length ?? null}>
                         <div className="flex flex-col gap-2">
                             {linksQuery.data?.map((link) => (

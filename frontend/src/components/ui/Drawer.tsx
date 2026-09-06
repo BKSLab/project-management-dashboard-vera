@@ -12,6 +12,7 @@ interface DrawerProps {
     footer?: ReactNode;
     isOpen: boolean;
     onClose: () => void;
+    closeLabel?: string;
 }
 
 /**
@@ -19,7 +20,7 @@ interface DrawerProps {
  * доски или карты не теряется (раздел 11). На узких экранах разворачивается
  * в полноэкранный лист (раздел 19).
  */
-export function Drawer({ label, header, children, footer, isOpen, onClose }: DrawerProps) {
+export function Drawer({ label, header, children, footer, isOpen, onClose, closeLabel = "Закрыть панель задачи" }: DrawerProps) {
     return (
         <ModalOverlay
             isOpen={isOpen}
@@ -40,7 +41,7 @@ export function Drawer({ label, header, children, footer, isOpen, onClose }: Dra
                 <Dialog aria-label={label} className="flex min-h-0 flex-1 flex-col outline-none">
                     <header className="sticky top-0 z-10 flex shrink-0 items-start gap-3 border-b border-line-subtle bg-floating/80 px-5 py-4 backdrop-blur-xl">
                         <div className="min-w-0 flex-1">{header}</div>
-                        <IconButton label="Закрыть панель задачи" onClick={onClose}>
+                        <IconButton label={closeLabel} onClick={onClose}>
                             <X size={16} aria-hidden="true" />
                         </IconButton>
                     </header>

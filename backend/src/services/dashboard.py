@@ -5,10 +5,12 @@ from src.db.models.project_stages import ProjectStage
 from src.db.models.projects import Project, ProjectStatus
 from src.db.models.tasks import Task
 from src.exceptions.dashboard import DashboardServiceError
+from src.exceptions.project_risks import ProjectRiskRepositoryError
 from src.exceptions.project_stages import ProjectStagesRepositoryError
 from src.exceptions.projects import ProjectsRepositoryError
 from src.exceptions.tasks import TasksRepositoryError
 from src.repositories.project_members import ProjectMembersRepository
+from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
@@ -18,6 +20,8 @@ from src.schemas.dashboard import (
     DashboardTaskSchema,
     DashboardTotalsSchema,
 )
+from src.schemas.project_risks import ProjectRiskFilters, ProjectRiskSummarySchema
+from src.services.project_risks import build_risk_summary
 from src.services.tasks import build_task_key
 from src.utils.deadlines import DUE_SOON_DAYS, is_task_overdue
 
@@ -30,6 +34,7 @@ RepositoryErrors = (
     ProjectsRepositoryError,
     ProjectStagesRepositoryError,
     TasksRepositoryError,
+    ProjectRiskRepositoryError,
 )
 
 
@@ -42,11 +47,13 @@ class DashboardService:
         members_repository: ProjectMembersRepository,
         stages_repository: ProjectStagesRepository,
         tasks_repository: TasksRepository,
+        risks_repository: ProjectRiskRepository,
     ):
         self.projects_repository = projects_repository
         self.members_repository = members_repository
         self.stages_repository = stages_repository
         self.tasks_repository = tasks_repository
+        self.risks_repository = risks_repository
 
     async def get_overview(self, user_id: int) -> DashboardSchema:
         """Собирает сводку по проектам пользователя.
@@ -92,6 +99,12 @@ class DashboardService:
             )
 
             projects_by_id = {project.id: project for project in projects}
+            risk_groups = await self.risks_repository.get_aggregates(
+                project_ids=allowed_ids, filters=ProjectRiskFilters(), today=today
+            )
+            risk_groups_by_project: dict[int, list] = {}
+            for group in risk_groups:
+                risk_groups_by_project.setdefault(group["project_id"], []).append(group)
             stages_by_id = {stage.id: stage for stage in stages}
             backlog_stage_ids = _collect_backlog_stage_ids(stages=stages)
             counters_by_project = {row.project_id: row for row in counters}
@@ -105,6 +118,7 @@ class DashboardService:
                     project=project,
                     counters=counters_by_project.get(project.id),
                     backlog_tasks=backlog_by_project.get(project.id, 0),
+                    risks=build_risk_summary(risk_groups_by_project.get(project.id, [])),
                 )
                 for project in projects
             ]
@@ -160,6 +174,7 @@ def _build_project_card(
     project: Project,
     counters,
     backlog_tasks: int,
+    risks: ProjectRiskSummarySchema | None = None,
 ) -> DashboardProjectSchema:
     """Строит карточку проекта для дашборда."""
     total = int(getattr(counters, "total", 0) or 0)
@@ -181,7 +196,10 @@ def _build_project_card(
         overdue_tasks=overdue,
         completion_rate=(done / total) if total else 0.0,
         next_due_date=next_due_date,
-        updated_at=project.updated_at,
+        updated_at=max(project.updated_at, risks.latest_update)
+        if risks and risks.latest_update
+        else project.updated_at,
+        risks=risks or ProjectRiskSummarySchema(),
     )
 
 

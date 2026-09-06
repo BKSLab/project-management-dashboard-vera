@@ -18,6 +18,7 @@ class KnowledgeEntityType(str, enum.Enum):
     COMMENT = "COMMENT"
     ATTACHMENT = "ATTACHMENT"
     MILESTONE = "MILESTONE"
+    RISK = "RISK"
 
 
 class KnowledgeIndexOperation(str, enum.Enum):

@@ -23,6 +23,7 @@ from src.prompts.task_description import TASK_DESCRIPTION_REPHRASE_PROMPT
 from src.schemas.tasks import TaskRephraseFile, TaskRephraseRequestSchema, TaskRephraseResultSchema
 from src.services.db_scope import TaskDescriptionScopeFactory
 from src.services.tasks import build_task_key
+from src.utils.checklists import checklist_context
 
 logger = logging.getLogger(__name__)
 
@@ -109,11 +110,17 @@ class TaskDescriptionService:
                 ),
                 "title": data.title.strip(),
                 "draft_description": data.description_md.strip(),
+                "checklist": checklist_context(
+                    data.checklist
+                    if "checklist" in data.model_fields_set
+                    else getattr(current_task, "checklist", None)
+                ),
             },
             "related_task_wording": [
                 {
                     "key": build_task_key(project.key, task.number),
                     "title": task.title,
+                    "checklist": checklist_context(getattr(task, "checklist", None)),
                     "description": _clip(
                         task.description_md,
                         RELATED_TASK_DESCRIPTION_LIMIT,
@@ -172,9 +179,7 @@ class TaskDescriptionService:
                     if data.task_id is not None
                     else None
                 )
-                documents = await db.documents.get_by_ids(
-                    set(dict.fromkeys(data.document_ids))
-                )
+                documents = await db.documents.get_by_ids(set(dict.fromkeys(data.document_ids)))
                 related_tasks = await db.tasks.get_by_project(project_id=project_id)
         except (ProjectsRepositoryError, TasksRepositoryError, DocumentsRepositoryError) as error:
             logger.error(
