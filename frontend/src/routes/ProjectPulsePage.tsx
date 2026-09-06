@@ -1,5 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CalendarClock, CheckCircle2, ListTodo, Network } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarClock,
+  CheckCircle2,
+  ListTodo,
+  Network,
+} from "lucide-react";
 import { api, endpoints, queryKeys } from "@/lib/api";
 import type { ProjectStats, Task } from "@/lib/types";
 import { formatDayMonth } from "@/lib/dates";
@@ -13,19 +19,19 @@ import { DueDate } from "@/components/ui/DueDate";
 import { ErrorMessage, Skeleton } from "@/components/ui/States";
 import { TaskLine } from "@/components/tasks/TaskLine";
 import { PulseBoard } from "@/components/pulse/PulseBoard";
-import { StageBreakdown } from "@/components/pulse/PulseBreakdown";
+import { PulseFacts, StageBreakdown } from "@/components/pulse/PulseBreakdown";
 
 const UPCOMING_LIMIT = 8;
 
 function Description({ markdown }: { markdown: string }) {
-    const html = useRenderedMarkdown(markdown);
-    return (
-        <div
-            className="markdown-body text-[13px]"
-            // Содержимое очищается DOMPurify внутри renderMarkdown.
-            dangerouslySetInnerHTML={{ __html: html }}
-        />
-    );
+  const html = useRenderedMarkdown(markdown);
+  return (
+    <div
+      className="markdown-body text-[13px]"
+      // Содержимое очищается DOMPurify внутри renderMarkdown.
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
 }
 
 /**
@@ -37,160 +43,159 @@ function Description({ markdown }: { markdown: string }) {
  * то, что от состояния не зависит: ближайшие сроки и паспорт проекта.
  */
 export function ProjectPulsePage() {
-    const project = useProjectOutlet();
-    const setSelectedTaskId = useUiStore((state) => state.setSelectedTaskId);
+  const project = useProjectOutlet();
+  const setSelectedTaskId = useUiStore((state) => state.setSelectedTaskId);
 
-    const statsQuery = useQuery({
-        queryKey: queryKeys.projectStats(project.id),
-        queryFn: () => api.get<ProjectStats>(endpoints.projectStats(project.id)),
-    });
+  const statsQuery = useQuery({
+    queryKey: queryKeys.projectStats(project.id),
+    queryFn: () => api.get<ProjectStats>(endpoints.projectStats(project.id)),
+  });
 
-    const tasksQuery = useQuery({
-        queryKey: queryKeys.tasks(project.id),
-        queryFn: () => api.get<Task[]>(endpoints.projectTasks(project.id)),
-    });
+  const tasksQuery = useQuery({
+    queryKey: queryKeys.tasks(project.id),
+    queryFn: () => api.get<Task[]>(endpoints.projectTasks(project.id)),
+  });
 
-    const stats = statsQuery.data;
-    const stageNames = new Map(
-        (stats?.stage_breakdown ?? []).map((item) => [item.stage_id, item.stage_name]),
-    );
-    const doneStageIds = new Set(
-        (stats?.stage_breakdown ?? [])
-            .filter((item) => item.is_done_stage)
-            .map((item) => item.stage_id),
-    );
-    const upcoming = (tasksQuery.data ?? [])
-        .filter((task) => task.due_date !== null && !doneStageIds.has(task.stage_id))
-        .sort((first, second) => (first.due_date ?? "").localeCompare(second.due_date ?? ""))
-        .slice(0, UPCOMING_LIMIT);
+  const stats = statsQuery.data;
+  const stageNames = new Map(
+    (stats?.stage_breakdown ?? []).map((item) => [
+      item.stage_id,
+      item.stage_name,
+    ]),
+  );
+  const doneStageIds = new Set(
+    (stats?.stage_breakdown ?? [])
+      .filter((item) => item.is_done_stage)
+      .map((item) => item.stage_id),
+  );
+  const upcoming = (tasksQuery.data ?? [])
+    .filter(
+      (task) => task.due_date !== null && !doneStageIds.has(task.stage_id),
+    )
+    .sort((first, second) =>
+      (first.due_date ?? "").localeCompare(second.due_date ?? ""),
+    )
+    .slice(0, UPCOMING_LIMIT);
 
-    return (
-        <div className="scrollbar-thin h-full overflow-y-auto">
-            <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-5 py-5">
-                {statsQuery.error && <ErrorMessage message={(statsQuery.error as Error).message} />}
+  return (
+    <div className="scrollbar-thin h-full overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-5 py-5">
+        {statsQuery.error && (
+          <ErrorMessage message={(statsQuery.error as Error).message} />
+        )}
 
-                <PulseBoard
-                    projectId={project.id}
-                    onOpenTask={setSelectedTaskId}
-                    dataUpdatedAt={latestUpdate(tasksQuery.data ?? [])}
-                    blockedReason={
-                        stats && stats.total_tasks === 0 ? "В проекте пока нет задач" : undefined
-                    }
-                    metrics={
-                        statsQuery.isPending ? (
-                            <Skeleton className="h-[88px] w-full rounded-none" />
-                        ) : stats ? (
-                            <StatStrip className="rounded-none border-0 bg-transparent shadow-none">
-                                <StatTile
-                                    label="Всего задач"
-                                    value={stats.total_tasks}
-                                    hint={`${stats.in_progress_tasks} в работе`}
-                                    icon={<ListTodo size={12} />}
-                                />
-                                <StatTile
-                                    label="Выполнено"
-                                    value={`${Math.round(stats.completion_rate * 100)}%`}
-                                    hint={`${stats.done_tasks} задач закрыто`}
-                                    tone="success"
-                                    icon={<CheckCircle2 size={12} />}
-                                />
-                                <StatTile
-                                    label="Просрочено"
-                                    value={stats.overdue_tasks}
-                                    hint={
-                                        stats.due_soon_tasks > 0
-                                            ? `${stats.due_soon_tasks} со сроком на неделе`
-                                            : "Ближайших сроков нет"
-                                    }
-                                    tone={stats.overdue_tasks > 0 ? "danger" : "default"}
-                                    icon={<AlertTriangle size={12} />}
-                                />
-                                <StatTile
-                                    label="Не в структуре"
-                                    value={stats.unassigned_tasks}
-                                    hint="Задач вне разделов ИСР"
-                                    icon={<Network size={12} />}
-                                />
-                            </StatStrip>
-                        ) : undefined
-                    }
-                    breakdown={
-                        stats && stats.stage_breakdown.length > 0 ? (
-                            <StageBreakdown stages={stats.stage_breakdown} />
-                        ) : undefined
-                    }
+        <PulseBoard
+          projectId={project.id}
+          onOpenTask={setSelectedTaskId}
+          dataUpdatedAt={latestUpdate(tasksQuery.data ?? [])}
+          blockedReason={
+            stats && stats.total_tasks === 0
+              ? "В проекте пока нет задач"
+              : undefined
+          }
+          metrics={
+            statsQuery.isPending ? (
+              <Skeleton className="h-[88px] w-full rounded-none" />
+            ) : stats ? (
+              <StatStrip className="rounded-none border-0 bg-transparent shadow-none">
+                <StatTile
+                  label="Всего задач"
+                  value={stats.total_tasks}
+                  hint={`${stats.in_progress_tasks} в работе`}
+                  icon={<ListTodo size={12} />}
                 />
+                <StatTile
+                  label="Выполнено"
+                  value={`${Math.round(stats.completion_rate * 100)}%`}
+                  hint={`${stats.done_tasks} задач закрыто`}
+                  tone="success"
+                  icon={<CheckCircle2 size={12} />}
+                />
+                <StatTile
+                  label="Просрочено"
+                  value={stats.overdue_tasks}
+                  hint={
+                    stats.due_soon_tasks > 0
+                      ? `${stats.due_soon_tasks} со сроком на неделе`
+                      : "Ближайших сроков нет"
+                  }
+                  tone={stats.overdue_tasks > 0 ? "danger" : "default"}
+                  icon={<AlertTriangle size={12} />}
+                />
+                <StatTile
+                  label="Не в структуре"
+                  value={stats.unassigned_tasks}
+                  hint="Задач вне разделов ИСР"
+                  icon={<Network size={12} />}
+                />
+              </StatStrip>
+            ) : undefined
+          }
+          breakdown={
+            stats && stats.stage_breakdown.length > 0 ? (
+              <StageBreakdown stages={stats.stage_breakdown} />
+            ) : undefined
+          }
+          facts={
+            <PulseFacts
+              title="Ближайшие сроки"
+              count={upcoming.length}
+              empty="Задач со сроками нет."
+            >
+              {upcoming.map((task) => (
+                <TaskLine
+                  key={task.id}
+                  taskKey={task.key}
+                  title={task.title}
+                  stage={stageNames.get(task.stage_id)}
+                  priority={task.priority}
+                  meta={<DueDate value={task.due_date} />}
+                  onOpen={() => setSelectedTaskId(task.id)}
+                />
+              ))}
+            </PulseFacts>
+          }
+        />
 
-                <div className="grid gap-6 lg:grid-cols-2">
-                    <Section
-                        title="Ближайшие сроки"
-                        action={
-                            <span className="font-mono text-[12px] text-muted">
-                                {upcoming.length}
-                            </span>
-                        }
-                    >
-                        <div className="overflow-hidden rounded-[var(--radius-card)] bg-surface/55 p-1.5">
-                            {upcoming.length === 0 ? (
-                                <p className="px-2.5 py-6 text-center text-[13px] text-muted">
-                                    Задач со сроками нет.
-                                </p>
-                            ) : (
-                                upcoming.map((task) => (
-                                    <TaskLine
-                                        key={task.id}
-                                        taskKey={task.key}
-                                        title={task.title}
-                                        stage={stageNames.get(task.stage_id)}
-                                        priority={task.priority}
-                                        meta={<DueDate value={task.due_date} />}
-                                        onOpen={() => setSelectedTaskId(task.id)}
-                                    />
-                                ))
-                            )}
-                        </div>
-                    </Section>
-
-                    <Section title="О проекте">
-                        <div className="flex flex-col gap-3 px-1 py-1.5">
-                            {project.description_md ? (
-                                <Description markdown={project.description_md} />
-                            ) : (
-                                <p className="text-[13px] text-muted">
-                                    Описание проекта пока не заполнено.
-                                </p>
-                            )}
-                            <dl className="flex flex-col gap-1.5 border-t border-line-subtle pt-3 text-[12px]">
-                                {project.start_date && (
-                                    <div className="flex items-center gap-2">
-                                        <dt className="text-muted">Старт:</dt>
-                                        <dd className="font-mono text-secondary">
-                                            {formatDayMonth(project.start_date)}
-                                        </dd>
-                                    </div>
-                                )}
-                                {project.due_date && (
-                                    <div className="flex items-center gap-2">
-                                        <dt className="text-muted">Плановое завершение:</dt>
-                                        <dd className="inline-flex items-center gap-1 font-mono text-secondary">
-                                            <CalendarClock size={12} aria-hidden="true" />
-                                            {formatDayMonth(project.due_date)}
-                                        </dd>
-                                    </div>
-                                )}
-                                {stats?.next_due_date && (
-                                    <div className="flex items-center gap-2">
-                                        <dt className="text-muted">Ближайший срок задачи:</dt>
-                                        <dd className="font-mono text-secondary">
-                                            {formatDayMonth(stats.next_due_date)}
-                                        </dd>
-                                    </div>
-                                )}
-                            </dl>
-                        </div>
-                    </Section>
+        <Section title="О проекте">
+          <div className="flex flex-col gap-3 px-1 py-1.5">
+            {project.description_md ? (
+              <Description markdown={project.description_md} />
+            ) : (
+              <p className="text-[13px] text-muted">
+                Описание проекта пока не заполнено.
+              </p>
+            )}
+            <dl className="flex flex-col gap-1.5 border-t border-line-subtle pt-3 text-[12px]">
+              {project.start_date && (
+                <div className="flex items-center gap-2">
+                  <dt className="text-muted">Старт:</dt>
+                  <dd className="font-mono text-secondary">
+                    {formatDayMonth(project.start_date)}
+                  </dd>
                 </div>
-            </div>
-        </div>
-    );
+              )}
+              {project.due_date && (
+                <div className="flex items-center gap-2">
+                  <dt className="text-muted">Плановое завершение:</dt>
+                  <dd className="inline-flex items-center gap-1 font-mono text-secondary">
+                    <CalendarClock size={12} aria-hidden="true" />
+                    {formatDayMonth(project.due_date)}
+                  </dd>
+                </div>
+              )}
+              {stats?.next_due_date && (
+                <div className="flex items-center gap-2">
+                  <dt className="text-muted">Ближайший срок задачи:</dt>
+                  <dd className="font-mono text-secondary">
+                    {formatDayMonth(stats.next_due_date)}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        </Section>
+      </div>
+    </div>
+  );
 }

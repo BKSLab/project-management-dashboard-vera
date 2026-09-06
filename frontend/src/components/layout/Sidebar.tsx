@@ -19,7 +19,7 @@ import { UserMenu } from "@/components/users/UserMenu";
 import { useCurrentUser } from "@/lib/useAuth";
 
 const GLOBAL_ITEMS = [
-    { to: "/", label: "Портфель проектов", icon: LayoutDashboard, end: true },
+    { to: "/", label: "Портфель", icon: LayoutDashboard, end: true },
     { to: "/projects", label: "Проекты", icon: FolderKanban, end: false },
     { to: "/mcp", label: "MCP", icon: Plug, end: false },
 ];
