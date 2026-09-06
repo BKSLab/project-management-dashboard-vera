@@ -121,44 +121,33 @@ def anonymous_app():
     app.dependency_overrides.clear()
 
 
-@pytest.mark.parametrize(
-    ("method", "path", "payload"),
-    MUTATION_SAMPLES,
-    ids=[f"{method} {path}" for method, path, _ in MUTATION_SAMPLES],
-)
-async def test_read_token_cannot_mutate(
+async def test_read_token_cannot_mutate_any_class_of_mutation(
     api_client: AsyncClient,
     bearer_token,
-    method: str,
-    path: str,
-    payload: dict,
 ) -> None:
-    """Токен на чтение получает 403 на каждом классе доменных мутаций."""
+    """Токен на чтение получает 403 на каждом классе доменных мутаций.
+
+    Весь список проходится одним тестом: падение показывает сразу все
+    открывшиеся маршруты, а не первый из них. Разбиение того же списка на
+    отдельные тесты давало сорок с лишним идентификаторов при одном
+    проверяемом правиле.
+    """
     bearer_token(ApiTokenScope.READ)
+    offenders: list[str] = []
 
-    response = await api_client.request(
-        method,
-        path,
-        headers=auth_header(),
-        **payload,
-    )
+    for method, path, payload in MUTATION_SAMPLES:
+        response = await api_client.request(method, path, headers=auth_header(), **payload)
+        if response.status_code != 403:
+            offenders.append(f"{method} {path} -> {response.status_code}")
+        elif response.json() != {"detail": "Токен выдан только на чтение."}:
+            offenders.append(f"{method} {path} -> чужая формулировка отказа: {response.json()}")
 
-    assert response.status_code == 403, (
-        f"{method} {path} доступен токену на чтение: {response.status_code}"
-    )
-    assert response.json() == {"detail": "Токен выдан только на чтение."}
+    assert not offenders, "Токену на чтение доступны мутации:\n  " + "\n  ".join(offenders)
 
 
-@pytest.mark.parametrize(
-    ("path", "payload"),
-    READ_ONLY_POST_SAMPLES,
-    ids=[path for path, _ in READ_ONLY_POST_SAMPLES],
-)
 async def test_read_token_passes_read_only_posts(
     api_client: AsyncClient,
     bearer_token,
-    path: str,
-    payload: dict,
 ) -> None:
     """Расчёт и предпросмотр остаются доступны токену на чтение.
 
@@ -166,14 +155,14 @@ async def test_read_token_passes_read_only_posts(
     упасть по любой причине, и это уже не про права.
     """
     bearer_token(ApiTokenScope.READ)
+    offenders: list[str] = []
 
-    response = await api_client.post(
-        path,
-        headers=auth_header(),
-        **payload,
-    )
+    for path, payload in READ_ONLY_POST_SAMPLES:
+        response = await api_client.post(path, headers=auth_header(), **payload)
+        if response.status_code == 403:
+            offenders.append(path)
 
-    assert response.status_code != 403, f"{path} закрыт для токена на чтение."
+    assert not offenders, "Закрыты для токена на чтение: " + ", ".join(offenders)
 
 
 async def test_write_token_passes_the_scope_guard(

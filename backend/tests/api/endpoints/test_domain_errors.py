@@ -1,3 +1,13 @@
+"""Отображение доменных ошибок сервиса в HTTP-ответ.
+
+Правило одно на весь транспорт: эндпоинт переводит перечисленные ошибки
+своего сервиса в статус и формулировку, а всё непредусмотренное отдаёт
+как 500 без подробностей. Поэтому проверка — одна таблица отображений, а
+не отдельный тест на каждую пару «ошибка, маршрут»: таблица читается как
+спецификация и показывает сразу все расхождения.
+"""
+
+from dataclasses import dataclass, field
 from unittest.mock import AsyncMock
 
 import pytest
@@ -52,262 +62,263 @@ from src.services.tasks import TasksService
 from src.services.wbs_nodes import WbsNodesService
 
 
-@pytest.mark.asyncio
-async def test_create_project_maps_key_conflict_to_409(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=ProjectsService)
-    service.create_project.side_effect = ProjectKeyConflictError(key="PROJ")
-    app.dependency_overrides[get_projects_service] = lambda: service
+@dataclass(frozen=True)
+class Mapping:
+    """Одна строка спецификации «доменная ошибка → HTTP-ответ».
 
-    response = await api_client.post(
-        "/api/v1/projects",
-        json={"key": "PROJ", "name": "Тестовый проект"},
-    )
+    Attributes:
+        dependency: Фабрика сервиса, которую подменяет тест.
+        service: Класс сервиса для строгой заглушки.
+        method: Метод сервиса, поднимающий ошибку.
+        error: Сама доменная ошибка.
+        request: Метод и путь запроса.
+        status: Ожидаемый код ответа.
+        payload: Тело запроса, если оно нужно маршруту.
+        detail: Фрагмент, который обязан остаться в формулировке ответа.
+    """
 
-    assert response.status_code == 409
-    assert "PROJ" in response.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_get_project_maps_missing_project_to_404(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=ProjectsService)
-    service.get_project.side_effect = ProjectNotFoundError(project_id=999)
-    app.dependency_overrides[get_projects_service] = lambda: service
-
-    response = await api_client.get("/api/v1/projects/999")
-
-    assert response.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_delete_stage_maps_non_empty_stage_to_409(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=ProjectStagesService)
-    service.delete_stage.side_effect = ProjectStageHasTasksError(stage_id=2)
-    app.dependency_overrides[get_project_stages_service] = lambda: service
-
-    response = await api_client.delete("/api/v1/stages/2")
-
-    assert response.status_code == 409
+    dependency: object
+    service: type
+    method: str
+    error: Exception
+    request: tuple[str, str]
+    status: int
+    payload: dict | None = field(default=None)
+    detail: str | None = field(default=None)
 
 
-@pytest.mark.asyncio
-async def test_delete_stage_maps_last_stage_to_409(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=ProjectStagesService)
-    service.delete_stage.side_effect = ProjectLastStageDeleteError(stage_id=2)
-    app.dependency_overrides[get_project_stages_service] = lambda: service
-
-    response = await api_client.delete("/api/v1/stages/2")
-
-    assert response.status_code == 409
-    assert "последнюю" in response.json()["detail"].lower()
-
-
-@pytest.mark.asyncio
-async def test_get_task_maps_missing_task_to_404(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=TasksService)
-    service.get_task.side_effect = TaskNotFoundError(task_id=999)
-    app.dependency_overrides[get_tasks_service] = lambda: service
-
-    response = await api_client.get("/api/v1/tasks/999")
-
-    assert response.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_delete_comment_maps_missing_comment_to_404(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=TaskCommentsService)
-    service.delete_comment.side_effect = TaskCommentNotFoundError(comment_id=999)
-    app.dependency_overrides[get_task_comments_service] = lambda: service
-
-    response = await api_client.delete("/api/v1/comments/999")
-
-    assert response.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_update_wbs_node_maps_missing_node_to_404(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=WbsNodesService)
-    service.update_node.side_effect = WbsNodeNotFoundError(node_id=999)
-    app.dependency_overrides[get_wbs_nodes_service] = lambda: service
-
-    response = await api_client.patch(
-        "/api/v1/projects/1/wbs/nodes/999",
-        json={"title": "Новое название"},
-    )
-
-    assert response.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_move_wbs_node_maps_cycle_to_409(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=WbsNodesService)
-    service.move_node.side_effect = WbsNodeCycleError(node_id=3, parent_id=7)
-    app.dependency_overrides[get_wbs_nodes_service] = lambda: service
-
-    response = await api_client.post(
-        "/api/v1/projects/1/wbs/nodes/3/move",
-        json={"parent_id": 7, "before_id": None},
-    )
-
-    assert response.status_code == 409
-    assert "подраздел" in response.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_assign_task_maps_foreign_node_to_409(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=WbsNodesService)
-    service.assign_task.side_effect = WbsNodeForeignProjectError(node_id=5, project_id=1)
-    app.dependency_overrides[get_wbs_nodes_service] = lambda: service
-
-    response = await api_client.post(
-        "/api/v1/projects/1/wbs/tasks/2/assign",
-        json={"wbs_node_id": 5},
-    )
-
-    assert response.status_code == 409
-
-
-@pytest.mark.asyncio
-async def test_create_document_maps_slug_conflict_to_409(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=DocumentsService)
-    service.create_document.side_effect = DocumentSlugConflictError(slug="roadmap")
-    app.dependency_overrides[get_documents_service] = lambda: service
-
-    response = await api_client.post(
-        "/api/v1/projects/1/documents",
-        json={"slug": "roadmap", "title": "Roadmap", "content_md": "Текст"},
-    )
-
-    assert response.status_code == 409
-    assert "roadmap" in response.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_create_document_link_maps_duplicate_to_409(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=DocumentLinksService)
-    service.create_link.side_effect = DocumentLinkAlreadyExistsError(document_id=1)
-    app.dependency_overrides[get_document_links_service] = lambda: service
-
-    response = await api_client.post(
-        "/api/v1/document-links",
-        json={"document_id": 1, "task_id": 2},
-    )
-
-    assert response.status_code == 409
-    assert "уже существует" in response.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_create_document_link_maps_project_mismatch_to_409(
-    api_client: AsyncClient,
-) -> None:
-    service = AsyncMock(spec=DocumentLinksService)
-    service.create_link.side_effect = DocumentLinkProjectMismatchError(
-        document_id=1,
-        task_id=2,
-    )
-    app.dependency_overrides[get_document_links_service] = lambda: service
-
-    response = await api_client.post(
-        "/api/v1/document-links",
-        json={"document_id": 1, "task_id": 2},
-    )
-
-    assert response.status_code == 409
-    assert "одного проекта" in response.json()["detail"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("dependency", "service_class", "method_name", "error", "http_method", "path"),
-    [
-        (
-            get_dashboard_service,
-            DashboardService,
-            "get_overview",
-            DashboardServiceError("Ошибка сценария"),
-            "get",
-            "/api/v1/dashboard",
-        ),
-        (
-            get_projects_service,
-            ProjectsService,
-            "get_project_list",
-            ProjectsServiceError("Ошибка сценария"),
-            "get",
-            "/api/v1/projects",
-        ),
-        (
-            get_project_stages_service,
-            ProjectStagesService,
-            "get_stage_list",
-            ProjectStagesServiceError("Ошибка сценария"),
-            "get",
-            "/api/v1/projects/1/stages",
-        ),
-        (
-            get_tasks_service,
-            TasksService,
-            "get_task_list",
-            TasksServiceError("Ошибка сценария"),
-            "get",
-            "/api/v1/projects/1/tasks",
-        ),
-        (
-            get_wbs_nodes_service,
-            WbsNodesService,
-            "get_structure",
-            WbsNodesServiceError("Ошибка сценария"),
-            "get",
-            "/api/v1/projects/1/wbs",
-        ),
-        (
-            get_documents_service,
-            DocumentsService,
-            "get_document_list",
-            DocumentsServiceError("Ошибка сценария"),
-            "get",
-            "/api/v1/projects/1/documents",
-        ),
-        (
-            get_document_links_service,
-            DocumentLinksService,
-            "delete_link",
-            DocumentLinksServiceError("Ошибка сценария"),
-            "delete",
-            "/api/v1/document-links/1",
-        ),
-        (
-            get_task_comments_service,
-            TaskCommentsService,
-            "get_comments",
-            TaskCommentsServiceError("Ошибка сценария"),
-            "get",
-            "/api/v1/tasks/1/comments",
-        ),
-        (
-            get_task_activity_service,
-            TaskActivityService,
-            "get_activity",
-            TaskActivityServiceError("Ошибка сценария"),
-            "get",
-            "/api/v1/tasks/1/activity",
-        ),
-    ],
+DOMAIN_MAPPINGS = (
+    Mapping(
+        dependency=get_projects_service,
+        service=ProjectsService,
+        method="create_project",
+        error=ProjectKeyConflictError(key="PROJ"),
+        request=("post", "/api/v1/projects"),
+        payload={"key": "PROJ", "name": "Тестовый проект"},
+        status=409,
+        detail="PROJ",
+    ),
+    Mapping(
+        dependency=get_projects_service,
+        service=ProjectsService,
+        method="get_project",
+        error=ProjectNotFoundError(project_id=999),
+        request=("get", "/api/v1/projects/999"),
+        status=404,
+    ),
+    Mapping(
+        dependency=get_project_stages_service,
+        service=ProjectStagesService,
+        method="delete_stage",
+        error=ProjectStageHasTasksError(stage_id=2),
+        request=("delete", "/api/v1/stages/2"),
+        status=409,
+    ),
+    Mapping(
+        dependency=get_project_stages_service,
+        service=ProjectStagesService,
+        method="delete_stage",
+        error=ProjectLastStageDeleteError(stage_id=2),
+        request=("delete", "/api/v1/stages/2"),
+        status=409,
+        detail="последнюю",
+    ),
+    Mapping(
+        dependency=get_tasks_service,
+        service=TasksService,
+        method="get_task",
+        error=TaskNotFoundError(task_id=999),
+        request=("get", "/api/v1/tasks/999"),
+        status=404,
+    ),
+    Mapping(
+        dependency=get_task_comments_service,
+        service=TaskCommentsService,
+        method="delete_comment",
+        error=TaskCommentNotFoundError(comment_id=999),
+        request=("delete", "/api/v1/comments/999"),
+        status=404,
+    ),
+    Mapping(
+        dependency=get_wbs_nodes_service,
+        service=WbsNodesService,
+        method="update_node",
+        error=WbsNodeNotFoundError(node_id=999),
+        request=("patch", "/api/v1/projects/1/wbs/nodes/999"),
+        payload={"title": "Новое название"},
+        status=404,
+    ),
+    Mapping(
+        dependency=get_wbs_nodes_service,
+        service=WbsNodesService,
+        method="move_node",
+        error=WbsNodeCycleError(node_id=3, parent_id=7),
+        request=("post", "/api/v1/projects/1/wbs/nodes/3/move"),
+        payload={"parent_id": 7, "before_id": None},
+        status=409,
+        detail="подраздел",
+    ),
+    Mapping(
+        dependency=get_wbs_nodes_service,
+        service=WbsNodesService,
+        method="assign_task",
+        error=WbsNodeForeignProjectError(node_id=5, project_id=1),
+        request=("post", "/api/v1/projects/1/wbs/tasks/2/assign"),
+        payload={"wbs_node_id": 5},
+        status=409,
+    ),
+    Mapping(
+        dependency=get_documents_service,
+        service=DocumentsService,
+        method="create_document",
+        error=DocumentSlugConflictError(slug="roadmap"),
+        request=("post", "/api/v1/projects/1/documents"),
+        payload={"slug": "roadmap", "title": "Roadmap", "content_md": "Текст"},
+        status=409,
+        detail="roadmap",
+    ),
+    Mapping(
+        dependency=get_document_links_service,
+        service=DocumentLinksService,
+        method="create_link",
+        error=DocumentLinkAlreadyExistsError(document_id=1),
+        request=("post", "/api/v1/document-links"),
+        payload={"document_id": 1, "task_id": 2},
+        status=409,
+        detail="уже существует",
+    ),
+    Mapping(
+        dependency=get_document_links_service,
+        service=DocumentLinksService,
+        method="create_link",
+        error=DocumentLinkProjectMismatchError(document_id=1, task_id=2),
+        request=("post", "/api/v1/document-links"),
+        payload={"document_id": 1, "task_id": 2},
+        status=409,
+        detail="одного проекта",
+    ),
 )
-async def test_endpoint_maps_service_error_to_500(
+
+# Непредусмотренный сбой сервиса: наружу уходит 500 с непустой, но
+# ничего не раскрывающей формулировкой.
+SERVICE_FAILURE_MAPPINGS = (
+    Mapping(
+        dependency=get_dashboard_service,
+        service=DashboardService,
+        method="get_overview",
+        error=DashboardServiceError("Ошибка сценария"),
+        request=("get", "/api/v1/dashboard"),
+        status=500,
+    ),
+    Mapping(
+        dependency=get_projects_service,
+        service=ProjectsService,
+        method="get_project_list",
+        error=ProjectsServiceError("Ошибка сценария"),
+        request=("get", "/api/v1/projects"),
+        status=500,
+    ),
+    Mapping(
+        dependency=get_project_stages_service,
+        service=ProjectStagesService,
+        method="get_stage_list",
+        error=ProjectStagesServiceError("Ошибка сценария"),
+        request=("get", "/api/v1/projects/1/stages"),
+        status=500,
+    ),
+    Mapping(
+        dependency=get_tasks_service,
+        service=TasksService,
+        method="get_task_list",
+        error=TasksServiceError("Ошибка сценария"),
+        request=("get", "/api/v1/projects/1/tasks"),
+        status=500,
+    ),
+    Mapping(
+        dependency=get_wbs_nodes_service,
+        service=WbsNodesService,
+        method="get_structure",
+        error=WbsNodesServiceError("Ошибка сценария"),
+        request=("get", "/api/v1/projects/1/wbs"),
+        status=500,
+    ),
+    Mapping(
+        dependency=get_documents_service,
+        service=DocumentsService,
+        method="get_document_list",
+        error=DocumentsServiceError("Ошибка сценария"),
+        request=("get", "/api/v1/projects/1/documents"),
+        status=500,
+    ),
+    Mapping(
+        dependency=get_document_links_service,
+        service=DocumentLinksService,
+        method="delete_link",
+        error=DocumentLinksServiceError("Ошибка сценария"),
+        request=("delete", "/api/v1/document-links/1"),
+        status=500,
+    ),
+    Mapping(
+        dependency=get_task_comments_service,
+        service=TaskCommentsService,
+        method="get_comments",
+        error=TaskCommentsServiceError("Ошибка сценария"),
+        request=("get", "/api/v1/tasks/1/comments"),
+        status=500,
+    ),
+    Mapping(
+        dependency=get_task_activity_service,
+        service=TaskActivityService,
+        method="get_activity",
+        error=TaskActivityServiceError("Ошибка сценария"),
+        request=("get", "/api/v1/tasks/1/activity"),
+        status=500,
+    ),
+)
+
+
+async def check(api_client: AsyncClient, mapping: Mapping) -> str | None:
+    """Проверяет одну строку спецификации и возвращает расхождение."""
+    service = AsyncMock(spec=mapping.service)
+    getattr(service, mapping.method).side_effect = mapping.error
+    app.dependency_overrides[mapping.dependency] = lambda: service
+
+    method, path = mapping.request
+    request_kwargs = {"json": mapping.payload} if mapping.payload is not None else {}
+    response = await getattr(api_client, method)(path, **request_kwargs)
+
+    where = f"{type(mapping.error).__name__} на {method.upper()} {path}"
+    if response.status_code != mapping.status:
+        return f"{where}: {response.status_code} вместо {mapping.status}"
+    body = response.json()
+    if not body.get("detail"):
+        return f"{where}: пустая формулировка ответа"
+    if mapping.detail is not None and mapping.detail not in body["detail"]:
+        return f"{where}: в ответе нет «{mapping.detail}» — {body['detail']}"
+    return None
+
+
+@pytest.mark.asyncio
+async def test_domain_errors_map_to_their_documented_responses(
     api_client: AsyncClient,
-    dependency: object,
-    service_class: type,
-    method_name: str,
-    error: Exception,
-    http_method: str,
-    path: str,
 ) -> None:
-    service = AsyncMock(spec=service_class)
-    getattr(service, method_name).side_effect = error
-    app.dependency_overrides[dependency] = lambda: service
+    """Каждая доменная ошибка отдаёт свой статус и сохраняет формулировку."""
+    problems = [
+        problem
+        for mapping in DOMAIN_MAPPINGS
+        if (problem := await check(api_client, mapping)) is not None
+    ]
 
-    response = await getattr(api_client, http_method)(path)
+    assert not problems, "Доменные ошибки отображены иначе:\n  " + "\n  ".join(problems)
 
-    assert response.status_code == 500
-    assert response.json()["detail"]
+
+@pytest.mark.asyncio
+async def test_unforeseen_service_failure_maps_to_500(api_client: AsyncClient) -> None:
+    """Сбой сервиса, не перечисленный эндпоинтом, уходит наружу как 500."""
+    problems = [
+        problem
+        for mapping in SERVICE_FAILURE_MAPPINGS
+        if (problem := await check(api_client, mapping)) is not None
+    ]
+
+    assert not problems, "Сбой сервиса отображён иначе:\n  " + "\n  ".join(problems)

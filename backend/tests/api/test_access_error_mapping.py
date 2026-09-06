@@ -4,6 +4,8 @@ Depends-слой не принимает решений: он только пе�
 и формулировку. Здесь проверяется именно перевод, по одной ошибке за раз.
 """
 
+from functools import partial
+
 import pytest
 from httpx import AsyncClient
 
@@ -68,51 +70,64 @@ def failing_access(anonymous_app: None):
     return install
 
 
-@pytest.mark.parametrize(
-    "error",
-    [
-        NotAuthenticatedError(),
-        InactiveUserError(user_id=1),
-        AuthServiceError("сбой базы"),
-    ],
-    ids=["не аутентифицирован", "учётная запись отключена", "сбой инфраструктуры"],
+AUTH_ERRORS = (
+    NotAuthenticatedError(),
+    InactiveUserError(user_id=1),
+    AuthServiceError("сбой базы"),
 )
+
+
 async def test_auth_service_error_maps_to_its_status(
     api_client: AsyncClient,
     anonymous_app: None,
-    error: Exception,
 ) -> None:
     """Каждая ошибка аутентификации отдаёт свой код и свою формулировку."""
-    app.dependency_overrides[get_auth_service] = lambda: FailingAuthService(error)
+    problems: list[str] = []
+    for error in AUTH_ERRORS:
+        app.dependency_overrides[get_auth_service] = partial(FailingAuthService, error)
 
-    response = await api_client.get("/api/v1/projects")
+        response = await api_client.get("/api/v1/projects")
 
-    assert response.status_code == error.status_code
-    assert response.json() == {"detail": error.detail}
+        if (response.status_code, response.json()) != (
+            error.status_code,
+            {"detail": error.detail},
+        ):
+            problems.append(
+                f"{type(error).__name__}: {response.status_code} {response.json()} "
+                f"вместо {error.status_code} {{'detail': {error.detail!r}}}"
+            )
+
+    assert not problems, "Ошибки аутентификации отображены иначе: " + "; ".join(problems)
 
 
-@pytest.mark.parametrize(
-    ("error", "expected_status"),
-    [
-        (ResourceNotAvailableError(resource="Проект", resource_id=1), 404),
-        (ProjectOwnerRequiredError(project_id=1), 403),
-        (AccessServiceError("сбой базы"), 500),
-    ],
-    ids=["объект недоступен", "нужен владелец", "сбой инфраструктуры"],
+ACCESS_ERRORS = (
+    (ResourceNotAvailableError(resource="Проект", resource_id=1), 404),
+    (ProjectOwnerRequiredError(project_id=1), 403),
+    (AccessServiceError("сбой базы"), 500),
 )
+
+
 async def test_access_service_error_maps_to_its_status(
     api_client: AsyncClient,
     failing_access,
-    error: Exception,
-    expected_status: int,
 ) -> None:
     """Каждая ошибка доступа отдаёт свой код и свою формулировку."""
-    failing_access(error)
+    problems: list[str] = []
+    for error, expected_status in ACCESS_ERRORS:
+        failing_access(error)
 
-    response = await api_client.get("/api/v1/projects/1", headers=auth_header())
+        response = await api_client.get("/api/v1/projects/1", headers=auth_header())
 
-    assert response.status_code == expected_status
-    assert response.json() == {"detail": error.detail}
+        if (response.status_code, response.json()) != (
+            expected_status,
+            {"detail": error.detail},
+        ):
+            problems.append(
+                f"{type(error).__name__}: {response.status_code} {response.json()} "
+                f"вместо {expected_status} {{'detail': {error.detail!r}}}"
+            )
+
+    assert not problems, "Ошибки доступа отображены иначе: " + "; ".join(problems)
 
 
 async def test_infrastructure_failure_is_not_reported_as_missing_object(

@@ -52,17 +52,23 @@ def anonymous() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("method", "path"), PROTECTED_REQUESTS)
-async def test_protected_endpoint_requires_login(
+async def test_protected_endpoints_require_login(
     api_client: AsyncClient,
     anonymous: None,
-    method: str,
-    path: str,
 ) -> None:
-    request_kwargs = {"json": {}} if method in {"post", "put", "patch"} else {}
-    response = await api_client.request(method.upper(), path, **request_kwargs)
+    """Ни один защищённый маршрут не отвечает без входа.
 
-    assert response.status_code == 401, f"{method.upper()} {path} доступен без входа"
+    Список проходится одним тестом: сообщение показывает сразу все
+    открывшиеся маршруты. Это одно правило, а не тридцать пять разных.
+    """
+    offenders: list[str] = []
+    for method, path in PROTECTED_REQUESTS:
+        request_kwargs = {"json": {}} if method in {"post", "put", "patch"} else {}
+        response = await api_client.request(method.upper(), path, **request_kwargs)
+        if response.status_code != 401:
+            offenders.append(f"{method.upper()} {path} -> {response.status_code}")
+
+    assert not offenders, "Доступны без входа:\n  " + "\n  ".join(offenders)
 
 
 @pytest.mark.asyncio
