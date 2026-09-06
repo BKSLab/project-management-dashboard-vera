@@ -9,7 +9,8 @@ import { LinkButton } from "@/components/ui/Button";
 import { Section } from "@/components/ui/Card";
 import { StatStrip, StatTile } from "@/components/ui/Progress";
 import { EmptyState, ErrorMessage, Skeleton } from "@/components/ui/States";
-import { AnalyticsPanel } from "@/components/dashboard/AnalyticsPanel";
+import { PulseBoard } from "@/components/pulse/PulseBoard";
+import { PortfolioBreakdown } from "@/components/pulse/PulseBreakdown";
 import { ProjectCard } from "@/components/dashboard/ProjectCard";
 import { TaskRow } from "@/components/dashboard/TaskRow";
 import { TaskDrawer } from "@/components/tasks/TaskDrawer";
@@ -66,44 +67,48 @@ export function DashboardPage() {
 
             {dashboardQuery.data && (
                 <>
-                    <StatStrip>
-                        <StatTile
-                            label="Проекты"
-                            value={dashboardQuery.data.totals.active_projects}
-                            hint={`Всего проектов: ${dashboardQuery.data.totals.total_projects}`}
-                            icon={<FolderKanban size={12} />}
-                        />
-                        <StatTile
-                            label="В работе"
-                            value={dashboardQuery.data.totals.in_progress_tasks}
-                            hint={`Всего задач: ${dashboardQuery.data.totals.total_tasks}`}
-                            icon={<ListTodo size={12} />}
-                        />
-                        <StatTile
-                            label="Выполнено"
-                            value={`${Math.round(dashboardQuery.data.totals.completion_rate * 100)}%`}
-                            hint={`${dashboardQuery.data.totals.done_tasks} задач закрыто`}
-                            tone="success"
-                            icon={<CheckCircle2 size={12} />}
-                        />
-                        <StatTile
-                            label="Просрочено"
-                            value={dashboardQuery.data.totals.overdue_tasks}
-                            hint={
-                                dashboardQuery.data.totals.overdue_tasks > 0
-                                    ? "Требует внимания"
-                                    : "Всё в срок"
-                            }
-                            tone={
-                                dashboardQuery.data.totals.overdue_tasks > 0 ? "danger" : "default"
-                            }
-                            icon={<AlertTriangle size={12} />}
-                        />
-                    </StatStrip>
-
-                    {dashboardQuery.data.projects.length > 0 && (
-                        <AnalyticsPanel onOpenTask={setSelectedTaskId} />
-                    )}
+                    <PulseBoard
+                        onOpenTask={setSelectedTaskId}
+                        metrics={
+                            <StatStrip className="rounded-none border-0 bg-transparent shadow-none">
+                                <StatTile
+                                    label="Проекты в работе"
+                                    value={dashboardQuery.data.totals.active_projects}
+                                    hint={`Всего проектов: ${dashboardQuery.data.totals.total_projects}`}
+                                    icon={<FolderKanban size={12} />}
+                                />
+                                <StatTile
+                                    label="Задачи в работе"
+                                    value={dashboardQuery.data.totals.in_progress_tasks}
+                                    hint={`Всего задач: ${dashboardQuery.data.totals.total_tasks}`}
+                                    icon={<ListTodo size={12} />}
+                                />
+                                <StatTile
+                                    label="Выполнено"
+                                    value={`${Math.round(dashboardQuery.data.totals.completion_rate * 100)}%`}
+                                    hint={`${dashboardQuery.data.totals.done_tasks} задач закрыто`}
+                                    tone="success"
+                                    icon={<CheckCircle2 size={12} />}
+                                />
+                                <StatTile
+                                    label="Просрочено"
+                                    value={dashboardQuery.data.totals.overdue_tasks}
+                                    hint={
+                                        dashboardQuery.data.totals.overdue_tasks > 0
+                                            ? "Требует внимания"
+                                            : "Всё в срок"
+                                    }
+                                    tone={
+                                        dashboardQuery.data.totals.overdue_tasks > 0
+                                            ? "danger"
+                                            : "default"
+                                    }
+                                    icon={<AlertTriangle size={12} />}
+                                />
+                            </StatStrip>
+                        }
+                        breakdown={<PortfolioBreakdown projects={dashboardQuery.data.projects} />}
+                    />
 
                     <Section
                         title="Проекты"

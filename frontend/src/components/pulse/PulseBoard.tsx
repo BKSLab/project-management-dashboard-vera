@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     Activity,
@@ -22,11 +23,15 @@ import {
     RecommendationCard,
 } from "@/components/dashboard/AnalyticsCards";
 
-const HEALTH_STYLES: Record<AnalyticsHealth, { badge: string; dot: string }> = {
-    STABLE: { badge: "border-success/30 bg-success/10 text-success", dot: "bg-success" },
-    WATCH: { badge: "border-accent-border bg-accent-soft text-accent", dot: "bg-accent" },
-    RISK: { badge: "border-warning/30 bg-warning/10 text-warning", dot: "bg-warning" },
-    CRITICAL: { badge: "border-danger/35 bg-danger/12 text-danger", dot: "bg-danger" },
+/**
+ * Оценка состояния красит весь блок, а не только свой значок: цифры и вывод
+ * модели относятся к одному организму и должны читаться как одно целое.
+ */
+const HEALTH_STYLES: Record<AnalyticsHealth, { badge: string; strip: string }> = {
+    STABLE: { badge: "border-success/30 bg-success/10 text-success", strip: "bg-success/70" },
+    WATCH: { badge: "border-accent-border bg-accent-soft text-accent", strip: "bg-accent/70" },
+    RISK: { badge: "border-warning/30 bg-warning/10 text-warning", strip: "bg-warning/75" },
+    CRITICAL: { badge: "border-danger/35 bg-danger/12 text-danger", strip: "bg-danger/80" },
 };
 
 const HEALTH_ICONS: Record<AnalyticsHealth, typeof Activity> = {
@@ -51,41 +56,67 @@ const SIGNAL_ROWS: { key: keyof AnalyticsSignals; label: string; tone: string }[
     { key: "unplaced_tasks", label: "вне ИСР", tone: "text-secondary" },
 ];
 
-interface AnalyticsPanelProps {
-    /** Проект разбора; без него разбирается портфель активных проектов. */
-    projectId?: number | null;
-    onOpenTask: (taskId: number) => void;
-}
-
-/** Тексты области: у портфеля и у проекта разные вопросы к аналитике. */
+/**
+ * Тексты области. Портфель и проект отвечают на разные вопросы, поэтому
+ * различаются и заголовком, и тем, что обещают показать.
+ */
 const SCOPE_COPY = {
     portfolio: {
-        title: "Сводка по проектам",
+        title: "Пульс портфеля",
         subtitle: "Состояние активных проектов: где горит и за что браться первым",
-        introTitle: "Статистика есть — нужна трактовка",
+        unit: "проектам",
+        introTitle: "Цифры собраны — нужна трактовка",
         introText:
-            "Сводка сравнивает активные проекты между собой: где сорваны сроки, где работа встала и за какой проект браться сегодня. Запускается кнопкой — расписания нет.",
+            "Разбор сравнивает активные проекты между собой: где сорваны сроки, где работа встала и за какой проект браться сегодня.",
         pendingText:
             "Читаю показатели, вехи и проблемные задачи каждого активного проекта. Обычно это занимает до полуминуты.",
+        findings: "Где горит",
+        progress: "Где движется",
+        recommendations: "За что взяться",
+        emptyFindings: "Проектов, требующих вмешательства, модель не нашла.",
+        emptyProgress: "Заметного движения по проектам за последнее время нет.",
+        emptyRecommendations: "Перераспределять усилия между проектами не нужно.",
     },
     project: {
         title: "Пульс проекта",
-        subtitle: "Разбор задач, комментариев, ИСР, доски и документов проекта",
-        introTitle: "Статистика есть — нужна трактовка",
+        subtitle: "Задачи, комментарии, ИСР, доска и документы одним разбором",
+        unit: "задачам",
+        introTitle: "Цифры собраны — нужна трактовка",
         introText:
-            "Пульс показывает, что и где просрочено, что сделано и как это шло по комментариям, и какие организационные шаги стоит сделать. Запускается кнопкой — расписания нет.",
+            "Разбор показывает, что и где просрочено, что сделано и как это шло по комментариям, и какие организационные шаги стоит сделать.",
         pendingText:
             "Читаю задачи, комментарии, историю изменений, ИСР, стикеры и документы. Обычно это занимает до полуминуты.",
+        findings: "Что горит",
+        progress: "Что сделано",
+        recommendations: "Что делать",
+        emptyFindings: "Проблем, требующих решения, модель не нашла.",
+        emptyProgress: "Заметных результатов за последнее время нет.",
+        emptyRecommendations: "Организационных действий не требуется.",
     },
 } as const;
 
+type ScopeCopy = (typeof SCOPE_COPY)[keyof typeof SCOPE_COPY];
+
+interface PulseBoardProps {
+    /** Проект разбора; без него разбирается портфель активных проектов. */
+    projectId?: number | null;
+    /** Числовые показатели области: они верны всегда и не ждут модели. */
+    metrics?: ReactNode;
+    /** Разрез области: стадии проекта или его проекты — по чему разбор. */
+    breakdown?: ReactNode;
+    onOpenTask: (taskId: number) => void;
+}
+
 /**
- * Аналитика по кнопке: модель разбирает срез и объясняет, что в нём важно.
- * Свод сохраняется на backend, поэтому переживает перезагрузку и виден
- * команде целиком. Область задаётся снаружи: дашборд всегда спрашивает про
- * портфель, страница проекта — только про свой проект.
+ * Пульс — единый блок состояния: показатели и их трактовка на одной
+ * поверхности.
+ *
+ * Раньше цифры жили отдельной полосой сверху, а разбор модели — своей
+ * панелью ниже, и связь между ними приходилось достраивать самому. Здесь
+ * приборы и диагноз идут одним потоком: полоса состояния сверху, показатели,
+ * разрез области, вывод модели и его основания.
  */
-export function AnalyticsPanel({ projectId = null, onOpenTask }: AnalyticsPanelProps) {
+export function PulseBoard({ projectId = null, metrics, breakdown, onOpenTask }: PulseBoardProps) {
     const queryClient = useQueryClient();
     const copy = projectId ? SCOPE_COPY.project : SCOPE_COPY.portfolio;
 
@@ -103,6 +134,8 @@ export function AnalyticsPanel({ projectId = null, onOpenTask }: AnalyticsPanelP
     });
 
     const report = reportQuery.data ?? null;
+    const health = report ? HEALTH_STYLES[report.health] : null;
+    const HealthIcon = report ? HEALTH_ICONS[report.health] : null;
 
     return (
         <section
@@ -111,12 +144,35 @@ export function AnalyticsPanel({ projectId = null, onOpenTask }: AnalyticsPanelP
                 "rounded-[var(--radius-panel)] border border-ai-border shadow-card",
             )}
         >
-            <header className="flex flex-wrap items-center gap-3 border-b border-line-subtle px-4 py-3">
+            {/* Полоса состояния окрашивает блок целиком: оценка относится и к
+                показателям, и к выводу, а не к одному абзацу текста. */}
+            <div
+                className={cn(
+                    "h-[3px] w-full transition-colors duration-[var(--duration-normal)]",
+                    health ? health.strip : "bg-ai-border",
+                )}
+            />
+
+            <header className="flex flex-wrap items-center gap-3 px-4 py-3">
                 <span className="ai-mark flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-ai-blue">
                     <Sparkles size={16} aria-hidden="true" />
                 </span>
                 <div className="min-w-0 flex-1">
-                    <h2 className="text-[13px] font-semibold text-primary">{copy.title}</h2>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-[13px] font-semibold text-primary">{copy.title}</h2>
+                        {report && health && HealthIcon && (
+                            <span
+                                className={cn(
+                                    "inline-flex items-center gap-1.5 rounded-[5px] border px-2 py-0.5",
+                                    "text-[11px] font-semibold",
+                                    health.badge,
+                                )}
+                            >
+                                <HealthIcon size={12} aria-hidden="true" />
+                                {ANALYTICS_HEALTH_LABELS[report.health]}
+                            </span>
+                        )}
+                    </div>
                     <p className="truncate text-[11px] text-muted">{copy.subtitle}</p>
                 </div>
                 <Button
@@ -131,41 +187,47 @@ export function AnalyticsPanel({ projectId = null, onOpenTask }: AnalyticsPanelP
                         )
                     }
                 >
-                    {generate.isPending
-                        ? "Разбираю…"
-                        : report
-                          ? "Обновить"
-                          : "Сформировать аналитику"}
+                    {generate.isPending ? "Разбираю…" : report ? "Обновить разбор" : "Разобрать"}
                 </Button>
             </header>
 
+            {metrics && <div className="border-t border-line-subtle">{metrics}</div>}
+            {breakdown && (
+                <div className="border-t border-line-subtle px-4 py-3.5">{breakdown}</div>
+            )}
+
             {generate.error && (
-                <div className="px-4 pt-3">
+                <div className="border-t border-line-subtle px-4 pt-3">
                     <ErrorMessage
-                        title="Аналитика не сформирована"
+                        title="Разбор не сформирован"
                         message={(generate.error as Error).message}
                     />
                 </div>
             )}
 
             {reportQuery.isPending ? (
-                <AnalyticsSkeleton />
+                <PulseSkeleton />
             ) : report ? (
-                <AnalyticsReportView
+                <PulseVerdict
                     report={report}
+                    copy={copy}
                     stale={generate.isPending}
                     onOpenTask={onOpenTask}
                 />
             ) : (
-                <AnalyticsIntro pending={generate.isPending} copy={copy} />
+                <PulseIntro pending={generate.isPending} copy={copy} />
             )}
         </section>
     );
 }
 
-function AnalyticsSkeleton() {
+function PulseSkeleton() {
     return (
-        <div role="status" aria-label="Загрузка аналитики" className="flex flex-col gap-3 p-4">
+        <div
+            role="status"
+            aria-label="Загрузка разбора"
+            className="flex flex-col gap-3 border-t border-line-subtle p-4"
+        >
             <Skeleton className="h-6 w-2/3" />
             <Skeleton className="h-4 w-1/2" />
             <div className="grid gap-3 xl:grid-cols-3">
@@ -177,14 +239,9 @@ function AnalyticsSkeleton() {
     );
 }
 
-interface AnalyticsIntroProps {
-    pending: boolean;
-    copy: (typeof SCOPE_COPY)[keyof typeof SCOPE_COPY];
-}
-
-function AnalyticsIntro({ pending, copy }: AnalyticsIntroProps) {
+function PulseIntro({ pending, copy }: { pending: boolean; copy: ScopeCopy }) {
     return (
-        <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+        <div className="flex flex-col items-center gap-3 border-t border-line-subtle px-6 py-9 text-center">
             <span className="ai-mark flex size-11 items-center justify-center rounded-[var(--radius-card)] text-ai-blue">
                 {pending ? (
                     <RefreshCw size={20} className="animate-spin" aria-hidden="true" />
@@ -204,43 +261,25 @@ function AnalyticsIntro({ pending, copy }: AnalyticsIntroProps) {
     );
 }
 
-interface AnalyticsReportViewProps {
+interface PulseVerdictProps {
     report: AnalyticsReport;
+    copy: ScopeCopy;
     stale: boolean;
     onOpenTask: (taskId: number) => void;
 }
 
-function AnalyticsReportView({ report, stale, onOpenTask }: AnalyticsReportViewProps) {
-    const health = HEALTH_STYLES[report.health];
-    const HealthIcon = HEALTH_ICONS[report.health];
+function PulseVerdict({ report, copy, stale, onOpenTask }: PulseVerdictProps) {
     const signals = SIGNAL_ROWS.filter((row) => report.signals[row.key] > 0);
 
     return (
         <div
             className={cn(
-                "flex min-w-0 flex-col transition-opacity duration-[var(--duration-normal)]",
+                "flex min-w-0 flex-col border-t border-line-subtle",
+                "transition-opacity duration-[var(--duration-normal)]",
                 stale && "opacity-45",
             )}
         >
             <div className="flex flex-col gap-3 px-4 py-4">
-                <div className="flex flex-wrap items-center gap-2">
-                    <span
-                        className={cn(
-                            "inline-flex items-center gap-1.5 rounded-[5px] border px-2 py-0.5",
-                            "text-[11px] font-semibold",
-                            health.badge,
-                        )}
-                    >
-                        <HealthIcon size={12} aria-hidden="true" />
-                        {ANALYTICS_HEALTH_LABELS[report.health]}
-                    </span>
-                    <span className="text-[11px] text-muted">
-                        <span className="font-mono text-secondary">
-                            {report.signals.done_tasks}/{report.signals.total_tasks}
-                        </span>{" "}
-                        задач закрыто
-                    </span>
-                </div>
                 <p className="max-w-4xl text-[17px] leading-snug font-semibold tracking-[-0.02em] text-primary">
                     {report.headline}
                 </p>
@@ -251,7 +290,12 @@ function AnalyticsReportView({ report, stale, onOpenTask }: AnalyticsReportViewP
                     <ul className="flex flex-wrap gap-x-4 gap-y-1.5 pt-0.5">
                         {signals.map((row) => (
                             <li key={row.key} className="flex items-baseline gap-1.5 text-[11px]">
-                                <span className={cn("font-mono text-[13px] font-semibold", row.tone)}>
+                                <span
+                                    className={cn(
+                                        "font-mono text-[13px] font-semibold",
+                                        row.tone,
+                                    )}
+                                >
                                     {report.signals[row.key]}
                                 </span>
                                 <span className="text-muted">{row.label}</span>
@@ -262,11 +306,11 @@ function AnalyticsReportView({ report, stale, onOpenTask }: AnalyticsReportViewP
             </div>
 
             <div className="grid gap-x-4 gap-y-5 border-t border-line-subtle px-4 py-4 lg:grid-cols-2 xl:grid-cols-3">
-                <AnalyticsColumn
-                    title="Что горит"
+                <PulseColumn
+                    title={copy.findings}
                     icon={<Flame size={12} aria-hidden="true" />}
                     count={report.findings.length}
-                    empty="Проблем, требующих решения, модель не нашла."
+                    empty={copy.emptyFindings}
                 >
                     {report.findings.map((finding, index) => (
                         <FindingCard
@@ -275,13 +319,13 @@ function AnalyticsReportView({ report, stale, onOpenTask }: AnalyticsReportViewP
                             onOpenTask={onOpenTask}
                         />
                     ))}
-                </AnalyticsColumn>
+                </PulseColumn>
 
-                <AnalyticsColumn
-                    title="Что сделано"
+                <PulseColumn
+                    title={copy.progress}
                     icon={<CircleCheckBig size={12} aria-hidden="true" />}
                     count={report.progress.length}
-                    empty="Заметных результатов за последнее время нет."
+                    empty={copy.emptyProgress}
                 >
                     {report.progress.map((progress, index) => (
                         <ProgressCard
@@ -290,13 +334,13 @@ function AnalyticsReportView({ report, stale, onOpenTask }: AnalyticsReportViewP
                             onOpenTask={onOpenTask}
                         />
                     ))}
-                </AnalyticsColumn>
+                </PulseColumn>
 
-                <AnalyticsColumn
-                    title="Что делать"
+                <PulseColumn
+                    title={copy.recommendations}
                     icon={<Lightbulb size={12} aria-hidden="true" />}
                     count={report.recommendations.length}
-                    empty="Организационных действий не требуется."
+                    empty={copy.emptyRecommendations}
                 >
                     {report.recommendations.map((recommendation, index) => (
                         <RecommendationCard
@@ -305,23 +349,23 @@ function AnalyticsReportView({ report, stale, onOpenTask }: AnalyticsReportViewP
                             onOpenTask={onOpenTask}
                         />
                     ))}
-                </AnalyticsColumn>
+                </PulseColumn>
             </div>
 
-            <AnalyticsFooter report={report} />
+            <PulseFooter report={report} unit={copy.unit} />
         </div>
     );
 }
 
-interface AnalyticsColumnProps {
+interface PulseColumnProps {
     title: string;
-    icon: React.ReactNode;
+    icon: ReactNode;
     count: number;
     empty: string;
-    children: React.ReactNode;
+    children: ReactNode;
 }
 
-function AnalyticsColumn({ title, icon, count, empty, children }: AnalyticsColumnProps) {
+function PulseColumn({ title, icon, count, empty, children }: PulseColumnProps) {
     return (
         <div className="flex min-w-0 flex-col gap-2">
             <h3 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">
@@ -340,11 +384,12 @@ function AnalyticsColumn({ title, icon, count, empty, children }: AnalyticsColum
     );
 }
 
-function AnalyticsFooter({ report }: { report: AnalyticsReport }) {
+function PulseFooter({ report, unit }: { report: AnalyticsReport; unit: string }) {
     const { context } = report;
     const included = [
         `${context.tasks_included} из ${context.tasks_total} задач`,
         context.comments_included > 0 && `${context.comments_included} комментариев`,
+        context.milestones_included > 0 && `${context.milestones_included} вех`,
         context.wbs_nodes_included > 0 && `${context.wbs_nodes_included} разделов ИСР`,
         context.stickers_included > 0 && `${context.stickers_included} стикеров`,
         context.documents_included > 0 && `${context.documents_included} документов`,
@@ -353,10 +398,10 @@ function AnalyticsFooter({ report }: { report: AnalyticsReport }) {
     return (
         <footer className="flex flex-col gap-1.5 border-t border-line-subtle px-4 py-2.5">
             <p className="text-[11px] text-muted">
-                {formatDateTime(report.created_at)} · {report.created_by} · {report.llm_model} ·{" "}
-                {Math.round(report.duration_ms / 1000)} с
+                Разбор по {unit} · {formatDateTime(report.created_at)} · {report.created_by} ·{" "}
+                {report.llm_model} · {Math.round(report.duration_ms / 1000)} с
             </p>
-            <p className="text-[11px] text-disabled">В анализ вошли: {included.join(", ")}.</p>
+            <p className="text-[11px] text-disabled">В разбор вошли: {included.join(", ")}.</p>
             {context.truncated && context.omitted.length > 0 && (
                 <details className="text-[11px] text-disabled">
                     <summary className="inline-flex cursor-pointer items-center gap-1 hover:text-muted">

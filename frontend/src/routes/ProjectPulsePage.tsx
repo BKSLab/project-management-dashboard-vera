@@ -6,12 +6,12 @@ import { formatDayMonth } from "@/lib/dates";
 import { useProjectOutlet } from "@/lib/useProjectOutlet";
 import { useRenderedMarkdown } from "@/lib/useRenderedMarkdown";
 import { useUiStore } from "@/stores/ui";
-import { Card, Section } from "@/components/ui/Card";
-import { SegmentedProgress, StatStrip, StatTile } from "@/components/ui/Progress";
-import { StatusDot } from "@/components/ui/Badge";
+import { Section } from "@/components/ui/Card";
+import { StatStrip, StatTile } from "@/components/ui/Progress";
 import { DueDate } from "@/components/ui/DueDate";
 import { ErrorMessage, Skeleton } from "@/components/ui/States";
-import { AnalyticsPanel } from "@/components/dashboard/AnalyticsPanel";
+import { PulseBoard } from "@/components/pulse/PulseBoard";
+import { StageBreakdown } from "@/components/pulse/PulseBreakdown";
 
 const UPCOMING_LIMIT = 8;
 
@@ -29,10 +29,10 @@ function Description({ markdown }: { markdown: string }) {
 /**
  * Пульс проекта — главная страница проекта.
  *
- * Сначала факты, которые верны всегда: показатели задач и распределение по
- * стадиям. Затем трактовка модели: что горит, что сделано, что делать.
- * Ниже — ближайшие сроки и паспорт проекта. Порядок именно такой: цифры
- * читаются мгновенно и не зависят от того, запускали ли разбор.
+ * Показатели, разрез по стадиям и разбор модели живут одним блоком: цифры
+ * и их трактовка относятся к одному состоянию, и разносить их по разным
+ * секциям значит заставлять читателя собирать связь самому. Ниже блока —
+ * то, что от состояния не зависит: ближайшие сроки и паспорт проекта.
  */
 export function ProjectPulsePage() {
     const project = useProjectOutlet();
@@ -64,12 +64,14 @@ export function ProjectPulsePage() {
             <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-5 py-5">
                 {statsQuery.error && <ErrorMessage message={(statsQuery.error as Error).message} />}
 
-                {statsQuery.isPending ? (
-                    <Skeleton className="h-[88px] w-full" />
-                ) : (
-                    stats && (
-                        <>
-                            <StatStrip>
+                <PulseBoard
+                    projectId={project.id}
+                    onOpenTask={setSelectedTaskId}
+                    metrics={
+                        statsQuery.isPending ? (
+                            <Skeleton className="h-[88px] w-full rounded-none" />
+                        ) : stats ? (
+                            <StatStrip className="rounded-none border-0 bg-transparent shadow-none">
                                 <StatTile
                                     label="Всего задач"
                                     value={stats.total_tasks}
@@ -101,38 +103,14 @@ export function ProjectPulsePage() {
                                     icon={<Network size={12} />}
                                 />
                             </StatStrip>
-
-                            <Section title="Распределение по стадиям">
-                                <Card className="flex flex-col gap-3 p-4">
-                                    <SegmentedProgress
-                                        segments={stats.stage_breakdown.map((item) => ({
-                                            id: item.stage_id,
-                                            value: item.tasks_count,
-                                            color: item.color,
-                                            label: item.stage_name,
-                                        }))}
-                                    />
-                                    <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                                        {stats.stage_breakdown.map((item) => (
-                                            <span
-                                                key={item.stage_id}
-                                                className="inline-flex items-center gap-1.5 text-[12px] text-muted"
-                                            >
-                                                <StatusDot color={item.color} />
-                                                {item.stage_name}
-                                                <span className="font-mono text-secondary">
-                                                    {item.tasks_count}
-                                                </span>
-                                            </span>
-                                        ))}
-                                    </div>
-                                </Card>
-                            </Section>
-                        </>
-                    )
-                )}
-
-                <AnalyticsPanel projectId={project.id} onOpenTask={setSelectedTaskId} />
+                        ) : undefined
+                    }
+                    breakdown={
+                        stats && stats.stage_breakdown.length > 0 ? (
+                            <StageBreakdown stages={stats.stage_breakdown} />
+                        ) : undefined
+                    }
+                />
 
                 <div className="grid gap-6 lg:grid-cols-2">
                     <Section title="Ближайшие сроки">
