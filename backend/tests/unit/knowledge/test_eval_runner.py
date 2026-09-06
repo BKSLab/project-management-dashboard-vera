@@ -19,37 +19,6 @@ CANDIDATES = (
 )
 
 
-def test_runner_calculates_recall_at_k_and_mrr_on_known_fixture() -> None:
-    result = run(
-        FIXTURES / "knowledge_eval_dataset.json",
-        FIXTURES / "knowledge_eval_predictions.json",
-        (1, 2, 3),
-    )
-
-    assert result["examples_count"] == 2
-    assert result["recall_at_k"] == {"1": 0.25, "2": 0.75, "3": 1.0}
-    assert result["mrr"] == 0.75
-
-
-def test_metrics_ignore_duplicate_prediction_ids() -> None:
-    examples = [
-        RetrievalExample(
-            example_id="one",
-            question="Вопрос",
-            gold_source_ids=frozenset({"task:1"}),
-        )
-    ]
-
-    metrics = calculate_metrics(
-        examples,
-        {"one": ["task:2", "task:2", "task:1"]},
-        k_values=(1, 2),
-    )
-
-    assert metrics.recall_at_k == {"1": 0.0, "2": 1.0}
-    assert metrics.mrr == 0.5
-
-
 def test_eval_fixture_is_valid_and_unapproved_candidates_are_blocked(tmp_path: Path) -> None:
     """Неодобренные кандидаты не запускаются, пустой эталон отвергается, файл кандидатов не содержит одобренных вопросов."""
 
@@ -103,3 +72,34 @@ def test_eval_fixture_is_valid_and_unapproved_candidates_are_blocked(tmp_path: P
     assert 30 <= len(payload["examples"]) <= 50
     assert all(item["approval_status"] == "ТРЕБУЕТ УТВЕРЖДЕНИЯ" for item in payload["examples"])
     assert all("gold_source_ids" not in item for item in payload["examples"])
+
+
+def test_metrics_are_computed_on_a_known_fixture() -> None:
+    """Recall@k и MRR считаются по эталону, дубликаты предсказаний не учитываются дважды."""
+
+    result = run(
+        FIXTURES / "knowledge_eval_dataset.json",
+        FIXTURES / "knowledge_eval_predictions.json",
+        (1, 2, 3),
+    )
+
+    assert result["examples_count"] == 2
+    assert result["recall_at_k"] == {"1": 0.25, "2": 0.75, "3": 1.0}
+    assert result["mrr"] == 0.75
+
+    examples = [
+        RetrievalExample(
+            example_id="one",
+            question="Вопрос",
+            gold_source_ids=frozenset({"task:1"}),
+        )
+    ]
+
+    metrics = calculate_metrics(
+        examples,
+        {"one": ["task:2", "task:2", "task:1"]},
+        k_values=(1, 2),
+    )
+
+    assert metrics.recall_at_k == {"1": 0.0, "2": 1.0}
+    assert metrics.mrr == 0.5

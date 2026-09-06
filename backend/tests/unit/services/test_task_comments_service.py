@@ -17,7 +17,9 @@ from src.services.task_comments import TaskCommentsService
 
 
 @pytest.mark.asyncio
-async def test_add_comment_when_task_missing_raises_not_found() -> None:
+async def test_comment_operations_report_absence_and_failures() -> None:
+    """Отсутствующие задача и комментарий — 404, сбой репозитория — 500."""
+
     comments_repository = AsyncMock(spec=TaskCommentsRepository)
     tasks_repository = AsyncMock(spec=TasksRepository)
     activity_repository = AsyncMock(spec=TaskActivityRepository)
@@ -35,9 +37,21 @@ async def test_add_comment_when_task_missing_raises_not_found() -> None:
 
     assert exc_info.value.status_code == 404
 
+    comments_repository = AsyncMock(spec=TaskCommentsRepository)
+    comments_repository.get_by_id.return_value = None
+    service = TaskCommentsService(
+        comments_repository=comments_repository,
+        tasks_repository=AsyncMock(spec=TasksRepository),
+        activity_repository=AsyncMock(spec=TaskActivityRepository),
+        unit_of_work=AsyncMock(spec=UnitOfWork),
+        knowledge_events=AsyncMock(spec=KnowledgeEvents),
+    )
 
-@pytest.mark.asyncio
-async def test_get_comments_wraps_repository_error() -> None:
+    with pytest.raises(TaskCommentNotFoundError) as exc_info:
+        await service.delete_comment(comment_id=999)
+
+    assert exc_info.value.status_code == 404
+
     comments_repository = AsyncMock(spec=TaskCommentsRepository)
     comments_repository.get_for_task.side_effect = TaskCommentsRepositoryError("БД недоступна")
     tasks_repository = AsyncMock(spec=TasksRepository)
@@ -55,21 +69,3 @@ async def test_get_comments_wraps_repository_error() -> None:
 
     assert exc_info.value.status_code == 500
     comments_repository.save.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_delete_comment_when_missing_raises_not_found() -> None:
-    comments_repository = AsyncMock(spec=TaskCommentsRepository)
-    comments_repository.get_by_id.return_value = None
-    service = TaskCommentsService(
-        comments_repository=comments_repository,
-        tasks_repository=AsyncMock(spec=TasksRepository),
-        activity_repository=AsyncMock(spec=TaskActivityRepository),
-        unit_of_work=AsyncMock(spec=UnitOfWork),
-        knowledge_events=AsyncMock(spec=KnowledgeEvents),
-    )
-
-    with pytest.raises(TaskCommentNotFoundError) as exc_info:
-        await service.delete_comment(comment_id=999)
-
-    assert exc_info.value.status_code == 404

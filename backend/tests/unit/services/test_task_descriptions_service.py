@@ -81,7 +81,9 @@ async def test_rephrase_uses_project_tasks_documents_and_limited_file_text() -> 
 
 
 @pytest.mark.asyncio
-async def test_rephrase_rejects_document_from_another_project() -> None:
+async def test_rephrase_rejects_foreign_document_and_overgrown_result() -> None:
+    """Документ чужого проекта и чрезмерно раздутый ответ модели отклоняются."""
+
     service, _, _, documents, llm = build_service()
     documents.get_by_ids.return_value = [
         SimpleNamespace(id=5, project_id=9, title="Чужой", content_md="секрет")
@@ -96,9 +98,6 @@ async def test_rephrase_rejects_document_from_another_project() -> None:
 
     llm.get_structured_response.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_rephrase_rejects_excessively_expanded_result() -> None:
     service, _, _, _, llm = build_service()
     llm.get_structured_response.return_value = TaskRephraseResultSchema(
         description_md="x" * 1000

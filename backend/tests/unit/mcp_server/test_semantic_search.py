@@ -113,43 +113,6 @@ def search(monkeypatch: pytest.MonkeyPatch):
     return install
 
 
-async def test_external_call_happens_after_the_db_scope_is_closed(search) -> None:
-    """Эмбеддинг и Qdrant вызываются уже без открытого соединения с БД."""
-    context, tracker, runtime, _ = search([hit()])
-
-    await srv.search_project_knowledge(context, project_key="PROJ", query="отчёт")
-
-    assert runtime.scope_active_during_call == [False, False]
-    assert tracker.opened == 1
-    assert tracker.active is False
-
-
-async def test_access_is_checked_inside_the_db_scope(search) -> None:
-    """Доступ проверяется до внешнего вызова и внутри короткой области."""
-    context, _, runtime, services = search([hit()])
-
-    await srv.search_project_knowledge(context, project_key="proj", query="отчёт")
-
-    services.access.ensure_project_access.assert_awaited_once_with(
-        project_id=PROJECT_ID,
-        user_id=1,
-    )
-    assert runtime.search_kwargs["project_id"] == PROJECT_ID
-    assert runtime.search_kwargs["score_threshold"] == 0.42
-
-
-async def test_disabled_knowledge_does_not_reach_external_clients(search) -> None:
-    """При выключенной базе знаний внешние клиенты не вызываются."""
-    context, _, runtime, _ = search()
-    context.request_context.request.state.app_settings.knowledge.knowledge_enabled = False
-
-    with pytest.raises(ToolError) as error:
-        await srv.search_project_knowledge(context, project_key="PROJ", query="отчёт")
-
-    assert "отключён" in str(error.value)
-    assert runtime.scope_active_during_call == []
-
-
 async def test_semantic_search_presents_hits_and_filters_them(search) -> None:
     """Фильтр по типу сущности и представление попадания с ключом и округлённой оценкой."""
     # Фильтр по типу сущности отсеивает лишние фрагменты.
@@ -180,8 +143,37 @@ async def test_semantic_search_presents_hits_and_filters_them(search) -> None:
     ]
 
 
-async def test_client_failure_becomes_a_tool_error(search) -> None:
-    """Сбой внешнего клиента не выносит наружу деталей интеграции."""
+async def test_semantic_search_keeps_db_scope_short_and_reports_failures(search) -> None:
+    """Доступ проверяется внутри области базы, внешний вызов идёт после её закрытия, выключенная база знаний не доходит до клиентов, сбой клиента становится ошибкой инструмента."""
+    # Доступ проверяется до внешнего вызова и внутри короткой области.
+    context, _, runtime, services = search([hit()])
+
+    await srv.search_project_knowledge(context, project_key="proj", query="отчёт")
+
+    services.access.ensure_project_access.assert_awaited_once_with(
+        project_id=PROJECT_ID,
+        user_id=1,
+    )
+    assert runtime.search_kwargs["project_id"] == PROJECT_ID
+    assert runtime.search_kwargs["score_threshold"] == 0.42
+    # Эмбеддинг и Qdrant вызываются уже без открытого соединения с БД.
+    context, tracker, runtime, _ = search([hit()])
+
+    await srv.search_project_knowledge(context, project_key="PROJ", query="отчёт")
+
+    assert runtime.scope_active_during_call == [False, False]
+    assert tracker.opened == 1
+    assert tracker.active is False
+    # При выключенной базе знаний внешние клиенты не вызываются.
+    context, _, runtime, _ = search()
+    context.request_context.request.state.app_settings.knowledge.knowledge_enabled = False
+
+    with pytest.raises(ToolError) as error:
+        await srv.search_project_knowledge(context, project_key="PROJ", query="отчёт")
+
+    assert "отключён" in str(error.value)
+    assert runtime.scope_active_during_call == []
+    # Сбой внешнего клиента не выносит наружу деталей интеграции.
     context, _, runtime, _ = search()
     runtime.embedding_client.get_embedding = AsyncMock(side_effect=ClientError("qdrant 503"))
 

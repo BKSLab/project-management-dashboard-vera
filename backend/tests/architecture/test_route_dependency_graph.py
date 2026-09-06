@@ -82,111 +82,6 @@ def mutation_routes() -> list[tuple[str, str, APIRoute]]:
     return [row for row in non_get_routes() if (row[0], row[1]) not in explicit]
 
 
-def test_every_non_get_route_is_classified() -> None:
-    """Каждый изменяющий по методу маршрут отнесён к известному классу.
-
-    Новый неклассифицированный маршрут ломает тест: решение о его правах
-    должно быть принято явно, а не унаследовано по умолчанию.
-    """
-    actual = {(method, path) for method, path, _ in non_get_routes()}
-    explicit = PUBLIC_ROUTES | SESSION_ONLY_ROUTES | READ_ONLY_POST_ROUTES
-
-    unknown_declared = explicit - actual
-    assert not unknown_declared, f"Классифицированы несуществующие маршруты: {unknown_declared}"
-    assert len(actual) == EXPECTED_NON_GET_TOTAL, (
-        f"Изменилось число изменяющих маршрутов: {len(actual)} вместо {EXPECTED_NON_GET_TOTAL}. "
-        "Обнови классификацию вместе с маршрутом."
-    )
-
-
-def test_route_counts_match_the_declared_inventory() -> None:
-    """Число доменных мутаций совпадает с зафиксированным инвентарём."""
-    assert len(mutation_routes()) == EXPECTED_MUTATION_TOTAL
-
-
-def test_every_mutation_requires_write_scope() -> None:
-    """READ-токен не может выполнить ни одну доменную мутацию."""
-    unprotected = [
-        f"{method} {path}"
-        for method, path, route in mutation_routes()
-        if "require_write_scope" not in route_dependencies(route)
-    ]
-
-    assert not unprotected, (
-        "Маршруты изменяют данные без проверки scope записи:\n  " + "\n  ".join(sorted(unprotected))
-    )
-
-
-def test_read_only_posts_do_not_require_write_scope() -> None:
-    """Расчёт и предпросмотр остаются доступны токену на чтение."""
-    wrongly_protected = [
-        f"{method} {path}"
-        for method, path, route in api_routes()
-        if (method, path) in READ_ONLY_POST_ROUTES
-        and "require_write_scope" in route_dependencies(route)
-    ]
-
-    assert not wrongly_protected, (
-        "Логически read-only маршруты требуют право записи:\n  "
-        + "\n  ".join(sorted(wrongly_protected))
-    )
-
-
-def test_get_routes_never_require_write_scope() -> None:
-    """Чтение не требует права записи ни на одном маршруте."""
-    wrongly_protected = [
-        f"{method} {path}"
-        for method, path, route in api_routes()
-        if method == "GET" and "require_write_scope" in route_dependencies(route)
-    ]
-
-    assert not wrongly_protected, (
-        "Чтение требует право записи:\n  " + "\n  ".join(sorted(wrongly_protected))
-    )
-
-
-def test_public_routes_have_no_authentication() -> None:
-    """Маршруты входа не требуют уже открытой сессии."""
-    wrongly_guarded = [
-        f"{method} {path}"
-        for method, path, route in api_routes()
-        if (method, path) in PUBLIC_ROUTES and "get_principal" in route_dependencies(route)
-    ]
-
-    assert not wrongly_guarded, f"Маршруты входа закрыты аутентификацией: {wrongly_guarded}"
-
-
-def test_session_only_routes_are_closed_for_tokens() -> None:
-    """Управление токенами защищено guard сессии, а не scope записи."""
-    for method, path, route in api_routes():
-        if (method, path) not in SESSION_ONLY_ROUTES:
-            continue
-        deps = route_dependencies(route)
-        assert "require_session" in deps, f"{method} {path} не закрыт guard сессии."
-        assert "require_write_scope" not in deps, (
-            f"{method} {path} использует scope записи вместо guard сессии."
-        )
-
-
-def test_every_protected_route_authenticates() -> None:
-    """Ни один непубличный маршрут не обходит аутентификацию.
-
-    У streaming-маршрутов аутентификация выполняется внутри короткой
-    области базы, поэтому её отсутствие в графе — намеренное решение.
-    То, что она действительно есть, проверяет контракт выдачи файла.
-    """
-    unauthenticated = [
-        f"{method} {path}"
-        for method, path, route in api_routes()
-        if (method, path) not in PUBLIC_ROUTES | STREAMING_ROUTES
-        and "get_principal" not in route_dependencies(route)
-    ]
-
-    assert not unauthenticated, (
-        "Маршруты доступны без аутентификации:\n  " + "\n  ".join(sorted(unauthenticated))
-    )
-
-
 def test_project_scoped_routes_check_project_access() -> None:
     """Маршрут внутри проекта проверяет доступ к этому проекту."""
     guards = {
@@ -231,13 +126,9 @@ def test_access_guards_do_not_leak_orm_models() -> None:
         )
 
 
-def test_streaming_routes_hold_no_request_scoped_session() -> None:
-    """У долгоживущего ответа нет request-scoped сессии в графе.
-
-    Yield-зависимость FastAPI освобождается только после завершения
-    ответа, поэтому медленное скачивание удерживало бы соединение с
-    PostgreSQL всё время передачи файла.
-    """
+def test_streaming_routes_keep_no_request_scoped_resources() -> None:
+    """Стриминговый маршрут не держит ни сессию, ни request-scoped сервис, а реестр таких маршрутов совпадает с приложением."""
+    # У долгоживущего ответа нет request-scoped сессии в графе. Yield-зависимость FastAPI освобождается только после завершения ответа, поэтому медленное скачивание удерживало бы соединение с PostgreSQL всё время передачи файла.
     offenders = [
         f"{method} {path}"
         for method, path, route in api_routes()
@@ -247,23 +138,12 @@ def test_streaming_routes_hold_no_request_scoped_session() -> None:
     assert not offenders, (
         "Маршрут с долгоживущим ответом удерживает сессию базы: " + ", ".join(offenders)
     )
-
-
-def test_streaming_registry_matches_the_application() -> None:
-    """Реестр streaming-маршрутов не расходится с приложением.
-
-    Реестр ведётся вручную, потому что по декоратору FastAPI нельзя
-    надёжно определить, вернёт ли обработчик `FileResponse`. Значит, он
-    обязан проверяться на существование перечисленных маршрутов.
-    """
+    # Реестр streaming-маршрутов не расходится с приложением. Реестр ведётся вручную, потому что по декоратору FastAPI нельзя надёжно определить, вернёт ли обработчик `FileResponse`. Значит, он обязан проверяться на существование перечисленных маршрутов.
     actual = {(method, path) for method, path, _ in api_routes()}
 
     missing = STREAMING_ROUTES - actual
     assert not missing, f"В реестре перечислены несуществующие маршруты: {missing}"
-
-
-def test_streaming_routes_do_not_depend_on_request_scoped_services() -> None:
-    """В графе streaming-маршрута нет сервисов, построенных на сессии запроса."""
+    # В графе streaming-маршрута нет сервисов, построенных на сессии запроса.
     request_scoped = {
         "get_task_attachments_service",
         "get_principal",
@@ -282,16 +162,92 @@ def test_streaming_routes_do_not_depend_on_request_scoped_services() -> None:
     )
 
 
-def test_application_has_no_unclassified_websocket_routes() -> None:
-    """WebSocket-маршрутов нет, и новый не появится незамеченным.
+def test_write_scope_is_required_exactly_where_it_should_be() -> None:
+    """Мутации требуют право записи, read-only POST и GET — нет."""
+    # READ-токен не может выполнить ни одну доменную мутацию.
+    unprotected = [
+        f"{method} {path}"
+        for method, path, route in mutation_routes()
+        if "require_write_scope" not in route_dependencies(route)
+    ]
 
-    Классификация выше построена на `APIRoute` и парах метод-путь;
-    WebSocket в неё не попадает, поэтому его появление должно потребовать
-    отдельного решения о правах, а не пройти мимо всех проверок.
-    """
+    assert not unprotected, (
+        "Маршруты изменяют данные без проверки scope записи:\n  " + "\n  ".join(sorted(unprotected))
+    )
+    # Расчёт и предпросмотр остаются доступны токену на чтение.
+    wrongly_protected = [
+        f"{method} {path}"
+        for method, path, route in api_routes()
+        if (method, path) in READ_ONLY_POST_ROUTES
+        and "require_write_scope" in route_dependencies(route)
+    ]
+
+    assert not wrongly_protected, (
+        "Логически read-only маршруты требуют право записи:\n  "
+        + "\n  ".join(sorted(wrongly_protected))
+    )
+    # Чтение не требует права записи ни на одном маршруте.
+    wrongly_protected = [
+        f"{method} {path}"
+        for method, path, route in api_routes()
+        if method == "GET" and "require_write_scope" in route_dependencies(route)
+    ]
+
+    assert not wrongly_protected, (
+        "Чтение требует право записи:\n  " + "\n  ".join(sorted(wrongly_protected))
+    )
+
+
+def test_route_inventory_is_classified_and_counted() -> None:
+    """Каждый non-GET маршрут классифицирован, числа совпадают с зафиксированным реестром, WebSocket-маршрутов нет."""
+    # Каждый изменяющий по методу маршрут отнесён к известному классу. Новый неклассифицированный маршрут ломает тест: решение о его правах должно быть принято явно, а не унаследовано по умолчанию.
+    actual = {(method, path) for method, path, _ in non_get_routes()}
+    explicit = PUBLIC_ROUTES | SESSION_ONLY_ROUTES | READ_ONLY_POST_ROUTES
+
+    unknown_declared = explicit - actual
+    assert not unknown_declared, f"Классифицированы несуществующие маршруты: {unknown_declared}"
+    assert len(actual) == EXPECTED_NON_GET_TOTAL, (
+        f"Изменилось число изменяющих маршрутов: {len(actual)} вместо {EXPECTED_NON_GET_TOTAL}. "
+        "Обнови классификацию вместе с маршрутом."
+    )
+    # Число доменных мутаций совпадает с зафиксированным инвентарём.
+    assert len(mutation_routes()) == EXPECTED_MUTATION_TOTAL
+    # WebSocket-маршрутов нет, и новый не появится незамеченным. Классификация выше построена на `APIRoute` и парах метод-путь; WebSocket в неё не попадает, поэтому его появление должно потребовать отдельного решения о правах, а не пройти мимо всех проверок.
     sockets = [route.path for route in app.routes if isinstance(route, APIWebSocketRoute)]
 
     assert not sockets, (
         f"Появились WebSocket-маршруты без классификации прав: {sockets}. "
         "Добавь для них проверку scope и удержания ресурсов."
     )
+
+
+def test_authentication_is_required_everywhere_except_public_routes() -> None:
+    """Публичные маршруты без аутентификации, защищённые — с ней, сессионные закрыты для токенов."""
+    # Маршруты входа не требуют уже открытой сессии.
+    wrongly_guarded = [
+        f"{method} {path}"
+        for method, path, route in api_routes()
+        if (method, path) in PUBLIC_ROUTES and "get_principal" in route_dependencies(route)
+    ]
+
+    assert not wrongly_guarded, f"Маршруты входа закрыты аутентификацией: {wrongly_guarded}"
+    # Ни один непубличный маршрут не обходит аутентификацию. У streaming-маршрутов аутентификация выполняется внутри короткой области базы, поэтому её отсутствие в графе — намеренное решение. То, что она действительно есть, проверяет контракт выдачи файла.
+    unauthenticated = [
+        f"{method} {path}"
+        for method, path, route in api_routes()
+        if (method, path) not in PUBLIC_ROUTES | STREAMING_ROUTES
+        and "get_principal" not in route_dependencies(route)
+    ]
+
+    assert not unauthenticated, (
+        "Маршруты доступны без аутентификации:\n  " + "\n  ".join(sorted(unauthenticated))
+    )
+    # Управление токенами защищено guard сессии, а не scope записи.
+    for method, path, route in api_routes():
+        if (method, path) not in SESSION_ONLY_ROUTES:
+            continue
+        deps = route_dependencies(route)
+        assert "require_session" in deps, f"{method} {path} не закрыт guard сессии."
+        assert "require_write_scope" not in deps, (
+            f"{method} {path} использует scope записи вместо guard сессии."
+        )

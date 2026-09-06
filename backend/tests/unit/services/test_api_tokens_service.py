@@ -157,19 +157,16 @@ async def test_token_list_and_revocation_keep_the_secret_safe() -> None:
     assert repository.revoked == (5, 1)
 
 
-async def test_resolve_secret_looks_up_by_hash() -> None:
-    """Поиск токена идёт по хешу, а не по самому секрету."""
+async def test_secret_is_resolved_by_hash_and_failures_are_wrapped() -> None:
+    """Поиск идёт по хешу, сбой репозитория становится ошибкой сервиса."""
+    # Поиск токена идёт по хешу, а не по самому секрету.
     secret = "tt_test-secret"
     repository = FakeTokensRepository(tokens=[_token(token_hash=hash_token_secret(secret))])
     service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
     assert await service.resolve_secret(secret) is not None
     assert await service.resolve_secret("tt_другой") is None
-
-
-async def test_repository_error_becomes_service_error() -> None:
-    """Ошибка репозитория не утекает наружу в исходном виде."""
-
+    # Ошибка репозитория не утекает наружу в исходном виде.
     class BrokenRepository(FakeTokensRepository):
         async def get_by_user(self, user_id: int) -> list[ApiToken]:
             raise ApiTokensRepositoryError("сбой БД")

@@ -9,12 +9,9 @@ from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 
 
 @pytest.mark.asyncio
-async def test_add_many_flushes_without_committing_transaction() -> None:
-    """Задания попадают в текущую транзакцию, но не фиксируются отдельно.
-
-    Outbox обязан оказаться в базе тем же commit, что и бизнес-факт: иначе
-    задание индексации может пережить откат породившего его изменения.
-    """
+async def test_add_many_writes_the_batch_in_one_statement_without_commit() -> None:
+    """Пачка пишется одним запросом внутри чужой транзакции, пустая пачка не трогает базу."""
+    # Задания попадают в текущую транзакцию, но не фиксируются отдельно. Outbox обязан оказаться в базе тем же commit, что и бизнес-факт: иначе задание индексации может пережить откат породившего его изменения.
     session = MagicMock()
     session.add_all = MagicMock()
     session.flush = AsyncMock()
@@ -32,11 +29,7 @@ async def test_add_many_flushes_without_committing_transaction() -> None:
     session.add_all.assert_called_once()
     session.flush.assert_awaited_once()
     session.commit.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_add_many_writes_the_whole_batch_at_once() -> None:
-    """Пачка вставляется одной операцией, а не построчно."""
+    # Пачка вставляется одной операцией, а не построчно.
     session = MagicMock()
     session.add_all = MagicMock()
     session.flush = AsyncMock()
@@ -51,11 +44,7 @@ async def test_add_many_writes_the_whole_batch_at_once() -> None:
 
     assert session.add_all.call_count == 1
     assert session.flush.await_count == 1
-
-
-@pytest.mark.asyncio
-async def test_add_many_on_empty_batch_touches_nothing() -> None:
-    """Пустой набор не порождает ни одного обращения к базе."""
+    # Пустой набор не порождает ни одного обращения к базе.
     session = MagicMock()
     session.add_all = MagicMock()
     session.flush = AsyncMock()

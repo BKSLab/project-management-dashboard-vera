@@ -93,7 +93,9 @@ def build_service(
 
 
 @pytest.mark.asyncio
-async def test_overview_aggregates_projects_and_totals() -> None:
+async def test_overview_aggregates_projects_and_survives_edge_cases() -> None:
+    """Сводка считает проекты и итоги, проект без задач не ломает расчёт, просроченные попадают в блок внимания, сбой репозитория — 500."""
+
     projects = [
         project(1, "PROJ", ProjectStatus.ACTIVE),
         project(2, "SITE", ProjectStatus.PLANNING),
@@ -135,9 +137,6 @@ async def test_overview_aggregates_projects_and_totals() -> None:
     assert site.total_tasks == 3
     assert site.in_progress_tasks == 0
 
-
-@pytest.mark.asyncio
-async def test_overview_handles_project_without_tasks() -> None:
     service = build_service(
         projects=[project(1, "PROJ", ProjectStatus.PLANNING)],
         stages=[],
@@ -151,9 +150,6 @@ async def test_overview_handles_project_without_tasks() -> None:
     assert result.projects[0].completion_rate == 0.0
     assert result.totals.completion_rate == 0.0
 
-
-@pytest.mark.asyncio
-async def test_overview_marks_overdue_attention_tasks() -> None:
     stages = [
         SimpleNamespace(id=1, project_id=1, order_index=0, name="Бэклог", is_done_stage=False),
     ]
@@ -176,9 +172,6 @@ async def test_overview_marks_overdue_attention_tasks() -> None:
     assert overdue.project_name == "Проект PROJ"
     assert upcoming.is_overdue is False
 
-
-@pytest.mark.asyncio
-async def test_overview_wraps_repository_error() -> None:
     projects_repository = AsyncMock(spec=ProjectsRepository)
     projects_repository.get_all.side_effect = ProjectsRepositoryError("БД недоступна")
     members_repository = AsyncMock(spec=ProjectMembersRepository)

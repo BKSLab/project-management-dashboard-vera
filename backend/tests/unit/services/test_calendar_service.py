@@ -186,43 +186,6 @@ async def test_get_range_validates_its_window_and_filters() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_range_wraps_repository_error() -> None:
-    service, _, tasks, _, _, _ = build_service()
-    tasks.get_calendar_range.side_effect = TasksRepositoryError("БД недоступна")
-
-    with pytest.raises(CalendarServiceError) as exc_info:
-        await service.get_range(
-            project_id=1,
-            date_from=TODAY,
-            date_to=TODAY,
-            today=TODAY,
-        )
-
-    assert exc_info.value.status_code == 500
-
-
-@pytest.mark.asyncio
-async def test_get_unscheduled_uses_extra_row_for_cursor() -> None:
-    service, _, tasks, _, _, _ = build_service()
-    tasks.get_unscheduled_page.return_value = [
-        make_task(task_id=1, due_date=None),
-        make_task(task_id=2, due_date=None),
-        make_task(task_id=3, due_date=None),
-    ]
-
-    result = await service.get_unscheduled(
-        project_id=1,
-        today=TODAY,
-        cursor=None,
-        limit=2,
-    )
-
-    assert [item.id for item in result.items] == [1, 2]
-    assert all(item.due_date is None for item in result.items)
-    assert result.next_cursor == 2
-
-
-@pytest.mark.asyncio
 async def test_get_range_explains_dates_milestones_and_dependencies() -> None:
     """Календарь объясняет риски: история сроков, вехи с отклонением плана, частично заданный базовый план и связи задач."""
 
@@ -336,3 +299,39 @@ async def test_get_range_explains_dates_milestones_and_dependencies() -> None:
     assert risks[2][-1].days == 3
     assert result.summary.dependency_risks == 2
     assert result.dependencies[0].predecessor_task_id == 1
+
+
+@pytest.mark.asyncio
+async def test_calendar_reads_report_failures_and_paginate_by_cursor() -> None:
+    """Сбой репозитория становится ошибкой сервиса, несогласованные задачи листаются стабильным курсором."""
+
+    service, _, tasks, _, _, _ = build_service()
+    tasks.get_calendar_range.side_effect = TasksRepositoryError("БД недоступна")
+
+    with pytest.raises(CalendarServiceError) as exc_info:
+        await service.get_range(
+            project_id=1,
+            date_from=TODAY,
+            date_to=TODAY,
+            today=TODAY,
+        )
+
+    assert exc_info.value.status_code == 500
+
+    service, _, tasks, _, _, _ = build_service()
+    tasks.get_unscheduled_page.return_value = [
+        make_task(task_id=1, due_date=None),
+        make_task(task_id=2, due_date=None),
+        make_task(task_id=3, due_date=None),
+    ]
+
+    result = await service.get_unscheduled(
+        project_id=1,
+        today=TODAY,
+        cursor=None,
+        limit=2,
+    )
+
+    assert [item.id for item in result.items] == [1, 2]
+    assert all(item.due_date is None for item in result.items)
+    assert result.next_cursor == 2
