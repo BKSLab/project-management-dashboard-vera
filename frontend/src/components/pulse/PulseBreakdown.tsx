@@ -40,25 +40,43 @@ export function PortfolioBreakdown({ projects }: { projects: DashboardProject[] 
                     <li key={project.id} className="shrink-0">
                         <Link
                             to={`/projects/${project.key}`}
+                            title={project.name}
                             className={cn(
-                                "flex items-center gap-2 rounded-[var(--radius-control)] border",
-                                "border-line-subtle bg-surface/60 px-2.5 py-1.5",
+                                "flex min-w-40 flex-col gap-1.5 rounded-[var(--radius-control)] border",
+                                "border-line-subtle bg-surface/60 px-2.5 py-2",
                                 "transition-colors duration-[var(--duration-fast)] hover:bg-hover",
                             )}
                         >
-                            <StatusDot color={project.color} />
-                            <span className="font-mono text-[11px] text-secondary">
-                                {project.key}
-                            </span>
-                            <span className="font-mono text-[11px] text-muted">
-                                {project.done_tasks}/{project.total_tasks}
-                            </span>
-                            {project.overdue_tasks > 0 && (
-                                <span className="inline-flex items-center gap-1 font-mono text-[11px] text-danger">
-                                    <AlertTriangle size={11} aria-hidden="true" />
-                                    {project.overdue_tasks}
+                            <span className="flex items-center gap-2">
+                                <StatusDot color={project.color} />
+                                <span className="font-mono text-[11px] text-secondary">
+                                    {project.key}
                                 </span>
-                            )}
+                                <span className="font-mono text-[11px] text-muted">
+                                    {project.done_tasks}/{project.total_tasks}
+                                </span>
+                                {project.overdue_tasks > 0 && (
+                                    <span className="ml-auto inline-flex items-center gap-1 font-mono text-[11px] text-danger">
+                                        <AlertTriangle size={11} aria-hidden="true" />
+                                        {project.overdue_tasks}
+                                    </span>
+                                )}
+                            </span>
+                            {/* Полоса выполнения показывает не только «сколько
+                                просрочено», но и как далеко проект продвинулся:
+                                иначе спокойный и почти законченный проект
+                                выглядят одинаково. */}
+                            <span
+                                className="h-1 overflow-hidden rounded-full bg-app/70"
+                                role="presentation"
+                            >
+                                <span
+                                    className="block h-full rounded-full bg-accent/70"
+                                    style={{
+                                        width: `${Math.round(project.completion_rate * 100)}%`,
+                                    }}
+                                />
+                            </span>
                         </Link>
                     </li>
                 ))}

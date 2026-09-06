@@ -3,6 +3,7 @@ import { AlertTriangle, CalendarClock, CheckCircle2, ListTodo, Network } from "l
 import { api, endpoints, queryKeys } from "@/lib/api";
 import type { ProjectStats, Task } from "@/lib/types";
 import { formatDayMonth } from "@/lib/dates";
+import { latestUpdate } from "@/lib/pulse";
 import { useProjectOutlet } from "@/lib/useProjectOutlet";
 import { useRenderedMarkdown } from "@/lib/useRenderedMarkdown";
 import { useUiStore } from "@/stores/ui";
@@ -67,6 +68,10 @@ export function ProjectPulsePage() {
                 <PulseBoard
                     projectId={project.id}
                     onOpenTask={setSelectedTaskId}
+                    dataUpdatedAt={latestUpdate(tasksQuery.data ?? [])}
+                    blockedReason={
+                        stats && stats.total_tasks === 0 ? "В проекте пока нет задач" : undefined
+                    }
                     metrics={
                         statsQuery.isPending ? (
                             <Skeleton className="h-[88px] w-full rounded-none" />

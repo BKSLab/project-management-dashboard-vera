@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, FolderKanban, ListTodo, Plus } from "lucide-react";
 import { api, endpoints, queryKeys } from "@/lib/api";
 import { formatFullDate } from "@/lib/dates";
+import { latestUpdate } from "@/lib/pulse";
 import type { Dashboard } from "@/lib/types";
 import { Page } from "@/components/layout/AppShell";
 import { LinkButton } from "@/components/ui/Button";
@@ -69,6 +70,14 @@ export function DashboardPage() {
                 <>
                     <PulseBoard
                         onOpenTask={setSelectedTaskId}
+                        dataUpdatedAt={latestUpdate(dashboardQuery.data.projects)}
+                        blockedReason={
+                            dashboardQuery.data.projects.some(
+                                (project) => project.status === "ACTIVE",
+                            )
+                                ? undefined
+                                : "Нет проектов в работе"
+                        }
                         metrics={
                             <StatStrip className="rounded-none border-0 bg-transparent shadow-none">
                                 <StatTile

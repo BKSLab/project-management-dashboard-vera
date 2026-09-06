@@ -4,6 +4,7 @@ import {
     Activity,
     CircleCheckBig,
     Flame,
+    History,
     Info,
     Lightbulb,
     RefreshCw,
@@ -12,7 +13,8 @@ import {
 } from "lucide-react";
 import { api, endpoints, queryKeys } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { formatDateTime } from "@/lib/dates";
+import { formatDateTime, formatRelative } from "@/lib/dates";
+import { reportFreshness } from "@/lib/pulse";
 import type { AnalyticsHealth, AnalyticsReport, AnalyticsSignals } from "@/lib/types";
 import { ANALYTICS_HEALTH_LABELS } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
@@ -104,6 +106,10 @@ interface PulseBoardProps {
     metrics?: ReactNode;
     /** Разрез области: стадии проекта или его проекты — по чему разбор. */
     breakdown?: ReactNode;
+    /** Время последнего изменения данных области: по нему видно, не устарел ли вывод. */
+    dataUpdatedAt?: string | null;
+    /** Причина, по которой разбор невозможен; кнопка выключается вместе с ней. */
+    blockedReason?: string;
     onOpenTask: (taskId: number) => void;
 }
 
@@ -116,7 +122,14 @@ interface PulseBoardProps {
  * приборы и диагноз идут одним потоком: полоса состояния сверху, показатели,
  * разрез области, вывод модели и его основания.
  */
-export function PulseBoard({ projectId = null, metrics, breakdown, onOpenTask }: PulseBoardProps) {
+export function PulseBoard({
+    projectId = null,
+    metrics,
+    breakdown,
+    dataUpdatedAt = null,
+    blockedReason,
+    onOpenTask,
+}: PulseBoardProps) {
     const queryClient = useQueryClient();
     const copy = projectId ? SCOPE_COPY.project : SCOPE_COPY.portfolio;
 
@@ -136,6 +149,8 @@ export function PulseBoard({ projectId = null, metrics, breakdown, onOpenTask }:
     const report = reportQuery.data ?? null;
     const health = report ? HEALTH_STYLES[report.health] : null;
     const HealthIcon = report ? HEALTH_ICONS[report.health] : null;
+    const freshness = reportFreshness(report?.created_at, dataUpdatedAt);
+    const blocked = Boolean(blockedReason);
 
     return (
         <section
@@ -175,20 +190,30 @@ export function PulseBoard({ projectId = null, metrics, breakdown, onOpenTask }:
                     </div>
                     <p className="truncate text-[11px] text-muted">{copy.subtitle}</p>
                 </div>
-                <Button
-                    variant="primary"
-                    onClick={() => generate.mutate()}
-                    disabled={generate.isPending}
-                    icon={
-                        generate.isPending ? (
-                            <RefreshCw size={14} className="animate-spin" aria-hidden="true" />
-                        ) : (
-                            <Sparkles size={14} aria-hidden="true" />
-                        )
-                    }
-                >
-                    {generate.isPending ? "Разбираю…" : report ? "Обновить разбор" : "Разобрать"}
-                </Button>
+                <div className="flex items-center gap-3">
+                    {!generate.isPending && (
+                        <PulseAge report={report} freshness={freshness} blocked={blockedReason} />
+                    )}
+                    <Button
+                        variant="primary"
+                        onClick={() => generate.mutate()}
+                        disabled={generate.isPending || blocked}
+                        title={blockedReason}
+                        icon={
+                            generate.isPending ? (
+                                <RefreshCw size={14} className="animate-spin" aria-hidden="true" />
+                            ) : (
+                                <Sparkles size={14} aria-hidden="true" />
+                            )
+                        }
+                    >
+                        {generate.isPending
+                            ? "Разбираю…"
+                            : report
+                              ? "Обновить разбор"
+                              : "Разобрать"}
+                    </Button>
+                </div>
             </header>
 
             {metrics && <div className="border-t border-line-subtle">{metrics}</div>}
@@ -218,6 +243,40 @@ export function PulseBoard({ projectId = null, metrics, breakdown, onOpenTask }:
                 <PulseIntro pending={generate.isPending} copy={copy} />
             )}
         </section>
+    );
+}
+
+interface PulseAgeProps {
+    report: AnalyticsReport | null;
+    freshness: ReturnType<typeof reportFreshness>;
+    blocked?: string;
+}
+
+/**
+ * Отметка свежести рядом с кнопкой: когда сделан разбор и не устарел ли он.
+ *
+ * Старый вывод выглядит так же уверенно, как только что сделанный, поэтому
+ * возраст стоит рядом с действием, которое его обновляет.
+ */
+function PulseAge({ report, freshness, blocked }: PulseAgeProps) {
+    if (blocked) {
+        return <span className="hidden text-[11px] text-muted sm:inline">{blocked}</span>;
+    }
+    if (!report) {
+        return <span className="hidden text-[11px] text-disabled sm:inline">Разбора ещё не было</span>;
+    }
+    return (
+        <span
+            className={cn(
+                "hidden items-center gap-1.5 text-[11px] sm:inline-flex",
+                freshness === "stale" ? "text-warning" : "text-muted",
+            )}
+        >
+            <History size={11} aria-hidden="true" />
+            {freshness === "stale"
+                ? `данные менялись после разбора (${formatRelative(report.created_at)})`
+                : `разбор ${formatRelative(report.created_at)}`}
+        </span>
     );
 }
 
