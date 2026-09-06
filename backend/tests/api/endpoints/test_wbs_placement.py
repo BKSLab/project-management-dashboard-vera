@@ -42,7 +42,9 @@ def compact_task(
 
 
 @pytest.mark.asyncio
-async def test_placement_endpoint_forwards_section_and_neighbour(api_client: AsyncClient) -> None:
+async def test_placement_endpoint_forwards_section_or_canvas(api_client: AsyncClient) -> None:
+    """Размещение в разделе с соседом и вынос задачи на холст."""
+
     service = AsyncMock(spec=WbsNodesService)
     service.place_task.return_value = compact_task(wbs_node_id=5)
     app.dependency_overrides[get_wbs_nodes_service] = lambda: service
@@ -56,9 +58,6 @@ async def test_placement_endpoint_forwards_section_and_neighbour(api_client: Asy
     assert response.json()["wbs_node_id"] == 5
     assert service.place_task.await_args.kwargs["before_task_id"] == 88
 
-
-@pytest.mark.asyncio
-async def test_placement_endpoint_puts_task_on_canvas(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=WbsNodesService)
     service.place_task.return_value = compact_task(canvas_x=420.0, canvas_y=180.0)
     app.dependency_overrides[get_wbs_nodes_service] = lambda: service
@@ -75,7 +74,9 @@ async def test_placement_endpoint_puts_task_on_canvas(api_client: AsyncClient) -
 
 
 @pytest.mark.asyncio
-async def test_suggestion_endpoint_returns_draft(api_client: AsyncClient) -> None:
+async def test_suggestion_endpoints_return_draft_and_map_errors(api_client: AsyncClient) -> None:
+    """Черновик отдаётся, проект без задач — 409, применение передаёт правки, некорректный черновик — 422."""
+
     service = AsyncMock(spec=WbsSuggestionService)
     service.suggest.return_value = WbsSuggestionSchema(
         nodes=[
@@ -93,9 +94,6 @@ async def test_suggestion_endpoint_returns_draft(api_client: AsyncClient) -> Non
     assert [item["temp_id"] for item in body["nodes"]] == ["n1"]
     assert body["assignments"][0]["task_id"] == 2
 
-
-@pytest.mark.asyncio
-async def test_suggestion_without_tasks_maps_to_409(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=WbsSuggestionService)
     service.suggest.side_effect = WbsSuggestionEmptyError(error_details="нет задач")
     app.dependency_overrides[get_wbs_suggestion_service] = lambda: service
@@ -104,9 +102,6 @@ async def test_suggestion_without_tasks_maps_to_409(api_client: AsyncClient) -> 
 
     assert response.status_code == 409
 
-
-@pytest.mark.asyncio
-async def test_apply_suggestion_endpoint_forwards_edited_draft(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=WbsSuggestionService)
     service.apply.return_value = WbsSuggestionApplyResultSchema(
         created_nodes=1,
@@ -126,9 +121,6 @@ async def test_apply_suggestion_endpoint_forwards_edited_draft(api_client: Async
     assert response.json() == {"created_nodes": 1, "assigned_tasks": 1}
     assert [node.temp_id for node in service.apply.await_args.kwargs["nodes"]] == ["n1"]
 
-
-@pytest.mark.asyncio
-async def test_apply_invalid_suggestion_maps_to_422(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=WbsSuggestionService)
     service.apply.side_effect = WbsSuggestionInvalidError(reason="раздел n1 повторяется.")
     app.dependency_overrides[get_wbs_suggestion_service] = lambda: service

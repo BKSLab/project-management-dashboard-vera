@@ -161,23 +161,6 @@ async def test_create_node_computes_position_within_its_level() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_node_with_unknown_parent_raises_not_found() -> None:
-    """Несуществующий родитель — отказ до записи."""
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = [node(1)]
-
-    with pytest.raises(WbsNodeNotFoundError) as exc_info:
-        await build_service(wbs_repository).create_node(
-            project_id=1,
-            title="API",
-            parent_id=77,
-        )
-
-    assert exc_info.value.status_code == 404
-    wbs_repository.save.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_move_node_into_itself_or_its_descendant_raises_cycle() -> None:
     """Узел нельзя вложить ни в себя, ни в собственного потомка."""
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
@@ -196,60 +179,6 @@ async def test_move_node_into_itself_or_its_descendant_raises_cycle() -> None:
         await service.move_node(project_id=1, node_id=1, parent_id=1, before_id=None)
 
     wbs_repository.update.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_move_node_positions_it_between_neighbours_or_at_the_end() -> None:
-    """Позиция вычисляется по соседям: между ними либо в конец уровня."""
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = [
-        node(1, position=1000.0),
-        node(2, position=2000.0),
-        node(3, position=3000.0),
-    ]
-    wbs_repository.update.return_value = node(3, position=1500.0)
-    await build_service(wbs_repository).move_node(
-        project_id=1, node_id=3, parent_id=None, before_id=2
-    )
-    assert wbs_repository.update.await_args.kwargs["data"]["position"] == 1500.0
-
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = [
-        node(1, position=1000.0),
-        node(2, position=2000.0),
-        node(3, parent_id=1, position=1000.0),
-    ]
-    wbs_repository.update.return_value = node(3, position=3000.0)
-    await build_service(wbs_repository).move_node(
-        project_id=1, node_id=3, parent_id=None, before_id=None
-    )
-    updated = wbs_repository.update.await_args.kwargs["data"]
-    assert updated["position"] == 3000.0
-    assert updated["parent_id"] is None
-
-
-@pytest.mark.asyncio
-async def test_move_node_compacts_level_when_gap_is_exhausted() -> None:
-    """Когда между соседями не осталось зазора, уровень перенумеровывается."""
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = [
-        node(1, position=1000.0),
-        node(2, position=1000.0000001),
-        node(3, parent_id=1, position=500.0),
-    ]
-    wbs_repository.update.return_value = node(3)
-
-    await build_service(wbs_repository).move_node(
-        project_id=1,
-        node_id=3,
-        parent_id=None,
-        before_id=2,
-    )
-
-    wbs_repository.update_positions.assert_awaited_once()
-    positions = wbs_repository.update_positions.await_args.kwargs["positions"]
-    assert positions == {1: 1000.0, 2: 2000.0}
-    assert wbs_repository.update.await_args.kwargs["data"]["position"] == 1500.0
 
 
 @pytest.mark.asyncio
@@ -432,37 +361,6 @@ async def test_assign_and_unassign_task_record_the_change_in_history() -> None:
 
 
 @pytest.mark.asyncio
-async def test_assign_task_rejects_unknown_node_and_foreign_or_missing_task() -> None:
-    """Отказ наступает до записи для всех трёх некорректных случаев."""
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = []
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_id.return_value = task(11)
-    with pytest.raises(WbsNodeNotFoundError):
-        await build_service(wbs_repository, tasks_repository).assign_task(
-            project_id=1, task_id=11, wbs_node_id=77
-        )
-    tasks_repository.update.assert_not_awaited()
-
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    foreign_task = task(11)
-    foreign_task.project_id = 5
-    tasks_repository.get_by_id.return_value = foreign_task
-    with pytest.raises(TaskForeignProjectError) as exc_info:
-        await build_service(tasks_repository=tasks_repository).assign_task(
-            project_id=1, task_id=11, wbs_node_id=5
-        )
-    assert exc_info.value.status_code == 409
-
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_id.return_value = None
-    with pytest.raises(TaskNotFoundError):
-        await build_service(tasks_repository=tasks_repository).assign_task(
-            project_id=1, task_id=999, wbs_node_id=5
-        )
-
-
-@pytest.mark.asyncio
 async def test_assign_task_to_same_node_is_noop() -> None:
     """Повторное назначение в тот же раздел не пишет ни задачу, ни историю."""
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
@@ -527,8 +425,113 @@ async def test_place_task_switches_between_canvas_and_structure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_place_task_orders_it_among_siblings() -> None:
-    """Позиция внутри раздела считается по соседям и уплотняется при нужде."""
+async def test_wbs_write_operations_reject_foreign_and_unknown_objects() -> None:
+    """Неизвестный родитель, узел чужого проекта и некорректное назначение задачи отклоняются до записи."""
+    # Несуществующий родитель — отказ до записи.
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [node(1)]
+
+    with pytest.raises(WbsNodeNotFoundError) as exc_info:
+        await build_service(wbs_repository).create_node(
+            project_id=1,
+            title="API",
+            parent_id=77,
+        )
+
+    assert exc_info.value.status_code == 404
+    wbs_repository.save.assert_not_awaited()
+    # Узел чужого проекта не читается и не пишется.
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_id.return_value = node(1, project_id=2)
+
+    with pytest.raises(WbsNodeForeignProjectError):
+        await build_service(wbs_repository).update_node(
+            project_id=1,
+            node_id=1,
+            title="Platform",
+        )
+
+    wbs_repository.get_by_project.assert_not_awaited()
+    wbs_repository.update.assert_not_awaited()
+    # Отказ наступает до записи для всех трёх некорректных случаев.
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = []
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = task(11)
+    with pytest.raises(WbsNodeNotFoundError):
+        await build_service(wbs_repository, tasks_repository).assign_task(
+            project_id=1, task_id=11, wbs_node_id=77
+        )
+    tasks_repository.update.assert_not_awaited()
+
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    foreign_task = task(11)
+    foreign_task.project_id = 5
+    tasks_repository.get_by_id.return_value = foreign_task
+    with pytest.raises(TaskForeignProjectError) as exc_info:
+        await build_service(tasks_repository=tasks_repository).assign_task(
+            project_id=1, task_id=11, wbs_node_id=5
+        )
+    assert exc_info.value.status_code == 409
+
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = None
+    with pytest.raises(TaskNotFoundError):
+        await build_service(tasks_repository=tasks_repository).assign_task(
+            project_id=1, task_id=999, wbs_node_id=5
+        )
+
+
+@pytest.mark.asyncio
+async def test_wbs_positions_are_computed_and_compacted() -> None:
+    """Позиция узла считается по соседям и уплотняется, позиция задачи внутри раздела — тоже."""
+    # Позиция вычисляется по соседям: между ними либо в конец уровня.
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [
+        node(1, position=1000.0),
+        node(2, position=2000.0),
+        node(3, position=3000.0),
+    ]
+    wbs_repository.update.return_value = node(3, position=1500.0)
+    await build_service(wbs_repository).move_node(
+        project_id=1, node_id=3, parent_id=None, before_id=2
+    )
+    assert wbs_repository.update.await_args.kwargs["data"]["position"] == 1500.0
+
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [
+        node(1, position=1000.0),
+        node(2, position=2000.0),
+        node(3, parent_id=1, position=1000.0),
+    ]
+    wbs_repository.update.return_value = node(3, position=3000.0)
+    await build_service(wbs_repository).move_node(
+        project_id=1, node_id=3, parent_id=None, before_id=None
+    )
+    updated = wbs_repository.update.await_args.kwargs["data"]
+    assert updated["position"] == 3000.0
+    assert updated["parent_id"] is None
+    # Когда между соседями не осталось зазора, уровень перенумеровывается.
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [
+        node(1, position=1000.0),
+        node(2, position=1000.0000001),
+        node(3, parent_id=1, position=500.0),
+    ]
+    wbs_repository.update.return_value = node(3)
+
+    await build_service(wbs_repository).move_node(
+        project_id=1,
+        node_id=3,
+        parent_id=None,
+        before_id=2,
+    )
+
+    wbs_repository.update_positions.assert_awaited_once()
+    positions = wbs_repository.update_positions.await_args.kwargs["positions"]
+    assert positions == {1: 1000.0, 2: 2000.0}
+    assert wbs_repository.update.await_args.kwargs["data"]["position"] == 1500.0
+    # Позиция внутри раздела считается по соседям и уплотняется при нужде.
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [node(5)]
     tasks_repository = AsyncMock(spec=TasksRepository)
@@ -566,27 +569,7 @@ async def test_place_task_orders_it_among_siblings() -> None:
         positions={21: 1000.0, 22: 2000.0},
     )
     assert tasks_repository.update.await_args.kwargs["data"]["wbs_position"] == 3000.0
-
-
-@pytest.mark.asyncio
-async def test_rename_node_rejects_node_from_another_project() -> None:
-    """Узел чужого проекта не читается и не пишется."""
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_id.return_value = node(1, project_id=2)
-
-    with pytest.raises(WbsNodeForeignProjectError):
-        await build_service(wbs_repository).update_node(
-            project_id=1,
-            node_id=1,
-            title="Platform",
-        )
-
-    wbs_repository.get_by_project.assert_not_awaited()
-    wbs_repository.update.assert_not_awaited()
-
-
-def test_next_position_covers_empty_level_first_place_and_exhausted_gap() -> None:
-    """Расчёт позиции: пустой уровень, вставка перед первым, кончившийся зазор."""
+    # Расчёт позиции: пустой уровень, вставка перед первым, кончившийся зазор.
     assert _next_position(positions=[], before_index=0) == POSITION_STEP
     assert _next_position(positions=[1000.0], before_index=0) == 500.0
     assert _next_position(positions=[1000.0, 1000.0000001], before_index=1) is None

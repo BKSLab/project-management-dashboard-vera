@@ -61,62 +61,23 @@ async def test_answer_is_validated_and_unwrapped() -> None:
     assert (await _ask(client)).answer == "готово"
 
 
-async def test_client_error_is_not_retried() -> None:
-    """Обычная 4xx завершается сразу и не тратит остальные попытки."""
-    attempts = {"count": 0}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        attempts["count"] += 1
-        return httpx.Response(403, json={"error": "forbidden"})
-
-    with pytest.raises(LlmClientError):
-        await _ask(build_client(handler, retries=3))
-
-    assert attempts["count"] == 1
-
-
-@pytest.mark.parametrize("status_code", [429, 500, 503])
-async def test_retryable_statuses_are_retried(status_code: int) -> None:
+async def test_retryable_statuses_are_retried() -> None:
     """429 и 5xx повторяются: причина сбоя на стороне сервера."""
-    attempts = {"count": 0}
+    for status_code in (429, 500, 503):
+        attempts = {"count": 0}
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            return httpx.Response(status_code, json={"error": "retry"})
-        return build_response(json.dumps({"answer": "готово"}))
+        def handler(
+            request: httpx.Request,
+            code: int = status_code,
+            counter: dict = attempts,
+        ) -> httpx.Response:
+            counter["count"] += 1
+            if counter["count"] == 1:
+                return httpx.Response(code, json={"error": "retry"})
+            return build_response(json.dumps({"answer": "готово"}))
 
-    assert (await _ask(build_client(handler, retries=3))).answer == "готово"
-    assert attempts["count"] == 2
-
-
-async def test_transport_error_is_retried() -> None:
-    """Сетевой сбой повторяется как транспортная ошибка."""
-    attempts = {"count": 0}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            raise httpx.ConnectError("нет соединения", request=request)
-        return build_response(json.dumps({"answer": "готово"}))
-
-    assert (await _ask(build_client(handler, retries=3))).answer == "готово"
-    assert attempts["count"] == 2
-
-
-async def test_schema_violation_is_retried_as_content_failure() -> None:
-    """Ответ, не прошедший схему, повторяется отдельной категорией."""
-    attempts = {"count": 0}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            return build_response(json.dumps({"wrong_field": 1}))
-        return build_response(json.dumps({"answer": "готово"}))
-
-    assert (await _ask(build_client(handler, retries=3))).answer == "готово"
-    assert attempts["count"] == 2
-
+        assert (await _ask(build_client(handler, retries=3))).answer == "готово"
+        assert attempts["count"] == 2, f"{status_code} не повторён"
 
 async def test_worst_case_budget_is_derived_from_timeout_and_attempts() -> None:
     """Бюджет худшего случая считается из timeout и попыток, ноль попыток недопустим, продовые значения дают известное число."""
@@ -161,3 +122,40 @@ def test_status_classification(status_code: int, expected: RetryDecision) -> Non
 def test_non_http_error_is_content_failure() -> None:
     """Ошибка разбора относится к содержимому, а не к транспорту."""
     assert classify(ValueError("плохой JSON")) is RetryDecision.RETRY_CONTENT
+
+
+async def test_transient_failures_are_retried_and_client_errors_are_not() -> None:
+    """Ошибка клиента не повторяется, сбой транспорта и нарушение схемы — повторяются."""
+    # Обычная 4xx завершается сразу и не тратит остальные попытки.
+    attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(403, json={"error": "forbidden"})
+
+    with pytest.raises(LlmClientError):
+        await _ask(build_client(handler, retries=3))
+
+    assert attempts["count"] == 1
+    # Сетевой сбой повторяется как транспортная ошибка.
+    attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise httpx.ConnectError("нет соединения", request=request)
+        return build_response(json.dumps({"answer": "готово"}))
+
+    assert (await _ask(build_client(handler, retries=3))).answer == "готово"
+    assert attempts["count"] == 2
+    # Ответ, не прошедший схему, повторяется отдельной категорией.
+    attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return build_response(json.dumps({"wrong_field": 1}))
+        return build_response(json.dumps({"answer": "готово"}))
+
+    assert (await _ask(build_client(handler, retries=3))).answer == "готово"
+    assert attempts["count"] == 2

@@ -9,40 +9,29 @@ from src.utils.api_tokens import (
 )
 
 
-def test_generated_secret_has_prefix_and_entropy() -> None:
-    """Секрет узнаваем по префиксу и достаточно длинный."""
+def test_secret_is_unique_hashed_and_never_stored_in_clear() -> None:
+    """Секрет имеет префикс и энтропию, каждый новый уникален, хеш устойчив, различается и не содержит секрета, отображаемый префикс короткий."""
+    # Секрет узнаваем по префиксу и достаточно длинный.
     secret = generate_token_secret()
 
     assert secret.startswith(TOKEN_PREFIX)
     assert len(secret) > len(TOKEN_PREFIX) + 30
-
-
-def test_generated_secrets_are_unique() -> None:
-    """Два выпуска подряд не дают одинаковый секрет."""
+    # Два выпуска подряд не дают одинаковый секрет.
     secrets_set = {generate_token_secret() for _ in range(50)}
 
     assert len(secrets_set) == 50
-
-
-def test_hash_is_stable_and_differs_between_secrets() -> None:
-    """Хеш детерминирован для одного секрета и различается для разных."""
+    # Хеш детерминирован для одного секрета и различается для разных.
     first = generate_token_secret()
     second = generate_token_secret()
 
     assert hash_token_secret(first) == hash_token_secret(first)
     assert hash_token_secret(first) != hash_token_secret(second)
     assert len(hash_token_secret(first)) == 64
-
-
-def test_hash_does_not_contain_secret() -> None:
-    """В хеше не остаётся исходного секрета."""
+    # В хеше не остаётся исходного секрета.
     secret = generate_token_secret()
 
     assert secret not in hash_token_secret(secret)
-
-
-def test_display_prefix_is_short_and_matches_secret() -> None:
-    """Префикс для списка короткий и совпадает с началом секрета."""
+    # Префикс для списка короткий и совпадает с началом секрета.
     secret = generate_token_secret()
     prefix = build_display_prefix(secret)
 

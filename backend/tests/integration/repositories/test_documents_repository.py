@@ -6,10 +6,9 @@ from src.repositories.documents import DocumentsRepository
 
 
 @pytest.mark.asyncio
-async def test_search_on_real_postgres_supports_prefix_and_highlight(
-    db_session: AsyncSession,
-    project: Project,
-) -> None:
+async def test_ranked_search_orders_and_bounds_results(db_session: AsyncSession, project: Project) -> None:
+    """Поиск с префиксом и подсветкой, приоритет совпадения в заголовке, точный slug."""
+
     repository = DocumentsRepository(db_session)
     document = await repository.create(
         data={
@@ -30,12 +29,6 @@ async def test_search_on_real_postgres_supports_prefix_and_highlight(
     assert highlights[document.id]["search_match_source"] == "content"
     assert "__FTS_START__" in highlights[document.id]["search_excerpt"]
 
-
-@pytest.mark.asyncio
-async def test_ranked_search_orders_title_match_before_content_and_applies_limit(
-    db_session: AsyncSession,
-    project: Project,
-) -> None:
     repository = DocumentsRepository(db_session)
     content_match = await repository.create(
         data={
@@ -63,12 +56,6 @@ async def test_ranked_search_orders_title_match_before_content_and_applies_limit
     assert [item.id for item in documents] == [title_match.id]
     assert content_match.id != title_match.id
 
-
-@pytest.mark.asyncio
-async def test_ranked_search_finds_exact_document_slug(
-    db_session: AsyncSession,
-    project: Project,
-) -> None:
     repository = DocumentsRepository(db_session)
     document = await repository.create(
         data={

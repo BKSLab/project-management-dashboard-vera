@@ -121,72 +121,6 @@ async def test_create_project_adds_default_stages() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_project_with_busy_key_raises_conflict() -> None:
-    projects_repository = AsyncMock(spec=ProjectsRepository)
-    projects_repository.get_max_order_index.return_value = 0
-    projects_repository.save.side_effect = ProjectKeyAlreadyExistsRepositoryError(key="PROJ")
-    stages_repository = AsyncMock(spec=ProjectStagesRepository)
-    service = build_service(projects_repository, stages_repository)
-
-    with pytest.raises(ProjectKeyConflictError) as exc_info:
-        await service.create_project(
-            data={"key": "PROJ", "name": "Тестовый проект"},
-            owner_id=OWNER_ID,
-        )
-
-    assert exc_info.value.status_code == 409
-    stages_repository.save_many.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_get_project_when_missing_raises_not_found() -> None:
-    projects_repository = AsyncMock(spec=ProjectsRepository)
-    projects_repository.get_by_id.return_value = None
-
-    with pytest.raises(ProjectNotFoundError) as exc_info:
-        await build_service(projects_repository).get_project(project_id=999)
-
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("field,value", [("name", "Новое имя"), ("description_md", "Описание")])
-async def test_update_project_point_fields_enqueues_project_upsert(field: str, value: str) -> None:
-    projects_repository = AsyncMock(spec=ProjectsRepository)
-    projects_repository.get_by_id.return_value = make_project()
-    projects_repository.update.return_value = make_project()
-    knowledge_events = AsyncMock(spec=KnowledgeEvents)
-
-    await build_service(
-        projects_repository=projects_repository,
-        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
-    ).update_project(project_id=7, data={field: value})
-
-    knowledge_events.upsert.assert_awaited_once_with(
-        project_id=7,
-        entity_type=KnowledgeEntityType.PROJECT,
-        entity_id=7,
-    )
-    knowledge_events.reindex_project.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_update_project_key_enqueues_full_reindex() -> None:
-    projects_repository = AsyncMock(spec=ProjectsRepository)
-    projects_repository.get_by_id.return_value = make_project()
-    projects_repository.update.return_value = make_project(key="NEW")
-    knowledge_events = AsyncMock(spec=KnowledgeEvents)
-
-    await build_service(
-        projects_repository=projects_repository,
-        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
-    ).update_project(project_id=7, data={"key": "NEW", "name": "Новое имя"})
-
-    knowledge_events.reindex_project.assert_awaited_once_with(7)
-    knowledge_events.upsert.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_delete_project_removes_attachment_directories() -> None:
     projects_repository = AsyncMock(spec=ProjectsRepository)
     projects_repository.get_by_id.return_value = SimpleNamespace(id=1)
@@ -207,17 +141,6 @@ async def test_delete_project_removes_attachment_directories() -> None:
 
     projects_repository.delete.assert_awaited_once()
     assert storage.delete_task_directory.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_get_project_list_wraps_repository_error() -> None:
-    projects_repository = AsyncMock(spec=ProjectsRepository)
-    projects_repository.get_all.side_effect = ProjectsRepositoryError("БД недоступна")
-
-    with pytest.raises(ProjectsServiceError) as exc_info:
-        await build_service(projects_repository).get_project_list(user_id=OWNER_ID)
-
-    assert exc_info.value.status_code == 500
 
 
 def test_build_project_stats_summarises_progress_and_deadlines() -> None:
@@ -262,3 +185,75 @@ def test_build_project_stats_summarises_progress_and_deadlines() -> None:
     assert stats.total_tasks == 0
     assert stats.completion_rate == 0.0
     assert stats.stage_breakdown == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('field,value', [('name', 'Новое имя'), ('description_md', 'Описание')])
+async def test_project_changes_enqueue_the_right_knowledge_job(field: str, value: str) -> None:
+    """Точечные поля ставят upsert проекта, смена ключа — полную переиндексацию."""
+
+    projects_repository = AsyncMock(spec=ProjectsRepository)
+    projects_repository.get_by_id.return_value = make_project()
+    projects_repository.update.return_value = make_project()
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+
+    await build_service(
+        projects_repository=projects_repository,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
+    ).update_project(project_id=7, data={field: value})
+
+    knowledge_events.upsert.assert_awaited_once_with(
+        project_id=7,
+        entity_type=KnowledgeEntityType.PROJECT,
+        entity_id=7,
+    )
+    knowledge_events.reindex_project.assert_not_awaited()
+
+    projects_repository = AsyncMock(spec=ProjectsRepository)
+    projects_repository.get_by_id.return_value = make_project()
+    projects_repository.update.return_value = make_project(key="NEW")
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+
+    await build_service(
+        projects_repository=projects_repository,
+        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
+    ).update_project(project_id=7, data={"key": "NEW", "name": "Новое имя"})
+
+    knowledge_events.reindex_project.assert_awaited_once_with(7)
+    knowledge_events.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_project_creation_and_reads_report_their_failures() -> None:
+    """Занятый ключ — 409, отсутствующий проект — 404, сбой репозитория — 500."""
+
+    projects_repository = AsyncMock(spec=ProjectsRepository)
+    projects_repository.get_max_order_index.return_value = 0
+    projects_repository.save.side_effect = ProjectKeyAlreadyExistsRepositoryError(key="PROJ")
+    stages_repository = AsyncMock(spec=ProjectStagesRepository)
+    service = build_service(projects_repository, stages_repository)
+
+    with pytest.raises(ProjectKeyConflictError) as exc_info:
+        await service.create_project(
+            data={"key": "PROJ", "name": "Тестовый проект"},
+            owner_id=OWNER_ID,
+        )
+
+    assert exc_info.value.status_code == 409
+    stages_repository.save_many.assert_not_awaited()
+
+    projects_repository = AsyncMock(spec=ProjectsRepository)
+    projects_repository.get_by_id.return_value = None
+
+    with pytest.raises(ProjectNotFoundError) as exc_info:
+        await build_service(projects_repository).get_project(project_id=999)
+
+    assert exc_info.value.status_code == 404
+
+    projects_repository = AsyncMock(spec=ProjectsRepository)
+    projects_repository.get_all.side_effect = ProjectsRepositoryError("БД недоступна")
+
+    with pytest.raises(ProjectsServiceError) as exc_info:
+        await build_service(projects_repository).get_project_list(user_id=OWNER_ID)
+
+    assert exc_info.value.status_code == 500

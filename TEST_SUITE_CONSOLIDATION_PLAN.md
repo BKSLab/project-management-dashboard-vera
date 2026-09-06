@@ -15,8 +15,8 @@
 | 2. Матрицы прав в api | ✅ выполнен | 795 | 79% | `consolidation-2` |
 | 3. Сервисный слой unit | ✅ выполнен | 692 | 79% | `consolidation-3` |
 | 4. knowledge, mcp, clients unit | ✅ выполнен | 626 | 79% | `consolidation-4` |
-| 5. Integration на PostgreSQL | ⬜ | ~370 | | |
-| 6. Characterization и финал | ⬜ | ≤320 | | |
+| 5. Integration на PostgreSQL | ✅ выполнен | 552 | 79% | `consolidation-5` |
+| 6. Characterization, api и второй проход | 🟨 идёт | 479 | 79% | `consolidation-6` |
 
 Baseline: **1280 passed**, покрытие `src` **79%** (11257 строк, 2337 не
 покрыты), полный прогон **60 с**, `ruff All checks passed`.

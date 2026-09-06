@@ -20,7 +20,25 @@ TODAY = date(2026, 9, 2)
 
 
 @pytest.mark.asyncio
-async def test_calendar_endpoint_forwards_range_and_filters(api_client: AsyncClient) -> None:
+async def test_unscheduled_endpoint_returns_cursor_page(api_client: AsyncClient) -> None:
+    service = AsyncMock(spec=CalendarService)
+    service.get_unscheduled.return_value = UnscheduledTasksPageSchema(items=[], next_cursor=42)
+    app.dependency_overrides[get_calendar_service] = lambda: service
+
+    response = await api_client.get(
+        "/api/v1/projects/1/calendar/unscheduled",
+        params={"today": TODAY.isoformat(), "limit": 10},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "next_cursor": 42}
+    assert service.get_unscheduled.await_args.kwargs["limit"] == 10
+
+
+@pytest.mark.asyncio
+async def test_calendar_endpoint_validates_and_forwards_its_arguments(api_client: AsyncClient) -> None:
+    """Диапазон и фильтры доходят до сервиса, без даты клиента запрос отклоняется, доменная ошибка становится 422."""
+
     service = AsyncMock(spec=CalendarService)
     service.get_range.return_value = CalendarResponseSchema(
         range=CalendarRangeSchema(date_from=TODAY, date_to=TODAY, today=TODAY),
@@ -52,9 +70,6 @@ async def test_calendar_endpoint_forwards_range_and_filters(api_client: AsyncCli
     assert service.get_range.await_args.kwargs["stage_id"] == 2
     assert service.get_range.await_args.kwargs["priority"].value == "HIGH"
 
-
-@pytest.mark.asyncio
-async def test_calendar_endpoint_requires_client_today(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=CalendarService)
     app.dependency_overrides[get_calendar_service] = lambda: service
 
@@ -66,9 +81,6 @@ async def test_calendar_endpoint_requires_client_today(api_client: AsyncClient) 
     assert response.status_code == 422
     service.get_range.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_calendar_domain_error_is_mapped_to_422(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=CalendarService)
     service.get_range.side_effect = CalendarRangeError("Некорректный диапазон.")
     app.dependency_overrides[get_calendar_service] = lambda: service
@@ -84,19 +96,3 @@ async def test_calendar_domain_error_is_mapped_to_422(api_client: AsyncClient) -
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Некорректный диапазон."
-
-
-@pytest.mark.asyncio
-async def test_unscheduled_endpoint_returns_cursor_page(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=CalendarService)
-    service.get_unscheduled.return_value = UnscheduledTasksPageSchema(items=[], next_cursor=42)
-    app.dependency_overrides[get_calendar_service] = lambda: service
-
-    response = await api_client.get(
-        "/api/v1/projects/1/calendar/unscheduled",
-        params={"today": TODAY.isoformat(), "limit": 10},
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"items": [], "next_cursor": 42}
-    assert service.get_unscheduled.await_args.kwargs["limit"] == 10

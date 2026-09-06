@@ -71,44 +71,6 @@ async def test_stage_operations_reject_missing_project_and_stage() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_stage_appends_to_end_of_board() -> None:
-    stages_repository = AsyncMock(spec=ProjectStagesRepository)
-    stages_repository.get_max_order_index.return_value = 4
-    stages_repository.save.return_value = SimpleNamespace(
-        id=9,
-        project_id=1,
-        name="Ревью",
-        order_index=5,
-        color="#a371f7",
-        is_done_stage=False,
-    )
-
-    await build_service(stages_repository).create_stage(
-        project_id=1,
-        data={"name": "Ревью", "color": "#a371f7", "is_done_stage": False},
-    )
-
-    saved = stages_repository.save.await_args.kwargs["data"]
-    assert saved["order_index"] == 5
-    assert saved["project_id"] == 1
-
-
-@pytest.mark.asyncio
-async def test_create_stage_with_busy_name_raises_conflict() -> None:
-    stages_repository = AsyncMock(spec=ProjectStagesRepository)
-    stages_repository.get_max_order_index.return_value = 0
-    stages_repository.save.side_effect = ProjectStageNameAlreadyExistsRepositoryError(name="Ревью")
-
-    with pytest.raises(ProjectStageNameConflictError) as exc_info:
-        await build_service(stages_repository).create_stage(
-            project_id=1,
-            data={"name": "Ревью", "color": "#a371f7", "is_done_stage": False},
-        )
-
-    assert exc_info.value.status_code == 409
-
-
-@pytest.mark.asyncio
 async def test_delete_stage_refuses_to_break_the_board() -> None:
     """Стадию с задачами и последнюю стадию удалить нельзя."""
 
@@ -141,7 +103,41 @@ async def test_delete_stage_refuses_to_break_the_board() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_stages_wraps_repository_error() -> None:
+async def test_stage_creation_and_reads_report_conflicts() -> None:
+    """Стадия встаёт в конец доски, занятое имя — конфликт, сбой репозитория — 500."""
+
+    stages_repository = AsyncMock(spec=ProjectStagesRepository)
+    stages_repository.get_max_order_index.return_value = 4
+    stages_repository.save.return_value = SimpleNamespace(
+        id=9,
+        project_id=1,
+        name="Ревью",
+        order_index=5,
+        color="#a371f7",
+        is_done_stage=False,
+    )
+
+    await build_service(stages_repository).create_stage(
+        project_id=1,
+        data={"name": "Ревью", "color": "#a371f7", "is_done_stage": False},
+    )
+
+    saved = stages_repository.save.await_args.kwargs["data"]
+    assert saved["order_index"] == 5
+    assert saved["project_id"] == 1
+
+    stages_repository = AsyncMock(spec=ProjectStagesRepository)
+    stages_repository.get_max_order_index.return_value = 0
+    stages_repository.save.side_effect = ProjectStageNameAlreadyExistsRepositoryError(name="Ревью")
+
+    with pytest.raises(ProjectStageNameConflictError) as exc_info:
+        await build_service(stages_repository).create_stage(
+            project_id=1,
+            data={"name": "Ревью", "color": "#a371f7", "is_done_stage": False},
+        )
+
+    assert exc_info.value.status_code == 409
+
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
     stages_repository.get_by_project.side_effect = ProjectStagesRepositoryError("БД недоступна")
 

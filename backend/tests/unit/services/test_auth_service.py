@@ -52,7 +52,9 @@ def make_user(user_id: int = 1, password: str = "pa$$word123", is_active: bool =
 
 
 @pytest.mark.asyncio
-async def test_register_rejects_wrong_invite_code() -> None:
+async def test_register_validates_invite_username_and_stores_only_hash() -> None:
+    """Неверный код приглашения, занятый логин, пароль сохраняется хешем без подтверждения."""
+
     repository = AsyncMock(spec=UsersRepository)
     service = AuthService(
         users_repository=repository,
@@ -66,9 +68,6 @@ async def test_register_rejects_wrong_invite_code() -> None:
     assert exc_info.value.status_code == 403
     repository.save.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_register_hashes_password_and_drops_confirmation() -> None:
     repository = AsyncMock(spec=UsersRepository)
     repository.save.return_value = make_user()
     service = AuthService(
@@ -89,9 +88,6 @@ async def test_register_hashes_password_and_drops_confirmation() -> None:
     assert saved["password_hash"] != REGISTRATION["password"]
     assert saved["password_hash"].startswith("$2b$")
 
-
-@pytest.mark.asyncio
-async def test_register_maps_busy_username_to_conflict() -> None:
     repository = AsyncMock(spec=UsersRepository)
     repository.save.side_effect = UsernameAlreadyExistsRepositoryError(username="boris")
     service = AuthService(
@@ -107,7 +103,9 @@ async def test_register_maps_busy_username_to_conflict() -> None:
 
 
 @pytest.mark.asyncio
-async def test_login_returns_token_with_user_id() -> None:
+async def test_login_issues_a_token_and_hides_why_it_failed() -> None:
+    """Успешный вход отдаёт токен с идентификатором, неизвестный логин и неверный пароль неотличимы, отключённый пользователь не входит."""
+
     repository = AsyncMock(spec=UsersRepository)
     repository.get_by_username.return_value = make_user(user_id=42)
     service = AuthService(
@@ -121,9 +119,6 @@ async def test_login_returns_token_with_user_id() -> None:
     assert user.id == 42
     assert decode_access_token(token) == 42
 
-
-@pytest.mark.asyncio
-async def test_login_with_unknown_username_and_wrong_password_look_identical() -> None:
     missing_repository = AsyncMock(spec=UsersRepository)
     missing_repository.get_by_username.return_value = None
     wrong_repository = AsyncMock(spec=UsersRepository)
@@ -152,9 +147,6 @@ async def test_login_with_unknown_username_and_wrong_password_look_identical() -
     assert missing.value.status_code == wrong.value.status_code == 401
     assert missing.value.detail == wrong.value.detail
 
-
-@pytest.mark.asyncio
-async def test_login_rejects_inactive_user() -> None:
     repository = AsyncMock(spec=UsersRepository)
     repository.get_by_username.return_value = make_user(is_active=False)
     service = AuthService(

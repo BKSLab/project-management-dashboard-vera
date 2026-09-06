@@ -79,89 +79,6 @@ async def test_list_returns_transport_contract() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_stamps_authenticated_author_and_commits() -> None:
-    repository = AsyncMock(spec=ProjectStickersRepository)
-    repository.insert.return_value = 4
-    repository.get_by_id.return_value = sticker(task_ids=[11])
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_project.return_value = [SimpleNamespace(id=11)]
-    unit_of_work = AsyncMock(spec=UnitOfWork)
-
-    result = await service(repository, tasks_repository, unit_of_work).create_sticker(
-        project_id=1,
-        data=ProjectStickerCreateSchema(body="  Согласовать API  ", task_ids=[11]),
-        author_id=user().id,
-        author_username=user().username,
-        author_display_name="Иванова Вера Петровна",
-    )
-
-    assert result.id == 4
-    saved = repository.insert.await_args.kwargs
-    assert saved["data"]["created_by_user_id"] == 7
-    assert saved["data"]["created_by_username_snapshot"] == "vera"
-    assert saved["data"]["created_by_display_name_snapshot"] == "Иванова Вера Петровна"
-    assert saved["data"]["body"] == "Согласовать API"
-    assert saved["data"]["canvas_x"] == 40.0
-    assert saved["data"]["canvas_y"] == 40.0
-    links = repository.replace_task_links.await_args.kwargs
-    assert links["task_ids"] == [11]
-    unit_of_work.commit.assert_awaited_once_with()
-
-
-@pytest.mark.asyncio
-async def test_create_rejects_task_from_another_project() -> None:
-    repository = AsyncMock(spec=ProjectStickersRepository)
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_project.return_value = []
-
-    with pytest.raises(ProjectStickerTaskMismatchError):
-        await service(repository, tasks_repository).create_sticker(
-            project_id=1,
-            data=ProjectStickerCreateSchema(body="Текст", task_ids=[99]),
-            author_id=user().id,
-        author_username=user().username,
-        author_display_name="Иванова Вера Петровна",
-        )
-
-    repository.insert.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_update_uses_revision_replaces_tasks_and_preserves_author() -> None:
-    repository = AsyncMock(spec=ProjectStickersRepository)
-    repository.get_by_id.side_effect = [
-        sticker(revision=3, task_ids=[11]),
-        sticker(revision=4, task_ids=[12]),
-    ]
-    repository.update_fields.return_value = True
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_project.return_value = [SimpleNamespace(id=12)]
-    unit_of_work = AsyncMock(spec=UnitOfWork)
-
-    result = await service(repository, tasks_repository, unit_of_work).update_sticker(
-        project_id=1,
-        sticker_id=4,
-        data=ProjectStickerUpdateSchema(
-            revision=3,
-            body="Новый текст",
-            color="blue",
-            task_ids=[12],
-        ),
-    )
-
-    assert result.revision == 4
-    changes = repository.update_fields.await_args.kwargs
-    assert changes["expected_revision"] == 3
-    assert changes["changes"] == {
-        "body": "Новый текст",
-        "color": ProjectStickerColor.BLUE,
-    }
-    assert repository.replace_task_links.await_args.kwargs["task_ids"] == [12]
-    assert "created_by_user_id" not in changes["changes"]
-    unit_of_work.commit.assert_awaited_once_with()
-
-
-@pytest.mark.asyncio
 async def test_stale_revision_never_overwrites_someone_elses_change() -> None:
     """Устаревшая ревизия отклоняется и до записи, и по её результату.
 
@@ -274,3 +191,82 @@ async def test_repository_failure_is_wrapped() -> None:
 
     with pytest.raises(ProjectStickersServiceError):
         await service(repository).list_stickers(project_id=1)
+
+
+@pytest.mark.asyncio
+async def test_sticker_create_and_update_preserve_author_and_links() -> None:
+    """Автор проставляется по сессии и сохраняется при правке, связи задач заменяются, чужая задача отклоняется."""
+
+    repository = AsyncMock(spec=ProjectStickersRepository)
+    repository.insert.return_value = 4
+    repository.get_by_id.return_value = sticker(task_ids=[11])
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_project.return_value = [SimpleNamespace(id=11)]
+    unit_of_work = AsyncMock(spec=UnitOfWork)
+
+    result = await service(repository, tasks_repository, unit_of_work).create_sticker(
+        project_id=1,
+        data=ProjectStickerCreateSchema(body="  Согласовать API  ", task_ids=[11]),
+        author_id=user().id,
+        author_username=user().username,
+        author_display_name="Иванова Вера Петровна",
+    )
+
+    assert result.id == 4
+    saved = repository.insert.await_args.kwargs
+    assert saved["data"]["created_by_user_id"] == 7
+    assert saved["data"]["created_by_username_snapshot"] == "vera"
+    assert saved["data"]["created_by_display_name_snapshot"] == "Иванова Вера Петровна"
+    assert saved["data"]["body"] == "Согласовать API"
+    assert saved["data"]["canvas_x"] == 40.0
+    assert saved["data"]["canvas_y"] == 40.0
+    links = repository.replace_task_links.await_args.kwargs
+    assert links["task_ids"] == [11]
+    unit_of_work.commit.assert_awaited_once_with()
+
+    repository = AsyncMock(spec=ProjectStickersRepository)
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_project.return_value = []
+
+    with pytest.raises(ProjectStickerTaskMismatchError):
+        await service(repository, tasks_repository).create_sticker(
+            project_id=1,
+            data=ProjectStickerCreateSchema(body="Текст", task_ids=[99]),
+            author_id=user().id,
+        author_username=user().username,
+        author_display_name="Иванова Вера Петровна",
+        )
+
+    repository.insert.assert_not_awaited()
+
+    repository = AsyncMock(spec=ProjectStickersRepository)
+    repository.get_by_id.side_effect = [
+        sticker(revision=3, task_ids=[11]),
+        sticker(revision=4, task_ids=[12]),
+    ]
+    repository.update_fields.return_value = True
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_project.return_value = [SimpleNamespace(id=12)]
+    unit_of_work = AsyncMock(spec=UnitOfWork)
+
+    result = await service(repository, tasks_repository, unit_of_work).update_sticker(
+        project_id=1,
+        sticker_id=4,
+        data=ProjectStickerUpdateSchema(
+            revision=3,
+            body="Новый текст",
+            color="blue",
+            task_ids=[12],
+        ),
+    )
+
+    assert result.revision == 4
+    changes = repository.update_fields.await_args.kwargs
+    assert changes["expected_revision"] == 3
+    assert changes["changes"] == {
+        "body": "Новый текст",
+        "color": ProjectStickerColor.BLUE,
+    }
+    assert repository.replace_task_links.await_args.kwargs["task_ids"] == [12]
+    assert "created_by_user_id" not in changes["changes"]
+    unit_of_work.commit.assert_awaited_once_with()

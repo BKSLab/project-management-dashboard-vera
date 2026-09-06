@@ -123,49 +123,45 @@ async def test_successful_import_returns_all_three_entities(
     assert body["link"] == {"id": 12, "document_id": 11, "task_id": 8}
 
 
-@pytest.mark.parametrize(
-    ("error", "expected_status", "expected_detail"),
-    [
-        (
-            TaskDocumentUnsupportedFormatError(
-                "Этот формат нельзя преобразовать в документ проекта."
-            ),
-            422,
-            "Этот формат нельзя преобразовать в документ проекта.",
-        ),
-        (
-            TaskDocumentTooLargeError(max_size_mb=10),
-            413,
-            "Размер файла превышает допустимые 10 МБ.",
-        ),
-        (
-            TaskDocumentStepFailedError(DocumentsServiceError("сбой создания документа")),
-            500,
-            DocumentsServiceError("сбой создания документа").detail,
-        ),
-    ],
-    ids=["неподдерживаемый формат", "слишком большой файл", "сбой вложенного сервиса"],
+FAILED_IMPORTS = (
+    (
+        TaskDocumentUnsupportedFormatError("Этот формат нельзя преобразовать в документ проекта."),
+        422,
+        "Этот формат нельзя преобразовать в документ проекта.",
+    ),
+    (
+        TaskDocumentTooLargeError(max_size_mb=10),
+        413,
+        "Размер файла превышает допустимые 10 МБ.",
+    ),
+    (
+        TaskDocumentStepFailedError(DocumentsServiceError("сбой создания документа")),
+        500,
+        DocumentsServiceError("сбой создания документа").detail,
+    ),
 )
-async def test_failed_import_keeps_status_and_detail(
-    api_client: AsyncClient,
-    error: Exception,
-    expected_status: int,
-    expected_detail: str,
-) -> None:
+
+
+async def test_failed_import_keeps_status_and_detail(api_client: AsyncClient) -> None:
     """Отказ импорта отвечает прежним статусом и прежней формулировкой.
 
     Внутренние типы ошибок сменились на собственную иерархию верхнего
     сервиса, но клиент этого видеть не должен: статус и текст те же.
     """
-    _install(FakeImportService(error=error))
+    problems: list[str] = []
+    for error, expected_status, expected_detail in FAILED_IMPORTS:
+        _install(FakeImportService(error=error))
 
-    response = await api_client.post(
-        IMPORT_PATH,
-        files={"file": ("brief.txt", b"hello", "text/plain")},
-    )
+        response = await api_client.post(
+            IMPORT_PATH,
+            files={"file": ("brief.txt", b"hello", "text/plain")},
+        )
 
-    assert response.status_code == expected_status
-    assert response.json() == {"detail": expected_detail}
+        answer = (response.status_code, response.json())
+        if answer != (expected_status, {"detail": expected_detail}):
+            problems.append(f"{type(error).__name__}: {answer}")
+
+    assert not problems, "Контракт отказа импорта изменился: " + "; ".join(problems)
 
 
 def test_nested_failure_keeps_the_cause_visible_to_the_client() -> None:

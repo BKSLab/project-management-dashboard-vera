@@ -103,62 +103,6 @@ async def test_create_token_returns_secret_once(
     assert session_user.issued["scope"] == "WRITE"
 
 
-async def test_create_token_rejects_empty_name(
-    api_client: AsyncClient,
-    session_user: FakeTokensService,
-) -> None:
-    """Имя из пробелов не проходит валидацию."""
-    response = await api_client.post(TOKENS_URL, json={"name": "   ", "scope": "READ"})
-
-    assert response.status_code == 422
-
-
-async def test_create_token_rejects_unknown_scope(
-    api_client: AsyncClient,
-    session_user: FakeTokensService,
-) -> None:
-    """Произвольные права не принимаются."""
-    response = await api_client.post(TOKENS_URL, json={"name": "Ноутбук", "scope": "ADMIN"})
-
-    assert response.status_code == 422
-
-
-async def test_create_token_maps_limit_error(
-    api_client: AsyncClient,
-    session_user: FakeTokensService,
-) -> None:
-    """Превышение лимита отдаётся как конфликт, а не как ошибка сервера."""
-    session_user.error = ApiTokenLimitExceededError(10)
-
-    response = await api_client.post(TOKENS_URL, json={"name": "Лишний", "scope": "READ"})
-
-    assert response.status_code == 409
-
-
-async def test_revoke_token(
-    api_client: AsyncClient,
-    session_user: FakeTokensService,
-    current_principal: Principal,
-) -> None:
-    """Отзыв выполняется от имени владельца."""
-    response = await api_client.delete(f"{TOKENS_URL}/5")
-
-    assert response.status_code == 204
-    assert session_user.revoked == (5, current_principal.user_id)
-
-
-async def test_revoke_unknown_token_returns_404(
-    api_client: AsyncClient,
-    session_user: FakeTokensService,
-) -> None:
-    """Чужой или несуществующий токен даёт 404."""
-    session_user.error = ApiTokenNotFoundError(99)
-
-    response = await api_client.delete(f"{TOKENS_URL}/99")
-
-    assert response.status_code == 404
-
-
 @pytest.mark.parametrize(
     ("method", "url"),
     [
@@ -206,3 +150,36 @@ def test_api_token_model_never_serialises_hash() -> None:
 
     assert "token_hash" not in dumped
     assert "секрет" not in str(dumped)
+
+
+async def test_create_token_validates_name_scope_and_limit(api_client: AsyncClient, session_user: FakeTokensService) -> None:
+    """Пустое имя, неизвестный скоуп и исчерпанный лимит отклоняются своими кодами."""
+    # Имя из пробелов не проходит валидацию.
+    response = await api_client.post(TOKENS_URL, json={"name": "   ", "scope": "READ"})
+
+    assert response.status_code == 422
+    # Произвольные права не принимаются.
+    response = await api_client.post(TOKENS_URL, json={"name": "Ноутбук", "scope": "ADMIN"})
+
+    assert response.status_code == 422
+    # Превышение лимита отдаётся как конфликт, а не как ошибка сервера.
+    session_user.error = ApiTokenLimitExceededError(10)
+
+    response = await api_client.post(TOKENS_URL, json={"name": "Лишний", "scope": "READ"})
+
+    assert response.status_code == 409
+
+
+async def test_revoke_token_and_unknown_token_answers(api_client: AsyncClient, session_user: FakeTokensService, current_principal: Principal) -> None:
+    """Отзыв проходит, неизвестный токен отвечает 404."""
+    # Отзыв выполняется от имени владельца.
+    response = await api_client.delete(f"{TOKENS_URL}/5")
+
+    assert response.status_code == 204
+    assert session_user.revoked == (5, current_principal.user_id)
+    # Чужой или несуществующий токен даёт 404.
+    session_user.error = ApiTokenNotFoundError(99)
+
+    response = await api_client.delete(f"{TOKENS_URL}/99")
+
+    assert response.status_code == 404

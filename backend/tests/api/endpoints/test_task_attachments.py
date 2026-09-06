@@ -32,7 +32,9 @@ def attachment_schema() -> TaskAttachmentSchema:
 
 
 @pytest.mark.asyncio
-async def test_upload_task_attachment_accepts_multipart(api_client: AsyncClient) -> None:
+async def test_attachment_endpoints_handle_upload_stream_and_errors(api_client: AsyncClient, tmp_path: Path) -> None:
+    """Загрузка multipart, слишком большой файл — 413, стрим картинки inline, пропавший файл — 404."""
+
     service = AsyncMock(spec=TaskAttachmentsService)
     service.max_file_size = 10 * 1024 * 1024
     service.upload_attachment.return_value = attachment_schema()
@@ -52,9 +54,6 @@ async def test_upload_task_attachment_accepts_multipart(api_client: AsyncClient)
         content=b"pdf",
     )
 
-
-@pytest.mark.asyncio
-async def test_upload_task_attachment_maps_too_large_to_413(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=TaskAttachmentsService)
     service.max_file_size = 10 * 1024 * 1024
     service.upload_attachment.side_effect = TaskAttachmentTooLargeError(max_size_mb=10)
@@ -67,12 +66,6 @@ async def test_upload_task_attachment_maps_too_large_to_413(api_client: AsyncCli
 
     assert response.status_code == 413
 
-
-@pytest.mark.asyncio
-async def test_get_task_attachment_content_streams_inline_image(
-    api_client: AsyncClient,
-    tmp_path: Path,
-) -> None:
     image_path = tmp_path / "photo.png"
     image_path.write_bytes(b"image")
     # Подготовка выдачи живёт в отдельном сервисе: у маршрута нет сессии.
@@ -93,11 +86,6 @@ async def test_get_task_attachment_content_streams_inline_image(
     assert response.headers["content-disposition"].startswith("inline")
     assert response.headers["x-content-type-options"] == "nosniff"
 
-
-@pytest.mark.asyncio
-async def test_delete_task_attachment_maps_missing_file_to_404(
-    api_client: AsyncClient,
-) -> None:
     service = AsyncMock(spec=TaskAttachmentsService)
     service.delete_attachment.side_effect = TaskAttachmentNotFoundError(attachment_id=999)
     app.dependency_overrides[get_task_attachments_service] = lambda: service

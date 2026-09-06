@@ -18,7 +18,9 @@ NOW = datetime(2026, 9, 2, 10, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
-async def test_preview_endpoint_passes_date_only_values(api_client: AsyncClient) -> None:
+async def test_scenario_endpoints_pass_dates_and_map_conflicts(api_client: AsyncClient) -> None:
+    """Предпросмотр передаёт даты без времени и отклоняет дубли, применение возвращает результат и отдаёт 409 на устаревшей версии."""
+
     service = AsyncMock(spec=CalendarScenarioService)
     service.preview.return_value = ScenarioPreviewResponseSchema(
         changes=[],
@@ -45,32 +47,18 @@ async def test_preview_endpoint_passes_date_only_values(api_client: AsyncClient)
     change = service.preview.await_args.args[1][0]
     assert change["start_date"] == TODAY
 
-
-@pytest.mark.asyncio
-async def test_apply_endpoint_maps_version_conflict_to_409(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=CalendarScenarioService)
-    service.apply.side_effect = CalendarScenarioVersionConflictError()
     app.dependency_overrides[get_calendar_scenario_service] = lambda: service
+    change = {"task_id": 1, "start_date": "2026-09-02", "due_date": "2026-09-08"}
 
     response = await api_client.post(
-        "/api/v1/projects/1/calendar/scenarios/apply",
-        json={
-            "changes": [
-                {
-                    "task_id": 1,
-                    "start_date": "2026-09-02",
-                    "due_date": "2026-09-08",
-                    "expected_updated_at": NOW.isoformat(),
-                }
-            ]
-        },
+        "/api/v1/projects/1/calendar/scenarios/preview",
+        json={"changes": [change, change]},
     )
 
-    assert response.status_code == 409
+    assert response.status_code == 422
+    service.preview.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_apply_endpoint_returns_transaction_result(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=CalendarScenarioService)
     service.apply.return_value = ScenarioApplyResponseSchema(applied_count=2, task_ids=[1, 2])
     app.dependency_overrides[get_calendar_scenario_service] = lambda: service
@@ -92,19 +80,22 @@ async def test_apply_endpoint_returns_transaction_result(api_client: AsyncClient
     assert response.status_code == 200
     assert response.json() == {"applied_count": 2, "task_ids": [1, 2]}
 
-
-@pytest.mark.asyncio
-async def test_preview_rejects_duplicate_tasks_at_contract_boundary(
-    api_client: AsyncClient,
-) -> None:
     service = AsyncMock(spec=CalendarScenarioService)
+    service.apply.side_effect = CalendarScenarioVersionConflictError()
     app.dependency_overrides[get_calendar_scenario_service] = lambda: service
-    change = {"task_id": 1, "start_date": "2026-09-02", "due_date": "2026-09-08"}
 
     response = await api_client.post(
-        "/api/v1/projects/1/calendar/scenarios/preview",
-        json={"changes": [change, change]},
+        "/api/v1/projects/1/calendar/scenarios/apply",
+        json={
+            "changes": [
+                {
+                    "task_id": 1,
+                    "start_date": "2026-09-02",
+                    "due_date": "2026-09-08",
+                    "expected_updated_at": NOW.isoformat(),
+                }
+            ]
+        },
     )
 
-    assert response.status_code == 422
-    service.preview.assert_not_awaited()
+    assert response.status_code == 409

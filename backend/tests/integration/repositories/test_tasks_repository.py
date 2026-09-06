@@ -55,49 +55,6 @@ async def test_get_next_number_follows_existing_tasks(
 
 
 @pytest.mark.asyncio
-async def test_search_finds_task_by_number_and_text(
-    db_session: AsyncSession,
-    stage: ProjectStage,
-) -> None:
-    repository = TasksRepository(db_session)
-    task = await repository.save(
-        data=task_data(
-            stage,
-            142,
-            title="Пользовательская фильтрация",
-            description_md="Фильтры по статусу.",
-        )
-    )
-
-    by_key = await repository.search_ids(project_id=stage.project_id, search="PROJ-142")
-    by_number = await repository.search_ids(project_id=stage.project_id, search="142")
-    by_prefix = await repository.search_ids(project_id=stage.project_id, search="пользова")
-
-    assert by_key == {task.id}
-    assert by_number == {task.id}
-    assert by_prefix == {task.id}
-
-
-@pytest.mark.asyncio
-async def test_ranked_search_returns_at_most_top_30(
-    db_session: AsyncSession,
-    stage: ProjectStage,
-) -> None:
-    repository = TasksRepository(db_session)
-    for number in range(1, 36):
-        await repository.save(data=task_data(stage, number, title=f"Поисковая задача {number}"))
-
-    tasks = await repository.search_ranked(
-        project_id=stage.project_id,
-        search="поисковая",
-        limit=30,
-    )
-
-    assert len(tasks) == 30
-    assert all("Поисковая" in task.title for task in tasks)
-
-
-@pytest.mark.asyncio
 async def test_project_statistics_are_aggregated_without_loading_tasks(
     db_session: AsyncSession,
     stage: ProjectStage,
@@ -378,3 +335,39 @@ async def test_clear_wbs_node_releases_tasks_without_deleting(
     assert released == 1
     assert [item.id for item in tasks] == [task.id]
     assert tasks[0].wbs_node_id is None
+
+
+@pytest.mark.asyncio
+async def test_search_finds_tasks_by_number_and_text_within_limit(db_session: AsyncSession, stage: ProjectStage) -> None:
+    """Поиск находит задачу по номеру и тексту и отдаёт не больше тридцати результатов."""
+
+    repository = TasksRepository(db_session)
+    task = await repository.save(
+        data=task_data(
+            stage,
+            142,
+            title="Пользовательская фильтрация",
+            description_md="Фильтры по статусу.",
+        )
+    )
+
+    by_key = await repository.search_ids(project_id=stage.project_id, search="PROJ-142")
+    by_number = await repository.search_ids(project_id=stage.project_id, search="142")
+    by_prefix = await repository.search_ids(project_id=stage.project_id, search="пользова")
+
+    assert by_key == {task.id}
+    assert by_number == {task.id}
+    assert by_prefix == {task.id}
+
+    repository = TasksRepository(db_session)
+    for number in range(1, 36):
+        await repository.save(data=task_data(stage, number, title=f"Поисковая задача {number}"))
+
+    tasks = await repository.search_ranked(
+        project_id=stage.project_id,
+        search="поисковая",
+        limit=30,
+    )
+
+    assert len(tasks) == 30
+    assert all("Поисковая" in task.title for task in tasks)

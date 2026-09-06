@@ -40,24 +40,6 @@ def create_service() -> tuple[
 
 
 @pytest.mark.asyncio
-async def test_upload_attachment_when_task_missing_raises_not_found() -> None:
-    service, attachments_repository, tasks_repository, storage = create_service()
-    tasks_repository.get_by_id.return_value = None
-
-    with pytest.raises(TaskNotFoundError) as exc_info:
-        await service.upload_attachment(
-            task_id=999,
-            file_name="report.pdf",
-            content_type="application/pdf",
-            content=b"pdf",
-        )
-
-    assert exc_info.value.status_code == 404
-    attachments_repository.save.assert_not_awaited()
-    storage.save.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_upload_attachment_saves_safe_name_and_metadata() -> None:
     service, attachments_repository, tasks_repository, storage = create_service()
     tasks_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
@@ -88,43 +70,6 @@ async def test_upload_attachment_saves_safe_name_and_metadata() -> None:
 
 
 @pytest.mark.asyncio
-async def test_upload_attachment_rejects_oversized_content() -> None:
-    service, attachments_repository, tasks_repository, storage = create_service()
-    service.MAX_FILE_SIZE = 3
-    tasks_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
-    attachments_repository.get_count_for_task.return_value = 0
-
-    with pytest.raises(TaskAttachmentTooLargeError) as exc_info:
-        await service.upload_attachment(
-            task_id=1,
-            file_name="large.pdf",
-            content_type="application/pdf",
-            content=b"1234",
-        )
-
-    assert exc_info.value.status_code == 413
-    storage.save.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_upload_attachment_rejects_unsupported_extension() -> None:
-    service, attachments_repository, tasks_repository, storage = create_service()
-    tasks_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
-    attachments_repository.get_count_for_task.return_value = 0
-
-    with pytest.raises(TaskAttachmentUnsupportedTypeError) as exc_info:
-        await service.upload_attachment(
-            task_id=1,
-            file_name="script.exe",
-            content_type="application/octet-stream",
-            content=b"binary",
-        )
-
-    assert exc_info.value.status_code == 415
-    storage.save.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_upload_attachment_deletes_file_when_metadata_save_fails() -> None:
     service, attachments_repository, tasks_repository, storage = create_service()
     tasks_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
@@ -141,3 +86,54 @@ async def test_upload_attachment_deletes_file_when_metadata_save_fails() -> None
         )
 
     storage.delete.assert_awaited_once_with("tasks/1/abc.pdf")
+
+
+@pytest.mark.asyncio
+async def test_upload_rejects_unusable_files_and_missing_task() -> None:
+    """Отсутствующая задача, слишком большой файл и неподдерживаемое расширение отклоняются."""
+
+    service, attachments_repository, tasks_repository, storage = create_service()
+    tasks_repository.get_by_id.return_value = None
+
+    with pytest.raises(TaskNotFoundError) as exc_info:
+        await service.upload_attachment(
+            task_id=999,
+            file_name="report.pdf",
+            content_type="application/pdf",
+            content=b"pdf",
+        )
+
+    assert exc_info.value.status_code == 404
+    attachments_repository.save.assert_not_awaited()
+    storage.save.assert_not_awaited()
+
+    service, attachments_repository, tasks_repository, storage = create_service()
+    service.MAX_FILE_SIZE = 3
+    tasks_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
+    attachments_repository.get_count_for_task.return_value = 0
+
+    with pytest.raises(TaskAttachmentTooLargeError) as exc_info:
+        await service.upload_attachment(
+            task_id=1,
+            file_name="large.pdf",
+            content_type="application/pdf",
+            content=b"1234",
+        )
+
+    assert exc_info.value.status_code == 413
+    storage.save.assert_not_awaited()
+
+    service, attachments_repository, tasks_repository, storage = create_service()
+    tasks_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
+    attachments_repository.get_count_for_task.return_value = 0
+
+    with pytest.raises(TaskAttachmentUnsupportedTypeError) as exc_info:
+        await service.upload_attachment(
+            task_id=1,
+            file_name="script.exe",
+            content_type="application/octet-stream",
+            content=b"binary",
+        )
+
+    assert exc_info.value.status_code == 415
+    storage.save.assert_not_awaited()

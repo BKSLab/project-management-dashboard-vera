@@ -51,15 +51,13 @@ def build_request(state: dict) -> Request:
     )
 
 
-def test_runtime_comes_from_application_state(runtime: SimpleNamespace) -> None:
-    """Контейнер берётся из состояния приложения, а не создаётся заново."""
+def test_runtime_is_taken_from_application_state(runtime: SimpleNamespace) -> None:
+    """Runtime приходит из состояния приложения, его отсутствие — явная ошибка."""
+    # Контейнер берётся из состояния приложения, а не создаётся заново.
     request = build_request({RUNTIME_STATE_KEY: runtime})
 
     assert get_knowledge_runtime(request) is runtime
-
-
-def test_missing_runtime_is_an_explicit_error() -> None:
-    """Запуск без lifespan — ошибка сборки, а не новый клиент на запрос."""
+    # Запуск без lifespan — ошибка сборки, а не новый клиент на запрос.
     request = build_request({})
 
     with pytest.raises(RuntimeError) as error:
@@ -68,26 +66,11 @@ def test_missing_runtime_is_an_explicit_error() -> None:
     assert str(error.value) == RUNTIME_MISSING
 
 
-@pytest.mark.parametrize(
-    ("factory", "attribute"),
-    [
-        (get_http_client, "http_client"),
-        (get_llm_client, "llm_client"),
-        (get_embedding_client, "embedding_client"),
-        (get_qdrant_client, "qdrant_client"),
-        (get_vision_capability, "vision"),
-    ],
-)
-def test_factory_returns_the_lifespan_owned_client(
-    runtime: SimpleNamespace,
-    factory,
-    attribute: str,
-) -> None:
-    """Каждая фабрика отдаёт ровно тот объект, которым владеет lifespan."""
+@pytest.mark.parametrize(('factory', 'attribute'), [(get_http_client, 'http_client'), (get_llm_client, 'llm_client'), (get_embedding_client, 'embedding_client'), (get_qdrant_client, 'qdrant_client'), (get_vision_capability, 'vision')])
+def test_factories_return_the_same_lifespan_owned_client(runtime: SimpleNamespace, factory, attribute: str) -> None:
+    """Фабрика отдаёт клиента, созданного lifespan-ом, и не создаёт нового при повторном вызове."""
+    # Каждая фабрика отдаёт ровно тот объект, которым владеет lifespan.
     assert factory(runtime) is getattr(runtime, attribute)
-
-
-def test_repeated_calls_return_the_same_object(runtime: SimpleNamespace) -> None:
-    """Повторный запрос не создаёт второй клиент."""
+    # Повторный запрос не создаёт второй клиент.
     assert get_llm_client(runtime) is get_llm_client(runtime)
     assert get_qdrant_client(runtime) is get_qdrant_client(runtime)

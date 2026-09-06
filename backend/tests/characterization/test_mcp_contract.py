@@ -133,17 +133,15 @@ def _task() -> TaskSummaryDto:
     )
 
 
-def test_project_summary_keys_are_frozen() -> None:
-    """Карточка проекта в списке сохраняет свои ключи."""
+def test_presenter_keys_are_frozen() -> None:
+    """Набор полей каждого представления MCP зафиксирован: проект, его карточка, задача, её карточка и комментарий."""
+    # Карточка проекта в списке сохраняет свои ключи.
     result = project_summary(_project())
 
     assert set(result) == {"project_key", "name", "status", "start_date", "due_date"}
     assert result["project_key"] == "CHAR"
     assert result["start_date"] == "2026-09-01"
-
-
-def test_project_detail_keys_are_frozen() -> None:
-    """Подробная карточка проекта сохраняет свои ключи и форму стадий."""
+    # Подробная карточка проекта сохраняет свои ключи и форму стадий.
     result = project_detail(
         ProjectOverviewDto(
             summary=_project(),
@@ -164,10 +162,7 @@ def test_project_detail_keys_are_frozen() -> None:
         "stages",
     }
     assert result["stages"] == [{"name": "В работе", "is_done_stage": False, "task_count": 3}]
-
-
-def test_task_summary_keys_are_frozen() -> None:
-    """Карточка задачи в списке сохраняет свои ключи и формат ключа задачи."""
+    # Карточка задачи в списке сохраняет свои ключи и формат ключа задачи.
     result = task_summary(_task())
 
     assert set(result) == {
@@ -181,10 +176,7 @@ def test_task_summary_keys_are_frozen() -> None:
     }
     assert result["task_key"] == "CHAR-142"
     assert result["is_done"] is False
-
-
-def test_task_detail_keys_are_frozen() -> None:
-    """Подробная карточка задачи сохраняет свои ключи."""
+    # Подробная карточка задачи сохраняет свои ключи.
     result = task_detail(
         TaskDetailsDto(
             summary=_task(),
@@ -208,10 +200,7 @@ def test_task_detail_keys_are_frozen() -> None:
         "description",
         "comment_count",
     }
-
-
-def test_comment_item_keys_are_frozen() -> None:
-    """Комментарий сохраняет свои ключи и ISO-формат времени."""
+    # Комментарий сохраняет свои ключи и ISO-формат времени.
     comment = CommentDto(
         task_key="CHAR-142",
         author="Борис",
@@ -225,17 +214,15 @@ def test_comment_item_keys_are_frozen() -> None:
     assert result["created_at"] == "2026-09-01T10:00:00+00:00"
 
 
-def test_long_text_is_truncated_with_visible_note() -> None:
-    """Обрезка длинного текста остаётся явной: модель не примет её за конец."""
+def test_long_text_is_truncated_with_a_visible_note() -> None:
+    """Длинный текст обрезается с пометкой, короткий остаётся как есть."""
+    # Обрезка длинного текста остаётся явной: модель не примет её за конец.
     result = shorten("а" * (TEXT_LIMIT + 100))
 
     assert result is not None
     assert result.endswith(TRUNCATION_NOTE)
     assert len(result) == TEXT_LIMIT + len(TRUNCATION_NOTE)
-
-
-def test_short_text_is_returned_unchanged() -> None:
-    """Короткий текст не трогается, пустой отдаётся как ``None``."""
+    # Короткий текст не трогается, пустой отдаётся как ``None``.
     assert shorten("коротко") == "коротко"
     assert shorten("") is None
     assert shorten(None) is None

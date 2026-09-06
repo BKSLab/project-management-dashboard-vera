@@ -216,60 +216,6 @@ def build_service(
 
 
 @pytest.mark.asyncio
-async def test_generate_saves_report_with_resolved_task_links() -> None:
-    stages = [stage(1, "В работе", False), stage(2, "Готово", True)]
-    tasks = [task(11, stage_id=1, due_date=TODAY - timedelta(days=5))]
-    service, reports_repository, _db = build_service(
-        stages=stages,
-        tasks=tasks,
-        llm_response=draft(["PROJ-11"]),
-    )
-
-    await service.generate(**actor(), project_id=PROJECT_ID)
-
-    payload = reports_repository.save.call_args.kwargs["data"]["payload"]
-    assert payload["findings"][0]["tasks"] == [
-        {
-            "id": 11,
-            "key": "PROJ-11",
-            "title": "Задача 11",
-            "project_key": "PROJ",
-            "due_date": (TODAY - timedelta(days=5)).isoformat(),
-            "is_overdue": True,
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_generate_keeps_only_references_that_exist_in_the_scope() -> None:
-    """Ссылки модели на несуществующие задачу и проект отбрасываются.
-
-    Модель свободна назвать любой ключ, а отчёт обязан ссылаться только
-    на то, что действительно попало в срез: иначе в интерфейсе появится
-    ссылка в никуда.
-    """
-    stages = [stage(1, "В работе", False)]
-    tasks = [task(11, stage_id=1)]
-    service, reports_repository, _db = build_service(
-        stages=stages,
-        tasks=tasks,
-        llm_response=draft(["PROJ-999", "OTHER-1"]),
-    )
-
-    await service.generate(**actor(), project_id=PROJECT_ID)
-
-    payload = reports_repository.save.call_args.kwargs["data"]["payload"]
-    assert payload["findings"][0]["tasks"] == []
-
-    service, reports_repository, _db = build_service(stages=stages, tasks=[task(11, stage_id=1)])
-
-    await service.generate(**actor(), project_id=PROJECT_ID)
-
-    payload = reports_repository.save.call_args.kwargs["data"]["payload"]
-    assert payload["recommendations"][0]["project_key"] is None
-
-
-@pytest.mark.asyncio
 async def test_generate_counts_signals_from_database_not_from_model() -> None:
     stages = [stage(1, "В работе", False), stage(2, "Готово", True)]
     tasks = [
@@ -382,8 +328,61 @@ async def test_get_latest_checks_access_and_picks_the_right_report() -> None:
     reports_repository.get_latest_portfolio.assert_awaited_once_with(user_id=USER_ID)
 
 
+def _stored(report: AnalyticsReport, data: dict) -> AnalyticsReport:
+    """Возвращает запись так, как её вернул бы репозиторий после сохранения."""
+    report.payload = data["payload"]
+    report.context_summary = data["context_summary"]
+    report.llm_model = data["llm_model"]
+    report.duration_ms = data["duration_ms"]
+    return report
+
+
 @pytest.mark.asyncio
-async def test_generate_returns_saved_report_as_schema() -> None:
+async def test_report_payload_keeps_only_verifiable_references() -> None:
+    """Ссылки на задачи разрешаются, несуществующие отбрасываются, отчёт возвращается схемой."""
+
+    stages = [stage(1, "В работе", False), stage(2, "Готово", True)]
+    tasks = [task(11, stage_id=1, due_date=TODAY - timedelta(days=5))]
+    service, reports_repository, _db = build_service(
+        stages=stages,
+        tasks=tasks,
+        llm_response=draft(["PROJ-11"]),
+    )
+
+    await service.generate(**actor(), project_id=PROJECT_ID)
+
+    payload = reports_repository.save.call_args.kwargs["data"]["payload"]
+    assert payload["findings"][0]["tasks"] == [
+        {
+            "id": 11,
+            "key": "PROJ-11",
+            "title": "Задача 11",
+            "project_key": "PROJ",
+            "due_date": (TODAY - timedelta(days=5)).isoformat(),
+            "is_overdue": True,
+        }
+    ]
+    # Ссылки модели на несуществующие задачу и проект отбрасываются. Модель свободна назвать любой ключ, а отчёт обязан ссылаться только на то, что действительно попало в срез: иначе в интерфейсе появится ссылка в никуда.
+    stages = [stage(1, "В работе", False)]
+    tasks = [task(11, stage_id=1)]
+    service, reports_repository, _db = build_service(
+        stages=stages,
+        tasks=tasks,
+        llm_response=draft(["PROJ-999", "OTHER-1"]),
+    )
+
+    await service.generate(**actor(), project_id=PROJECT_ID)
+
+    payload = reports_repository.save.call_args.kwargs["data"]["payload"]
+    assert payload["findings"][0]["tasks"] == []
+
+    service, reports_repository, _db = build_service(stages=stages, tasks=[task(11, stage_id=1)])
+
+    await service.generate(**actor(), project_id=PROJECT_ID)
+
+    payload = reports_repository.save.call_args.kwargs["data"]["payload"]
+    assert payload["recommendations"][0]["project_key"] is None
+
     stages = [stage(1, "В работе", False)]
     saved = AnalyticsReport(
         id=42,
@@ -409,12 +408,3 @@ async def test_generate_returns_saved_report_as_schema() -> None:
     assert result.project_key == "PROJ"
     assert result.health is AnalyticsHealth.RISK
     assert result.findings[0].kind is AnalyticsFindingKind.OVERDUE
-
-
-def _stored(report: AnalyticsReport, data: dict) -> AnalyticsReport:
-    """Возвращает запись так, как её вернул бы репозиторий после сохранения."""
-    report.payload = data["payload"]
-    report.context_summary = data["context_summary"]
-    report.llm_model = data["llm_model"]
-    report.duration_ms = data["duration_ms"]
-    return report

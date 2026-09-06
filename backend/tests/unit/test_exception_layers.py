@@ -61,35 +61,6 @@ def test_storage_error_is_not_a_service_error(error_type: type) -> None:
     assert not issubclass(error_type, ClientError)
 
 
-def test_client_and_storage_layers_do_not_overlap() -> None:
-    """Слои клиентов и хранилищ независимы."""
-    assert not issubclass(ClientError, StorageError)
-    assert not issubclass(StorageError, ClientError)
-
-
-def test_every_service_error_belongs_to_the_service_layer() -> None:
-    """Все модули исключений следуют одному правилу именования слоёв.
-
-    Класс с суффиксом `ServiceError` обязан быть в сервисном слое: иначе
-    `except ServiceError` в транспорте перестанет означать то, что читается.
-    """
-    misplaced: list[str] = []
-    for module_info in pkgutil.iter_modules(exceptions_package.__path__):
-        module = __import__(
-            f"src.exceptions.{module_info.name}",
-            fromlist=["*"],
-        )
-        for name, value in inspect.getmembers(module, inspect.isclass):
-            if not issubclass(value, ApplicationError) or value.__module__ != module.__name__:
-                continue
-            if name.endswith("ServiceError") and not issubclass(value, ServiceError):
-                misplaced.append(f"{module.__name__}.{name}")
-            if name.endswith("RepositoryError") and not issubclass(value, RepositoryError):
-                misplaced.append(f"{module.__name__}.{name}")
-
-    assert not misplaced, f"Класс не соответствует своему слою: {misplaced}"
-
-
 def test_client_error_chain_keeps_the_original_cause() -> None:
     """Преобразование сохраняет исходную причину через `raise ... from`."""
     original = ValueError("некорректный ответ")
@@ -114,8 +85,28 @@ def test_step_failure_reports_the_cause_status_and_detail() -> None:
     assert wrapped.detail == cause.detail
 
 
-def test_access_error_hierarchy_is_a_service_hierarchy() -> None:
-    """Ошибки доступа принадлежат сервисному слою."""
+def test_layer_hierarchies_do_not_overlap() -> None:
+    """Слои клиентов и хранилищ не пересекаются между собой и с сервисным; иерархия ошибок доступа принадлежит сервисному слою."""
+    # Слои клиентов и хранилищ независимы.
+    assert not issubclass(ClientError, StorageError)
+    assert not issubclass(StorageError, ClientError)
+    # Все модули исключений следуют одному правилу именования слоёв. Класс с суффиксом `ServiceError` обязан быть в сервисном слое: иначе `except ServiceError` в транспорте перестанет означать то, что читается.
+    misplaced: list[str] = []
+    for module_info in pkgutil.iter_modules(exceptions_package.__path__):
+        module = __import__(
+            f"src.exceptions.{module_info.name}",
+            fromlist=["*"],
+        )
+        for name, value in inspect.getmembers(module, inspect.isclass):
+            if not issubclass(value, ApplicationError) or value.__module__ != module.__name__:
+                continue
+            if name.endswith("ServiceError") and not issubclass(value, ServiceError):
+                misplaced.append(f"{module.__name__}.{name}")
+            if name.endswith("RepositoryError") and not issubclass(value, RepositoryError):
+                misplaced.append(f"{module.__name__}.{name}")
+
+    assert not misplaced, f"Класс не соответствует своему слою: {misplaced}"
+    # Ошибки доступа принадлежат сервисному слою.
     assert issubclass(AccessServiceError, ServiceError)
     assert issubclass(ResourceNotAvailableError, AccessServiceError)
     assert ResourceNotAvailableError(resource="Проект", resource_id=1).status_code == 404

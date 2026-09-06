@@ -158,36 +158,37 @@ def bearer_graph(anonymous: None) -> Callable[[ApiToken | None, User | None], No
     return install
 
 
-@pytest.mark.parametrize(
-    "case",
-    ["unknown", "expired", "revoked"],
-    ids=["выдуманный", "истёкший", "отозванный"],
-)
 async def test_unusable_tokens_are_indistinguishable(
     raw_client: AsyncClient,
     bearer_graph: Callable[..., None],
-    case: str,
 ) -> None:
     """Выдуманный, истёкший и отозванный токен дают один и тот же ответ.
 
-    Иначе перебором выяснялось бы, какой именно токен когда-то существовал.
+    Иначе перебором выяснялось бы, какой именно токен когда-то
+    существовал. Все три случая проверяются вместе: расхождение любого из
+    них — это и есть утечка.
     """
     secret = "tt_characterization"
     past = datetime.now(UTC) - timedelta(days=1)
     stored = {
-        "unknown": _token("tt_other"),
-        "expired": _token(secret, expires_at=past),
-        "revoked": _token(secret, revoked_at=past),
-    }[case]
-    bearer_graph(stored)
+        "выдуманный": _token("tt_other"),
+        "истёкший": _token(secret, expires_at=past),
+        "отозванный": _token(secret, revoked_at=past),
+    }
 
-    response = await raw_client.get(
-        "/api/v1/projects",
-        headers={"Authorization": f"Bearer {secret}"},
-    )
+    answers: dict[str, tuple[int, dict]] = {}
+    for case, token in stored.items():
+        bearer_graph(token)
+        response = await raw_client.get(
+            "/api/v1/projects",
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+        answers[case] = (response.status_code, response.json())
 
-    assert response.status_code == 401
-    assert response.json() == {"detail": "Требуется вход в систему."}
+    expected = (401, {"detail": "Требуется вход в систему."})
+    unexpected = {case: answer for case, answer in answers.items() if answer != expected}
+
+    assert not unexpected, f"Непригодные токены отвечают по-разному: {unexpected}"
 
 
 async def test_missing_authorization_matches_unusable_token(
@@ -278,25 +279,29 @@ def foreign_objects(anonymous: None) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        f"/api/v1/projects/{OTHER_PROJECT_ID}",
-        "/api/v1/tasks/7",
-        "/api/v1/documents/7",
-    ],
+FOREIGN_PATHS = (
+    f"/api/v1/projects/{OTHER_PROJECT_ID}",
+    "/api/v1/tasks/7",
+    "/api/v1/documents/7",
 )
+
+
 async def test_foreign_object_is_not_found(
     raw_client: AsyncClient,
     foreign_objects: None,
-    path: str,
 ) -> None:
     """Существующий чужой объект отвечает 404, а не 403.
 
     Одинаковый ответ для чужого и несуществующего объекта — продуктовое
     правило: клиент не должен узнавать чужие идентификаторы перебором.
+    Правило проверяется сразу на всех типах объектов.
     """
-    response = await raw_client.get(path)
+    answers = {}
+    for path in FOREIGN_PATHS:
+        response = await raw_client.get(path)
+        answers[path] = (response.status_code, response.json())
 
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Объект не найден."}
+    expected = (404, {"detail": "Объект не найден."})
+    unexpected = {path: answer for path, answer in answers.items() if answer != expected}
+
+    assert not unexpected, f"Чужой объект отличим от несуществующего: {unexpected}"

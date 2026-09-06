@@ -28,7 +28,9 @@ def milestone_schema() -> MilestoneSchema:
 
 
 @pytest.mark.asyncio
-async def test_create_milestone_endpoint_forwards_typed_payload(api_client: AsyncClient) -> None:
+async def test_milestones_endpoints_forward_payload_and_hide_foreign_objects(api_client: AsyncClient) -> None:
+    """Создание передаёт типизированные значения, список отдаёт контракт, чужая веха — 404, удаление отвечает 204."""
+
     service = AsyncMock(spec=MilestonesService)
     service.create_milestone.return_value = milestone_schema()
     app.dependency_overrides[get_milestones_service] = lambda: service
@@ -43,9 +45,6 @@ async def test_create_milestone_endpoint_forwards_typed_payload(api_client: Asyn
     payload = service.create_milestone.await_args.args[1]
     assert payload["due_date"] == date(2026, 9, 30)
 
-
-@pytest.mark.asyncio
-async def test_list_milestones_endpoint(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=MilestonesService)
     service.list_milestones.return_value = [milestone_schema()]
     app.dependency_overrides[get_milestones_service] = lambda: service
@@ -55,9 +54,6 @@ async def test_list_milestones_endpoint(api_client: AsyncClient) -> None:
     assert response.status_code == 200
     assert [item["id"] for item in response.json()] == [3]
 
-
-@pytest.mark.asyncio
-async def test_foreign_milestone_is_returned_as_not_found(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=MilestonesService)
     service.update_milestone.side_effect = MilestoneNotFoundError(44)
     app.dependency_overrides[get_milestones_service] = lambda: service
@@ -69,9 +65,6 @@ async def test_foreign_milestone_is_returned_as_not_found(api_client: AsyncClien
 
     assert response.status_code == 404
 
-
-@pytest.mark.asyncio
-async def test_delete_milestone_endpoint_returns_no_content(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=MilestonesService)
     app.dependency_overrides[get_milestones_service] = lambda: service
 

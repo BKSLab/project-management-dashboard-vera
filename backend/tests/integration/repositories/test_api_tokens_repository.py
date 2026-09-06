@@ -45,44 +45,6 @@ async def test_active_token_is_found_by_hash(db_session: AsyncSession, user: Use
 
 
 @pytest.mark.asyncio
-async def test_wrong_secret_is_not_found(db_session: AsyncSession, user: User) -> None:
-    repository = ApiTokensRepository(db_session)
-    await _create(repository, user)
-
-    assert await repository.get_active_by_hash(hash_token_secret("tt_чужой")) is None
-
-
-@pytest.mark.asyncio
-async def test_revoked_token_is_not_returned(db_session: AsyncSession, user: User) -> None:
-    repository = ApiTokensRepository(db_session)
-    secret, token_id = await _create(repository, user)
-
-    assert await repository.revoke(token_id=token_id, user_id=user.id) is True
-
-    assert await repository.get_active_by_hash(hash_token_secret(secret)) is None
-
-
-@pytest.mark.asyncio
-async def test_expired_token_is_not_returned(db_session: AsyncSession, user: User) -> None:
-    repository = ApiTokensRepository(db_session)
-    secret, _ = await _create(
-        repository,
-        user,
-        expires_at=datetime.now(UTC) - timedelta(minutes=1),
-    )
-
-    assert await repository.get_active_by_hash(hash_token_secret(secret)) is None
-
-
-@pytest.mark.asyncio
-async def test_endless_token_stays_active(db_session: AsyncSession, user: User) -> None:
-    repository = ApiTokensRepository(db_session)
-    secret, _ = await _create(repository, user, expires_at=None)
-
-    assert await repository.get_active_by_hash(hash_token_secret(secret)) is not None
-
-
-@pytest.mark.asyncio
 async def test_revoke_of_foreign_token_does_nothing(db_session: AsyncSession, user: User) -> None:
     """Чужой владелец не может отозвать токен: проверка в самом запросе."""
     repository = ApiTokensRepository(db_session)
@@ -138,3 +100,34 @@ async def test_touch_last_used_is_throttled(db_session: AsyncSession, user: User
 
     assert first_seen is not None
     assert token.last_used_at == first_seen
+
+
+@pytest.mark.asyncio
+async def test_unusable_tokens_are_never_returned(db_session: AsyncSession, user: User) -> None:
+    """Неверный секрет, отозванный и истёкший токен не находятся; бессрочный остаётся действующим."""
+
+    repository = ApiTokensRepository(db_session)
+    await _create(repository, user)
+
+    assert await repository.get_active_by_hash(hash_token_secret("tt_чужой")) is None
+
+    repository = ApiTokensRepository(db_session)
+    secret, token_id = await _create(repository, user)
+
+    assert await repository.revoke(token_id=token_id, user_id=user.id) is True
+
+    assert await repository.get_active_by_hash(hash_token_secret(secret)) is None
+
+    repository = ApiTokensRepository(db_session)
+    secret, _ = await _create(
+        repository,
+        user,
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+
+    assert await repository.get_active_by_hash(hash_token_secret(secret)) is None
+
+    repository = ApiTokensRepository(db_session)
+    secret, _ = await _create(repository, user, expires_at=None)
+
+    assert await repository.get_active_by_hash(hash_token_secret(secret)) is not None

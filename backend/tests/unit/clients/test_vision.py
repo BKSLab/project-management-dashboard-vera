@@ -24,35 +24,6 @@ def build_response(content) -> httpx.Response:
     return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
 
-async def test_sends_image_as_data_url_and_returns_text() -> None:
-    captured: dict = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured.update(json.loads(request.content))
-        return build_response("  Схема узла  ")
-
-    text = await build_client(handler).extract_text(
-        image_data_url="data:image/png;base64,QUJD"
-    )
-
-    assert text == "Схема узла"
-    assert captured["model"] == "vision-model"
-    image_part = captured["messages"][0]["content"][1]
-    assert image_part["image_url"]["url"] == "data:image/png;base64,QUJD"
-
-
-async def test_joins_multipart_content() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return build_response([{"type": "text", "text": "Первая. "}, {"text": "Вторая."}])
-
-    assert (
-        await build_client(handler).extract_text(
-            image_data_url="data:image/webp;base64,QUJD"
-        )
-        == "Первая. Вторая."
-    )
-
-
 async def test_vision_retries_transient_failures_only() -> None:
     """Временный сбой повторяется, исчерпание попыток даёт ошибку провайдера, ошибка клиента не повторяется."""
 
@@ -94,8 +65,26 @@ async def test_vision_retries_transient_failures_only() -> None:
     assert attempts["count"] == 1
 
 
-async def test_rate_limit_is_retried() -> None:
-    """429 повторяется: сервер сам просит подождать."""
+async def test_worst_case_accounts_for_every_attempt() -> None:
+    """Бюджет вызова считается по формуле timeout × попытки плюс backoff."""
+    client = build_client(lambda request: build_response("ok"), retries=3)
+
+    # 5 × 3 = 15 секунд ожидания плюс backoff 1 + 2 секунды между попытками.
+    assert client.worst_case_seconds >= 18
+    assert client.worst_case_seconds < 19
+
+
+async def test_disabled_capability_reports_no_text() -> None:
+    """Выключенное распознавание — объект, а не отсутствие зависимости."""
+    capability = DisabledVisionCapability()
+
+    assert await capability.extract_image_text(filename="схема.png", content=b"ABC") is None
+    assert isinstance(capability, VisionCapability)
+
+
+async def test_vision_retries_every_transient_category() -> None:
+    """Ограничение частоты, timeout и неразбираемый ответ повторяются как отдельные категории."""
+    # 429 повторяется: сервер сам просит подождать.
     attempts = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -110,10 +99,7 @@ async def test_rate_limit_is_retried() -> None:
 
     assert text == "Готово"
     assert attempts["count"] == 2
-
-
-async def test_timeout_is_retried() -> None:
-    """Таймаут повторяется как транспортная ошибка."""
+    # Таймаут повторяется как транспортная ошибка.
     attempts = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -128,10 +114,7 @@ async def test_timeout_is_retried() -> None:
 
     assert text == "Готово"
     assert attempts["count"] == 2
-
-
-async def test_unparsable_content_is_retried_as_separate_category() -> None:
-    """Неразобранный ответ повторяется, но не считается сбоем транспорта."""
+    # Неразобранный ответ повторяется, но не считается сбоем транспорта.
     attempts = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -148,8 +131,34 @@ async def test_unparsable_content_is_retried_as_separate_category() -> None:
     assert attempts["count"] == 2
 
 
-async def test_extract_image_text_builds_data_url_itself() -> None:
-    """Кодирование изображения принадлежит клиенту, а не вызывающему коду."""
+async def test_vision_sends_images_as_data_urls() -> None:
+    """Изображение уходит data-URL, многочастный ответ склеивается, извлечение строит data-URL само."""
+
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return build_response("  Схема узла  ")
+
+    text = await build_client(handler).extract_text(
+        image_data_url="data:image/png;base64,QUJD"
+    )
+
+    assert text == "Схема узла"
+    assert captured["model"] == "vision-model"
+    image_part = captured["messages"][0]["content"][1]
+    assert image_part["image_url"]["url"] == "data:image/png;base64,QUJD"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return build_response([{"type": "text", "text": "Первая. "}, {"text": "Вторая."}])
+
+    assert (
+        await build_client(handler).extract_text(
+            image_data_url="data:image/webp;base64,QUJD"
+        )
+        == "Первая. Вторая."
+    )
+    # Кодирование изображения принадлежит клиенту, а не вызывающему коду.
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -164,20 +173,3 @@ async def test_extract_image_text_builds_data_url_itself() -> None:
     assert text == "Схема узла"
     image_part = captured["messages"][0]["content"][1]
     assert image_part["image_url"]["url"] == "data:image/png;base64,QUJD"
-
-
-async def test_worst_case_accounts_for_every_attempt() -> None:
-    """Бюджет вызова считается по формуле timeout × попытки плюс backoff."""
-    client = build_client(lambda request: build_response("ok"), retries=3)
-
-    # 5 × 3 = 15 секунд ожидания плюс backoff 1 + 2 секунды между попытками.
-    assert client.worst_case_seconds >= 18
-    assert client.worst_case_seconds < 19
-
-
-async def test_disabled_capability_reports_no_text() -> None:
-    """Выключенное распознавание — объект, а не отсутствие зависимости."""
-    capability = DisabledVisionCapability()
-
-    assert await capability.extract_image_text(filename="схема.png", content=b"ABC") is None
-    assert isinstance(capability, VisionCapability)

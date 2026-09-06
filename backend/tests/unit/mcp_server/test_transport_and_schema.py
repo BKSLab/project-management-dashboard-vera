@@ -30,49 +30,6 @@ WRITE_TOOLS = {
 }
 
 
-async def test_all_planned_tools_are_registered() -> None:
-    """Объявлен ровно тот набор инструментов, который описан в плане."""
-    tools = await mcp_server.list_tools()
-
-    assert {tool.name for tool in tools} == READ_TOOLS | WRITE_TOOLS
-
-
-async def test_delete_tool_requires_explicit_confirmation() -> None:
-    """У необратимого удаления есть отдельное поле подтверждения."""
-    tools = {tool.name: tool for tool in await mcp_server.list_tools()}
-    properties = tools["delete_task"].input_schema["properties"]
-
-    assert "confirm" in properties
-    assert properties["confirm"].get("default") is False
-
-
-async def test_write_tools_announce_required_scope() -> None:
-    """Описание изменяющего инструмента предупреждает о праве записи."""
-    tools = {tool.name: tool for tool in await mcp_server.list_tools()}
-
-    for name in WRITE_TOOLS:
-        assert "право" in tools[name].description or "записи" in tools[name].description
-
-
-async def test_every_tool_has_russian_description() -> None:
-    """Описание читает модель: без него она не выберет инструмент осмысленно."""
-    tools = await mcp_server.list_tools()
-
-    for tool in tools:
-        assert tool.description, f"У инструмента {tool.name} нет описания."
-        assert len(tool.description) > 40, f"Описание {tool.name} слишком короткое."
-
-
-async def test_tools_take_display_keys_not_numeric_ids() -> None:
-    """В контракте инструментов нет числовых идентификаторов сущностей."""
-    tools = await mcp_server.list_tools()
-
-    for tool in tools:
-        properties = set(tool.input_schema.get("properties", {}))
-        assert "project_id" not in properties, f"{tool.name} принимает числовой project_id."
-        assert "task_id" not in properties, f"{tool.name} принимает числовой task_id."
-
-
 @pytest.mark.parametrize(
     "name",
     [
@@ -94,8 +51,37 @@ async def test_list_tools_have_bounded_limit(name: str) -> None:
     assert "default" in limit
 
 
-async def test_project_tools_require_project_key() -> None:
-    """Инструменты уровня проекта обязательно требуют ключ проекта."""
+async def test_tool_schemas_follow_the_declared_conventions() -> None:
+    """Все запланированные инструменты зарегистрированы, удаление требует подтверждения, инструменты записи объявляют право, описания на русском, наружу выходят отображаемые ключи, проектные инструменты требуют ключ проекта."""
+    # Объявлен ровно тот набор инструментов, который описан в плане.
+    tools = await mcp_server.list_tools()
+
+    assert {tool.name for tool in tools} == READ_TOOLS | WRITE_TOOLS
+    # У необратимого удаления есть отдельное поле подтверждения.
+    tools = {tool.name: tool for tool in await mcp_server.list_tools()}
+    properties = tools["delete_task"].input_schema["properties"]
+
+    assert "confirm" in properties
+    assert properties["confirm"].get("default") is False
+    # Описание изменяющего инструмента предупреждает о праве записи.
+    tools = {tool.name: tool for tool in await mcp_server.list_tools()}
+
+    for name in WRITE_TOOLS:
+        assert "право" in tools[name].description or "записи" in tools[name].description
+    # Описание читает модель: без него она не выберет инструмент осмысленно.
+    tools = await mcp_server.list_tools()
+
+    for tool in tools:
+        assert tool.description, f"У инструмента {tool.name} нет описания."
+        assert len(tool.description) > 40, f"Описание {tool.name} слишком короткое."
+    # В контракте инструментов нет числовых идентификаторов сущностей.
+    tools = await mcp_server.list_tools()
+
+    for tool in tools:
+        properties = set(tool.input_schema.get("properties", {}))
+        assert "project_id" not in properties, f"{tool.name} принимает числовой project_id."
+        assert "task_id" not in properties, f"{tool.name} принимает числовой task_id."
+    # Инструменты уровня проекта обязательно требуют ключ проекта.
     tools = {tool.name: tool for tool in await mcp_server.list_tools()}
 
     for name in (
@@ -111,8 +97,9 @@ async def test_project_tools_require_project_key() -> None:
         assert "project_key" in tools[name].input_schema.get("required", []), name
 
 
-async def test_mcp_is_mounted_and_rejects_plain_get() -> None:
-    """Путь MCP смонтирован в приложении и отвечает своим транспортом."""
+async def test_mcp_transport_requires_a_token_and_its_own_protocol() -> None:
+    """Смонтированный MCP не отвечает на обычный GET и не пускает вызов без токена."""
+    # Путь MCP смонтирован в приложении и отвечает своим транспортом.
     mcp_path = get_settings().app.mcp_path
 
     async with AsyncClient(
@@ -124,10 +111,7 @@ async def test_mcp_is_mounted_and_rejects_plain_get() -> None:
     # Транспорт Streamable HTTP не обслуживает обычный GET без сессии,
     # но сам путь существует: 404 означал бы, что монтирование не сработало.
     assert response.status_code != 404
-
-
-async def test_mcp_rejects_call_without_token() -> None:
-    """Вызов без заголовка Authorization не проходит аутентификацию."""
+    # Вызов без заголовка Authorization не проходит аутентификацию.
     mcp_path = get_settings().app.mcp_path
 
     async with AsyncClient(

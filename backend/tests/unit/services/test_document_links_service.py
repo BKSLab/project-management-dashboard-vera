@@ -43,22 +43,6 @@ def build_service(
 
 
 @pytest.mark.asyncio
-async def test_create_link_rejects_objects_from_different_projects() -> None:
-    documents_repository = AsyncMock(spec=DocumentsRepository)
-    documents_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_id.return_value = SimpleNamespace(id=2, project_id=5)
-    links_repository = AsyncMock(spec=DocumentLinksRepository)
-    service = build_service(links_repository, documents_repository, tasks_repository)
-
-    with pytest.raises(DocumentLinkProjectMismatchError) as exc_info:
-        await service.create_link(document_id=1, task_id=2, user_id=USER_ID)
-
-    assert exc_info.value.status_code == 409
-    links_repository.create.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_create_link_rejects_missing_objects() -> None:
     """Связь не создаётся, если документа или задачи нет."""
 
@@ -85,22 +69,6 @@ async def test_create_link_rejects_missing_objects() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_link_when_duplicate_races_raises_conflict() -> None:
-    documents_repository = AsyncMock(spec=DocumentsRepository)
-    documents_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_id.return_value = SimpleNamespace(id=2, project_id=1)
-    links_repository = AsyncMock(spec=DocumentLinksRepository)
-    links_repository.create.side_effect = DocumentLinkAlreadyExistsRepositoryError(document_id=1)
-    service = build_service(links_repository, documents_repository, tasks_repository)
-
-    with pytest.raises(DocumentLinkAlreadyExistsError) as exc_info:
-        await service.create_link(document_id=1, task_id=2, user_id=USER_ID)
-
-    assert exc_info.value.status_code == 409
-
-
-@pytest.mark.asyncio
 async def test_get_links_for_document_builds_task_keys() -> None:
     documents_repository = AsyncMock(spec=DocumentsRepository)
     documents_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
@@ -119,7 +87,35 @@ async def test_get_links_for_document_builds_task_keys() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_link_when_missing_raises_not_found() -> None:
+async def test_link_endpoints_report_absence_and_conflicts() -> None:
+    """Объекты разных проектов, гонка дубликата и отсутствующая связь отвечают своими кодами; сбой репозитория — 500."""
+
+    documents_repository = AsyncMock(spec=DocumentsRepository)
+    documents_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = SimpleNamespace(id=2, project_id=5)
+    links_repository = AsyncMock(spec=DocumentLinksRepository)
+    service = build_service(links_repository, documents_repository, tasks_repository)
+
+    with pytest.raises(DocumentLinkProjectMismatchError) as exc_info:
+        await service.create_link(document_id=1, task_id=2, user_id=USER_ID)
+
+    assert exc_info.value.status_code == 409
+    links_repository.create.assert_not_awaited()
+
+    documents_repository = AsyncMock(spec=DocumentsRepository)
+    documents_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = SimpleNamespace(id=2, project_id=1)
+    links_repository = AsyncMock(spec=DocumentLinksRepository)
+    links_repository.create.side_effect = DocumentLinkAlreadyExistsRepositoryError(document_id=1)
+    service = build_service(links_repository, documents_repository, tasks_repository)
+
+    with pytest.raises(DocumentLinkAlreadyExistsError) as exc_info:
+        await service.create_link(document_id=1, task_id=2, user_id=USER_ID)
+
+    assert exc_info.value.status_code == 409
+
     links_repository = AsyncMock(spec=DocumentLinksRepository)
     links_repository.get_by_id.return_value = None
 
@@ -128,9 +124,6 @@ async def test_delete_link_when_missing_raises_not_found() -> None:
 
     assert exc_info.value.status_code == 404
 
-
-@pytest.mark.asyncio
-async def test_get_links_for_task_wraps_repository_error() -> None:
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_id.return_value = SimpleNamespace(id=2, project_id=1)
     links_repository = AsyncMock(spec=DocumentLinksRepository)

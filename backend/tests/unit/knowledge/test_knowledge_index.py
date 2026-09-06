@@ -148,127 +148,6 @@ async def test_milestone_semantic_document_excludes_operational_dates(tmp_path) 
     assert str(datetime.now(UTC).date()) not in texts[0]
 
 
-@pytest.mark.asyncio
-async def test_task_batch_uses_one_bulk_load_and_one_embedding_call(tmp_path) -> None:
-    service, project, task, runtime, _, _ = build_service(tmp_path)
-    second = Task(
-        id=8,
-        project_id=project.id,
-        stage_id=1,
-        number=13,
-        title="Вторая задача",
-        description_md="Описание",
-        position=2000,
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-    )
-    service.tasks_repository.get_by_ids.return_value = [task, second]
-    runtime.embedding_client.get_embeddings.return_value = [
-        [1.0, 0.0],
-        [0.0, 1.0],
-    ]
-
-    chunks = await service.upsert_tasks(project_id=1, entity_ids=[7, 8])
-
-    assert chunks == {7: 1, 8: 1}
-    service.tasks_repository.get_by_ids.assert_awaited_once_with({7, 8})
-    service.projects_repository.get_by_id.assert_awaited_once_with(1)
-    service.wbs_nodes_repository.get_by_project.assert_awaited_once_with(1)
-    runtime.embedding_client.get_embeddings.assert_awaited_once()
-    assert len(runtime.embedding_client.get_embeddings.await_args.args[0]) == 2
-    runtime.qdrant_client.upsert_documents.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_task_batch_deletes_context_only_for_missing_tasks(tmp_path) -> None:
-    service, _, task, runtime, _, _ = build_service(tmp_path)
-    service.tasks_repository.get_by_ids.return_value = [task]
-
-    chunks = await service.upsert_tasks(project_id=1, entity_ids=[7, 404])
-
-    assert chunks == {7: 1, 404: 0}
-    runtime.qdrant_client.delete_task_context.assert_awaited_once_with(
-        project_id=1,
-        task_id=404,
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("entity_type", "entity_id"),
-    [
-        (KnowledgeEntityType.DOCUMENT, 9),
-        (KnowledgeEntityType.ATTACHMENT, 11),
-    ],
-)
-async def test_upsert_multichunk_entity_deletes_old_chunks_before_writing(
-    tmp_path,
-    entity_type: KnowledgeEntityType,
-    entity_id: int,
-) -> None:
-    service, project, task, runtime, documents, attachments = build_service(tmp_path)
-    now = datetime.now(UTC)
-    documents.get_by_id.return_value = Document(
-        id=entity_id,
-        project_id=project.id,
-        slug="plan",
-        title="План",
-        content_md="Содержимое документа",
-        created_at=now,
-        updated_at=now,
-    )
-    attachments.get_by_id.return_value = TaskAttachment(
-        id=entity_id,
-        task_id=task.id,
-        original_name="attachment.txt",
-        storage_key="tasks/7/attachment.txt",
-        content_type="text/plain",
-        size=10,
-        created_at=now,
-    )
-    (tmp_path / "attachment.txt").write_text("Содержимое вложения", encoding="utf-8")
-    manager = Mock()
-    manager.attach_mock(runtime.qdrant_client.delete_entity, "delete")
-    manager.attach_mock(runtime.qdrant_client.upsert_documents, "upsert")
-
-    await service.process(make_job(KnowledgeIndexOperation.UPSERT, entity_type, entity_id))
-
-    assert manager.mock_calls[0] == call.delete(
-        project_id=1,
-        entity_type=entity_type.value.lower(),
-        entity_id=entity_id,
-    )
-    assert manager.mock_calls[1].args == ()
-    assert manager.mock_calls[1].kwargs["project_id"] == 1
-
-
-@pytest.mark.asyncio
-async def test_unavailable_vision_model_fails_job_instead_of_skipping_image(tmp_path) -> None:
-    service, project, task, runtime, _, attachments = build_service(tmp_path)
-    storage_name = "schema.png"
-    service.attachment_storage.resolve.return_value = tmp_path / storage_name
-    attachments.get_by_id.return_value = TaskAttachment(
-        id=11,
-        task_id=task.id,
-        original_name=storage_name,
-        storage_key=f"tasks/7/{storage_name}",
-        content_type="image/png",
-        size=10,
-        created_at=datetime.now(UTC),
-    )
-    (tmp_path / storage_name).write_bytes(b"\x89PNG\r\n\x1a\nvision-fixture")
-    runtime.vision.extract_image_text.side_effect = VisionClientError(
-        "vision API недоступен"
-    )
-
-    with pytest.raises(KnowledgeProviderError):
-        await service.process(
-            make_job(KnowledgeIndexOperation.UPSERT, KnowledgeEntityType.ATTACHMENT, 11)
-        )
-
-    runtime.qdrant_client.upsert_documents.assert_not_awaited()
-
-
 def test_document_text_does_not_depend_on_mutable_task_title(tmp_path) -> None:
     """Тексты комментария и вложения не зависят от изменяемого заголовка задачи."""
 
@@ -309,3 +188,112 @@ def test_document_text_does_not_depend_on_mutable_task_title(tmp_path) -> None:
     assert documents
     assert "Задача: PROJ-12" in documents[0].text
     assert task.title not in documents[0].text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('entity_type', 'entity_id'), [(KnowledgeEntityType.DOCUMENT, 9), (KnowledgeEntityType.ATTACHMENT, 11)])
+async def test_multichunk_entity_replaces_its_chunks_and_fails_on_missing_vision(tmp_path, entity_type: KnowledgeEntityType, entity_id: int) -> None:
+    """Многочанковая сущность удаляет старые чанки перед записью, недоступная модель зрения роняет задание."""
+
+    service, project, task, runtime, documents, attachments = build_service(tmp_path)
+    now = datetime.now(UTC)
+    documents.get_by_id.return_value = Document(
+        id=entity_id,
+        project_id=project.id,
+        slug="plan",
+        title="План",
+        content_md="Содержимое документа",
+        created_at=now,
+        updated_at=now,
+    )
+    attachments.get_by_id.return_value = TaskAttachment(
+        id=entity_id,
+        task_id=task.id,
+        original_name="attachment.txt",
+        storage_key="tasks/7/attachment.txt",
+        content_type="text/plain",
+        size=10,
+        created_at=now,
+    )
+    (tmp_path / "attachment.txt").write_text("Содержимое вложения", encoding="utf-8")
+    manager = Mock()
+    manager.attach_mock(runtime.qdrant_client.delete_entity, "delete")
+    manager.attach_mock(runtime.qdrant_client.upsert_documents, "upsert")
+
+    await service.process(make_job(KnowledgeIndexOperation.UPSERT, entity_type, entity_id))
+
+    assert manager.mock_calls[0] == call.delete(
+        project_id=1,
+        entity_type=entity_type.value.lower(),
+        entity_id=entity_id,
+    )
+    assert manager.mock_calls[1].args == ()
+    assert manager.mock_calls[1].kwargs["project_id"] == 1
+
+    service, project, task, runtime, _, attachments = build_service(tmp_path)
+    storage_name = "schema.png"
+    service.attachment_storage.resolve.return_value = tmp_path / storage_name
+    attachments.get_by_id.return_value = TaskAttachment(
+        id=11,
+        task_id=task.id,
+        original_name=storage_name,
+        storage_key=f"tasks/7/{storage_name}",
+        content_type="image/png",
+        size=10,
+        created_at=datetime.now(UTC),
+    )
+    (tmp_path / storage_name).write_bytes(b"\x89PNG\r\n\x1a\nvision-fixture")
+    runtime.vision.extract_image_text.side_effect = VisionClientError(
+        "vision API недоступен"
+    )
+
+    with pytest.raises(KnowledgeProviderError):
+        await service.process(
+            make_job(KnowledgeIndexOperation.UPSERT, KnowledgeEntityType.ATTACHMENT, 11)
+        )
+
+    runtime.qdrant_client.upsert_documents.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_batch_uses_one_load_and_one_embedding_call(tmp_path) -> None:
+    """Пачка задач читается одним запросом и уходит одним вызовом эмбеддингов; контекст удаляется только у исчезнувших задач."""
+
+    service, project, task, runtime, _, _ = build_service(tmp_path)
+    second = Task(
+        id=8,
+        project_id=project.id,
+        stage_id=1,
+        number=13,
+        title="Вторая задача",
+        description_md="Описание",
+        position=2000,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    service.tasks_repository.get_by_ids.return_value = [task, second]
+    runtime.embedding_client.get_embeddings.return_value = [
+        [1.0, 0.0],
+        [0.0, 1.0],
+    ]
+
+    chunks = await service.upsert_tasks(project_id=1, entity_ids=[7, 8])
+
+    assert chunks == {7: 1, 8: 1}
+    service.tasks_repository.get_by_ids.assert_awaited_once_with({7, 8})
+    service.projects_repository.get_by_id.assert_awaited_once_with(1)
+    service.wbs_nodes_repository.get_by_project.assert_awaited_once_with(1)
+    runtime.embedding_client.get_embeddings.assert_awaited_once()
+    assert len(runtime.embedding_client.get_embeddings.await_args.args[0]) == 2
+    runtime.qdrant_client.upsert_documents.assert_awaited_once()
+
+    service, _, task, runtime, _, _ = build_service(tmp_path)
+    service.tasks_repository.get_by_ids.return_value = [task]
+
+    chunks = await service.upsert_tasks(project_id=1, entity_ids=[7, 404])
+
+    assert chunks == {7: 1, 404: 0}
+    runtime.qdrant_client.delete_task_context.assert_awaited_once_with(
+        project_id=1,
+        task_id=404,
+    )

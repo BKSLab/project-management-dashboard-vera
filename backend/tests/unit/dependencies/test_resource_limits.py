@@ -21,38 +21,6 @@ EXPECTED_POOL_FIELDS = (
 )
 
 
-def test_db_settings_declare_every_pool_parameter() -> None:
-    """Все пять параметров пула объявлены в настройках, а не подразумеваются."""
-    fields = set(DBSettings.model_fields)
-
-    missing = [name for name in EXPECTED_POOL_FIELDS if name not in fields]
-    assert not missing, f"Параметры пула не заданы явно: {missing}"
-
-
-def test_db_pool_baseline_matches_single_worker_budget() -> None:
-    """Baseline рассчитан на один worker: (5 + 10) × 1 = 15 соединений."""
-    db = get_settings().db
-
-    assert db.pool_size == 5
-    assert db.pool_max_overflow == 10
-    assert db.pool_timeout == 5.0
-    assert db.pool_pre_ping is True
-    assert db.pool_recycle == 1800
-    assert (db.pool_size + db.pool_max_overflow) == 15
-
-
-def test_engine_receives_the_configured_pool_limits() -> None:
-    """Значения из настроек действительно дошли до созданного движка."""
-    db = get_settings().db
-    pool = engine.pool
-
-    assert pool.size() == db.pool_size
-    assert pool._max_overflow == db.pool_max_overflow
-    assert pool._timeout == db.pool_timeout
-    assert pool._pre_ping is db.pool_pre_ping
-    assert pool._recycle == db.pool_recycle
-
-
 @pytest.mark.parametrize(
     ("field", "invalid"),
     [
@@ -102,3 +70,30 @@ async def test_created_http_client_uses_configured_limits() -> None:
         assert client.timeout.read == float(settings.llm.llm_timeout)
     finally:
         await client.aclose()
+
+
+def test_pool_limits_are_declared_and_reach_the_engine() -> None:
+    """Все параметры пула объявлены, baseline рассчитан на один worker, значения доходят до движка."""
+    # Все пять параметров пула объявлены в настройках, а не подразумеваются.
+    fields = set(DBSettings.model_fields)
+
+    missing = [name for name in EXPECTED_POOL_FIELDS if name not in fields]
+    assert not missing, f"Параметры пула не заданы явно: {missing}"
+    # Baseline рассчитан на один worker: (5 + 10) × 1 = 15 соединений.
+    db = get_settings().db
+
+    assert db.pool_size == 5
+    assert db.pool_max_overflow == 10
+    assert db.pool_timeout == 5.0
+    assert db.pool_pre_ping is True
+    assert db.pool_recycle == 1800
+    assert (db.pool_size + db.pool_max_overflow) == 15
+    # Значения из настроек действительно дошли до созданного движка.
+    db = get_settings().db
+    pool = engine.pool
+
+    assert pool.size() == db.pool_size
+    assert pool._max_overflow == db.pool_max_overflow
+    assert pool._timeout == db.pool_timeout
+    assert pool._pre_ping is db.pool_pre_ping
+    assert pool._recycle == db.pool_recycle

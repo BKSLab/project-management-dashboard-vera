@@ -25,9 +25,9 @@ def dependency_schema() -> TaskDependencySchema:
 
 
 @pytest.mark.asyncio
-async def test_create_dependency_endpoint_forwards_typed_payload(
-    api_client: AsyncClient,
-) -> None:
+async def test_dependency_endpoints_forward_payload_and_map_errors(api_client: AsyncClient) -> None:
+    """Создание передаёт типизированные значения, неподдерживаемый тип и цикл отклоняются, удаление отвечает 204."""
+
     service = AsyncMock(spec=TaskDependenciesService)
     service.create_dependency.return_value = dependency_schema()
     app.dependency_overrides[get_task_dependencies_service] = lambda: service
@@ -48,9 +48,6 @@ async def test_create_dependency_endpoint_forwards_typed_payload(
         is TaskDependencyType.FINISH_TO_START
     )
 
-
-@pytest.mark.asyncio
-async def test_dependency_endpoint_rejects_unsupported_type(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=TaskDependenciesService)
     app.dependency_overrides[get_task_dependencies_service] = lambda: service
 
@@ -66,9 +63,6 @@ async def test_dependency_endpoint_rejects_unsupported_type(api_client: AsyncCli
     assert response.status_code == 422
     service.create_dependency.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_dependency_cycle_is_returned_as_conflict(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=TaskDependenciesService)
     service.create_dependency.side_effect = TaskDependencyCycleError()
     app.dependency_overrides[get_task_dependencies_service] = lambda: service
@@ -80,9 +74,6 @@ async def test_dependency_cycle_is_returned_as_conflict(api_client: AsyncClient)
 
     assert response.status_code == 409
 
-
-@pytest.mark.asyncio
-async def test_delete_dependency_endpoint_returns_no_content(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=TaskDependenciesService)
     app.dependency_overrides[get_task_dependencies_service] = lambda: service
 

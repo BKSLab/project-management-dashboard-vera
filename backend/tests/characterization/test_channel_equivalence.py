@@ -13,7 +13,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pytest
 from fastapi import HTTPException
 from mcp.server.mcpserver.exceptions import ToolError
 
@@ -94,53 +93,41 @@ async def mcp_answer(service: AccessService, project_id: int) -> tuple[int, str]
 CHANNELS = {"http": http_answer, "mcp": mcp_answer}
 
 
-@pytest.mark.parametrize("channel", sorted(CHANNELS), ids=sorted(CHANNELS))
-async def test_foreign_and_missing_project_are_indistinguishable(channel: str) -> None:
-    """Внутри канала чужой и несуществующий проект отвечают одинаково.
+async def test_both_channels_answer_identically_on_every_case() -> None:
+    """HTTP и MCP отвечают одинаково: свой проект, чужой, отсутствующий, сбой.
 
-    Разные ответы позволили бы перебором идентификаторов узнать, какие
-    проекты существуют в системе.
+    Каналы проходятся одним тестом, потому что проверяется именно их
+    эквивалентность: расхождение любого случая означает, что правило
+    доступа где-то скопировано, а не вызвано. Внутри канала чужой и
+    несуществующий проект тоже неотличимы — иначе перебором
+    идентификаторов выяснялось бы, какие проекты существуют.
     """
-    service = access_service()
-    answer = CHANNELS[channel]
+    problems: list[str] = []
+    for name, answer in sorted(CHANNELS.items()):
+        service = access_service()
+        if await answer(service, FOREIGN_PROJECT_ID) != await answer(service, MISSING_PROJECT_ID):
+            problems.append(f"{name}: чужой и несуществующий проект отличимы")
 
-    assert await answer(service, FOREIGN_PROJECT_ID) == await answer(service, MISSING_PROJECT_ID)
+        status, _ = await answer(access_service(), FOREIGN_PROJECT_ID)
+        if status != 404:
+            problems.append(f"{name}: чужой проект отвечает {status} вместо 404")
 
+        service = access_service()
+        service.members_repository.get.side_effect = None
+        service.members_repository.get.return_value = SimpleNamespace(role=ProjectRole.MEMBER)
+        status, _ = await answer(service, MEMBER_PROJECT_ID)
+        if status != 200:
+            problems.append(f"{name}: участник проекта получил {status}")
 
-@pytest.mark.parametrize("channel", sorted(CHANNELS), ids=sorted(CHANNELS))
-async def test_both_channels_deny_access_to_a_foreign_project(channel: str) -> None:
-    """Отказ одинаково означает «не найдено» в обоих каналах."""
-    status, _ = await CHANNELS[channel](access_service(), FOREIGN_PROJECT_ID)
+        service = access_service()
+        service.members_repository.get.side_effect = RepositoryError("relation does not exist")
+        status, message = await answer(service, FOREIGN_PROJECT_ID)
+        if status == 200:
+            problems.append(f"{name}: сбой базы открыл доступ")
+        if "relation" in message:
+            problems.append(f"{name}: наружу вышли подробности запроса к базе")
 
-    assert status == 404
-
-
-@pytest.mark.parametrize("channel", sorted(CHANNELS), ids=sorted(CHANNELS))
-async def test_both_channels_allow_access_to_own_project(channel: str) -> None:
-    """Участник проекта проходит проверку в обоих каналах."""
-    service = access_service()
-    service.members_repository.get.side_effect = None
-    service.members_repository.get.return_value = SimpleNamespace(role=ProjectRole.MEMBER)
-
-    status, _ = await CHANNELS[channel](service, MEMBER_PROJECT_ID)
-
-    assert status == 200
-
-
-@pytest.mark.parametrize("channel", sorted(CHANNELS), ids=sorted(CHANNELS))
-async def test_repository_failure_does_not_leak_into_either_channel(channel: str) -> None:
-    """Сбой чтения участников не выглядит как разрешённый доступ.
-
-    Ошибка инфраструктуры не должна ни открывать проект, ни выносить
-    наружу подробности запроса к базе.
-    """
-    service = access_service()
-    service.members_repository.get.side_effect = RepositoryError("relation does not exist")
-
-    status, message = await CHANNELS[channel](service, FOREIGN_PROJECT_ID)
-
-    assert status != 200
-    assert "relation" not in message
+    assert not problems, "Каналы отвечают по-разному: " + "; ".join(problems)
 
 
 async def test_both_channels_ask_the_same_service_method() -> None:

@@ -144,11 +144,9 @@ async def test_register_creates_user_and_opens_session(
     assert use_auth_service.logged_in == [("characterization", "надёжный-пароль")]
 
 
-async def test_register_with_wrong_invite_code_is_rejected(
-    raw_client: AsyncClient,
-    anonymous: None,
-) -> None:
-    """Неверный код приглашения не создаёт пользователя и не даёт cookie."""
+async def test_register_validates_invite_username_and_confirmation(raw_client: AsyncClient, anonymous: None) -> None:
+    """Неверный код приглашения, занятый логин и несовпавший повтор пароля сохраняют свои коды и формулировки."""
+    # Неверный код приглашения не создаёт пользователя и не даёт cookie.
     error = InvalidInviteCodeError()
     app.dependency_overrides[get_auth_service] = lambda: FakeAuthService(register_error=error)
 
@@ -157,13 +155,7 @@ async def test_register_with_wrong_invite_code_is_rejected(
     assert response.status_code == error.status_code
     assert response.json() == {"detail": error.detail}
     assert COOKIE_NAME not in response.cookies
-
-
-async def test_register_with_taken_username_returns_conflict(
-    raw_client: AsyncClient,
-    anonymous: None,
-) -> None:
-    """Занятый логин остаётся конфликтом, а не общей ошибкой сервера."""
+    # Занятый логин остаётся конфликтом, а не общей ошибкой сервера.
     error = UsernameConflictError(username="characterization")
     app.dependency_overrides[get_auth_service] = lambda: FakeAuthService(register_error=error)
 
@@ -171,13 +163,7 @@ async def test_register_with_taken_username_returns_conflict(
 
     assert response.status_code == error.status_code
     assert response.json() == {"detail": error.detail}
-
-
-async def test_register_rejects_mismatched_password_confirmation(
-    raw_client: AsyncClient,
-    anonymous: None,
-) -> None:
-    """Расхождение пароля и подтверждения остаётся ошибкой валидации 422."""
+    # Расхождение пароля и подтверждения остаётся ошибкой валидации 422.
     payload = {**REGISTER_PAYLOAD, "password_confirm": "другой-пароль"}
 
     response = await raw_client.post("/api/v1/auth/register", json=payload)
@@ -186,41 +172,28 @@ async def test_register_rejects_mismatched_password_confirmation(
     assert "detail" in response.json()
 
 
-async def test_logout_clears_session_cookie(
-    raw_client: AsyncClient,
-    anonymous: None,
-) -> None:
-    """Выход отвечает 204 и сбрасывает cookie сессии."""
+async def test_logout_clears_the_session_and_needs_none(raw_client: AsyncClient, anonymous: None) -> None:
+    """Выход снимает cookie и не требует действующей сессии."""
+    # Выход отвечает 204 и сбрасывает cookie сессии.
     response = await raw_client.post("/api/v1/auth/logout")
 
     assert response.status_code == 204
     header = response.headers["set-cookie"]
     assert header.startswith(f'{COOKIE_NAME}=""') or header.startswith(f"{COOKIE_NAME}=;")
     assert "Path=/" in header
-
-
-async def test_logout_needs_no_session(
-    raw_client: AsyncClient,
-    anonymous: None,
-) -> None:
-    """Выход доступен без входа: повторный клик не должен давать 401."""
+    # Выход доступен без входа: повторный клик не должен давать 401.
     response = await raw_client.post("/api/v1/auth/logout")
 
     assert response.status_code == 204
 
 
-async def test_me_requires_session(raw_client: AsyncClient, anonymous: None) -> None:
-    """Без cookie и токена карточка пользователя недоступна."""
+async def test_me_requires_a_session_and_returns_safe_fields(raw_client: AsyncClient, anonymous: None) -> None:
+    """Без сессии — 401, с сессией — только безопасные поля пользователя."""
+    # Без cookie и токена карточка пользователя недоступна.
     response = await raw_client.get("/api/v1/auth/me")
 
     assert response.status_code == 401
-
-
-async def test_me_returns_safe_user_fields(
-    raw_client: AsyncClient,
-    anonymous: None,
-) -> None:
-    """Карточка текущего пользователя не содержит секретов."""
+    # Карточка текущего пользователя не содержит секретов.
     app.dependency_overrides[get_principal] = lambda: Principal(
         user_id=7,
         username="characterization",

@@ -98,9 +98,54 @@ def override(service: AsyncMock) -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_analytics_report_returns_201_with_resolved_tasks(
-    api_client: AsyncClient,
-) -> None:
+async def test_analytics_endpoint_maps_every_domain_error(api_client: AsyncClient) -> None:
+    """Пустой срез — 409, чужой проект — 404, сбой генерации — 502, сбой провайдера — 503, прочий сбой сервиса — 500."""
+
+    service = AsyncMock(spec=AnalyticsService)
+    service.generate.side_effect = AnalyticsEmptyScopeError(error_details="нет задач")
+    override(service)
+
+    response = await api_client.post("/api/v1/dashboard/analytics", json={"project_id": 1})
+
+    assert response.status_code == 409
+
+    service = AsyncMock(spec=AnalyticsService)
+    service.generate.side_effect = ProjectNotFoundError(project_id=99)
+    override(service)
+
+    response = await api_client.post("/api/v1/dashboard/analytics", json={"project_id": 99})
+
+    assert response.status_code == 404
+
+    service = AsyncMock(spec=AnalyticsService)
+    service.generate.side_effect = AnalyticsGenerationError(error_details="мусор в ответе")
+    override(service)
+
+    response = await api_client.post("/api/v1/dashboard/analytics", json={"project_id": 1})
+
+    assert response.status_code == 502
+
+    service = AsyncMock(spec=AnalyticsService)
+    service.generate.side_effect = KnowledgeProviderError("LLM недоступен")
+    override(service)
+
+    response = await api_client.post("/api/v1/dashboard/analytics", json={"project_id": 1})
+
+    assert response.status_code == 503
+
+    service = AsyncMock(spec=AnalyticsService)
+    service.get_latest.side_effect = AnalyticsServiceError(error_details="сбой чтения")
+    override(service)
+
+    response = await api_client.get("/api/v1/dashboard/analytics?project_id=1")
+
+    assert response.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_analytics_endpoint_returns_report_for_both_scopes(api_client: AsyncClient) -> None:
+    """Отчёт по проекту и по портфелю, отсутствие отчёта отдаётся как null."""
+
     service = AsyncMock(spec=AnalyticsService)
     service.generate.return_value = report()
     override(service)
@@ -113,9 +158,6 @@ async def test_create_analytics_report_returns_201_with_resolved_tasks(
     assert body["findings"][0]["tasks"][0]["key"] == "TEST-5"
     assert body["signals"]["overdue_tasks"] == 1
 
-
-@pytest.mark.asyncio
-async def test_create_analytics_report_accepts_portfolio_scope(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=AnalyticsService)
     service.generate.return_value = report()
     override(service)
@@ -125,11 +167,6 @@ async def test_create_analytics_report_accepts_portfolio_scope(api_client: Async
     assert response.status_code == 201
     assert service.generate.await_args.kwargs["project_id"] is None
 
-
-@pytest.mark.asyncio
-async def test_get_analytics_report_returns_null_when_never_generated(
-    api_client: AsyncClient,
-) -> None:
     service = AsyncMock(spec=AnalyticsService)
     service.get_latest.return_value = None
     override(service)
@@ -138,64 +175,3 @@ async def test_get_analytics_report_returns_null_when_never_generated(
 
     assert response.status_code == 200
     assert response.json() is None
-
-
-@pytest.mark.asyncio
-async def test_create_analytics_report_maps_empty_scope_to_409(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=AnalyticsService)
-    service.generate.side_effect = AnalyticsEmptyScopeError(error_details="нет задач")
-    override(service)
-
-    response = await api_client.post("/api/v1/dashboard/analytics", json={"project_id": 1})
-
-    assert response.status_code == 409
-
-
-@pytest.mark.asyncio
-async def test_create_analytics_report_maps_foreign_project_to_404(
-    api_client: AsyncClient,
-) -> None:
-    service = AsyncMock(spec=AnalyticsService)
-    service.generate.side_effect = ProjectNotFoundError(project_id=99)
-    override(service)
-
-    response = await api_client.post("/api/v1/dashboard/analytics", json={"project_id": 99})
-
-    assert response.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_create_analytics_report_maps_generation_error_to_502(
-    api_client: AsyncClient,
-) -> None:
-    service = AsyncMock(spec=AnalyticsService)
-    service.generate.side_effect = AnalyticsGenerationError(error_details="мусор в ответе")
-    override(service)
-
-    response = await api_client.post("/api/v1/dashboard/analytics", json={"project_id": 1})
-
-    assert response.status_code == 502
-
-
-@pytest.mark.asyncio
-async def test_create_analytics_report_maps_provider_error_to_503(
-    api_client: AsyncClient,
-) -> None:
-    service = AsyncMock(spec=AnalyticsService)
-    service.generate.side_effect = KnowledgeProviderError("LLM недоступен")
-    override(service)
-
-    response = await api_client.post("/api/v1/dashboard/analytics", json={"project_id": 1})
-
-    assert response.status_code == 503
-
-
-@pytest.mark.asyncio
-async def test_get_analytics_report_maps_service_error_to_500(api_client: AsyncClient) -> None:
-    service = AsyncMock(spec=AnalyticsService)
-    service.get_latest.side_effect = AnalyticsServiceError(error_details="сбой чтения")
-    override(service)
-
-    response = await api_client.get("/api/v1/dashboard/analytics?project_id=1")
-
-    assert response.status_code == 500

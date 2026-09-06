@@ -42,7 +42,9 @@ async def test_ask_returns_grounded_answer_and_sources(api_client: AsyncClient) 
 
 
 @pytest.mark.asyncio
-async def test_blank_question_is_rejected(api_client: AsyncClient) -> None:
+async def test_knowledge_endpoints_validate_input_and_hide_internals(api_client: AsyncClient) -> None:
+    """Пустой вопрос отклоняется, сбой провайдера — 503, статус не раскрывает имя коллекции."""
+
     service = AsyncMock(spec=ProjectAgentService)
     app.dependency_overrides[get_project_agent_service] = lambda: service
 
@@ -54,9 +56,6 @@ async def test_blank_question_is_rejected(api_client: AsyncClient) -> None:
     assert response.status_code == 422
     service.ask.assert_not_called()
 
-
-@pytest.mark.asyncio
-async def test_provider_error_is_mapped_to_503(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=ProjectAgentService)
     service.ask.side_effect = KnowledgeProviderError("provider offline")
     app.dependency_overrides[get_project_agent_service] = lambda: service
@@ -69,9 +68,6 @@ async def test_provider_error_is_mapped_to_503(api_client: AsyncClient) -> None:
     assert response.status_code == 503
     assert "временно недоступен" in response.json()["detail"]
 
-
-@pytest.mark.asyncio
-async def test_status_does_not_expose_collection_name(api_client: AsyncClient) -> None:
     service = AsyncMock(spec=ProjectAgentService)
     service.get_status.return_value = KnowledgeStatusSchema(
         enabled=True,

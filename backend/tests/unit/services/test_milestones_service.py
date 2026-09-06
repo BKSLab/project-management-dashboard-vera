@@ -69,44 +69,6 @@ async def test_create_milestone_uses_uow_and_transactional_knowledge_event() -> 
 
 
 @pytest.mark.asyncio
-async def test_create_milestone_rejects_foreign_wbs_node() -> None:
-    service, repository, _, nodes, uow, _ = build_service()
-    nodes.get_by_id.return_value = SimpleNamespace(id=7, project_id=2)
-
-    with pytest.raises(WbsNodeForeignProjectError):
-        await service.create_milestone(
-            1,
-            {"title": "MVP", "due_date": date(2026, 9, 30), "wbs_node_id": 7},
-        )
-
-    repository.save.assert_not_awaited()
-    uow.commit.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_operational_milestone_update_does_not_reindex_text() -> None:
-    service, repository, _, _, uow, events = build_service()
-    current = milestone()
-    repository.get_by_id.return_value = current
-    current.due_date = date(2026, 10, 1)
-    repository.update.return_value = current
-
-    await service.update_milestone(1, 1, {"due_date": date(2026, 10, 1)})
-
-    events.upsert.assert_not_awaited()
-    uow.commit.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_milestone_from_another_project_is_hidden_as_not_found() -> None:
-    service, repository, _, _, _, _ = build_service()
-    repository.get_by_id.return_value = milestone(project_id=2)
-
-    with pytest.raises(MilestoneNotFoundError):
-        await service.update_milestone(1, 1, {"title": "Чужая"})
-
-
-@pytest.mark.asyncio
 async def test_delete_milestone_enqueues_delete_and_commits() -> None:
     service, repository, _, _, uow, events = build_service()
     repository.get_by_id.return_value = milestone()
@@ -119,4 +81,38 @@ async def test_delete_milestone_enqueues_delete_and_commits() -> None:
         entity_type=KnowledgeEntityType.MILESTONE,
         entity_id=1,
     )
+    uow.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_milestone_hides_foreign_objects_and_reindexes_only_text() -> None:
+    """Чужой узел ИСР и чужая веха недоступны, операционное изменение не переиндексирует текст."""
+
+    service, repository, _, nodes, uow, _ = build_service()
+    nodes.get_by_id.return_value = SimpleNamespace(id=7, project_id=2)
+
+    with pytest.raises(WbsNodeForeignProjectError):
+        await service.create_milestone(
+            1,
+            {"title": "MVP", "due_date": date(2026, 9, 30), "wbs_node_id": 7},
+        )
+
+    repository.save.assert_not_awaited()
+    uow.commit.assert_not_awaited()
+
+    service, repository, _, _, _, _ = build_service()
+    repository.get_by_id.return_value = milestone(project_id=2)
+
+    with pytest.raises(MilestoneNotFoundError):
+        await service.update_milestone(1, 1, {"title": "Чужая"})
+
+    service, repository, _, _, uow, events = build_service()
+    current = milestone()
+    repository.get_by_id.return_value = current
+    current.due_date = date(2026, 10, 1)
+    repository.update.return_value = current
+
+    await service.update_milestone(1, 1, {"due_date": date(2026, 10, 1)})
+
+    events.upsert.assert_not_awaited()
     uow.commit.assert_awaited_once()

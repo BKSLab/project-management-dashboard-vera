@@ -53,37 +53,6 @@ def build_service(
 
 
 @pytest.mark.asyncio
-async def test_get_document_when_missing_raises_not_found() -> None:
-    repository = AsyncMock(spec=DocumentsRepository)
-    repository.get_by_id.return_value = None
-
-    with pytest.raises(DocumentNotFoundError) as exc_info:
-        await build_service(repository).get_document(document_id=999)
-
-    assert exc_info.value.status_code == 404
-    assert "999" in exc_info.value.detail
-
-
-@pytest.mark.asyncio
-async def test_create_document_in_missing_project_raises_not_found() -> None:
-    repository = AsyncMock(spec=DocumentsRepository)
-    projects_repository = AsyncMock(spec=ProjectsRepository)
-    projects_repository.get_by_id.return_value = None
-    service = build_service(repository, projects_repository)
-
-    with pytest.raises(ProjectNotFoundError) as exc_info:
-        await service.create_document(
-            project_id=42,
-            title="Roadmap",
-            slug=None,
-            content_md="Текст",
-        )
-
-    assert exc_info.value.status_code == 404
-    repository.create.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_create_document_appends_suffix_to_busy_slug() -> None:
     repository = AsyncMock(spec=DocumentsRepository)
     repository.get_by_project_slug.side_effect = [SimpleNamespace(id=1), None]
@@ -100,7 +69,34 @@ async def test_create_document_appends_suffix_to_busy_slug() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_document_when_unique_constraint_races_raises_conflict() -> None:
+async def test_document_reads_and_writes_report_absence_and_failures() -> None:
+    """Отсутствующие документ и проект — 404, гонка уникального slug — 409, сбой репозитория — 500."""
+
+    repository = AsyncMock(spec=DocumentsRepository)
+    repository.get_by_id.return_value = None
+
+    with pytest.raises(DocumentNotFoundError) as exc_info:
+        await build_service(repository).get_document(document_id=999)
+
+    assert exc_info.value.status_code == 404
+    assert "999" in exc_info.value.detail
+
+    repository = AsyncMock(spec=DocumentsRepository)
+    projects_repository = AsyncMock(spec=ProjectsRepository)
+    projects_repository.get_by_id.return_value = None
+    service = build_service(repository, projects_repository)
+
+    with pytest.raises(ProjectNotFoundError) as exc_info:
+        await service.create_document(
+            project_id=42,
+            title="Roadmap",
+            slug=None,
+            content_md="Текст",
+        )
+
+    assert exc_info.value.status_code == 404
+    repository.create.assert_not_awaited()
+
     repository = AsyncMock(spec=DocumentsRepository)
     repository.get_by_project_slug.return_value = None
     repository.create.side_effect = DocumentSlugAlreadyExistsRepositoryError(slug="roadmap")
@@ -115,9 +111,6 @@ async def test_create_document_when_unique_constraint_races_raises_conflict() ->
 
     assert exc_info.value.status_code == 409
 
-
-@pytest.mark.asyncio
-async def test_get_documents_wraps_repository_error() -> None:
     repository = AsyncMock(spec=DocumentsRepository)
     repository.get_by_project.side_effect = DocumentsRepositoryError("БД недоступна")
 
