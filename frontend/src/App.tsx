@@ -14,6 +14,7 @@ import { ProjectDocumentsPage } from "@/routes/ProjectDocumentsPage";
 import { DocumentDetailPage } from "@/routes/DocumentDetailPage";
 import { ProjectSettingsPage } from "@/routes/ProjectSettingsPage";
 import { ProjectKnowledgePage } from "@/routes/ProjectKnowledgePage";
+import { ProjectPulsePage } from "@/routes/ProjectPulsePage";
 import { McpPage } from "@/routes/McpPage";
 import { ProfilePage } from "@/routes/ProfilePage";
 import { LoginPage } from "@/routes/LoginPage";
@@ -112,6 +113,7 @@ function ProtectedApp() {
                         />
                         <Route path="docs" element={<ProjectDocumentsPage />} />
                         <Route path="docs/:slug" element={<DocumentDetailPage />} />
+                        <Route path="pulse" element={<ProjectPulsePage />} />
                         <Route path="knowledge" element={<ProjectKnowledgePage />} />
                         <Route path="settings" element={<ProjectSettingsPage />} />
                     </Route>

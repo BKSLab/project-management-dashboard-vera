@@ -102,10 +102,7 @@ export function DashboardPage() {
                     </StatStrip>
 
                     {dashboardQuery.data.projects.length > 0 && (
-                        <AnalyticsPanel
-                            projects={dashboardQuery.data.projects}
-                            onOpenTask={setSelectedTaskId}
-                        />
+                        <AnalyticsPanel onOpenTask={setSelectedTaskId} />
                     )}
 
                     <Section

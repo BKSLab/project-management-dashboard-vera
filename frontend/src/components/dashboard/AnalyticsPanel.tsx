@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     Activity,
@@ -13,15 +12,9 @@ import {
 import { api, endpoints, queryKeys } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDateTime } from "@/lib/dates";
-import type {
-    AnalyticsHealth,
-    AnalyticsReport,
-    AnalyticsSignals,
-    DashboardProject,
-} from "@/lib/types";
+import type { AnalyticsHealth, AnalyticsReport, AnalyticsSignals } from "@/lib/types";
 import { ANALYTICS_HEALTH_LABELS } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
-import { Select } from "@/components/ui/Field";
 import { ErrorMessage, Skeleton } from "@/components/ui/States";
 import {
     FindingCard,
@@ -59,18 +52,42 @@ const SIGNAL_ROWS: { key: keyof AnalyticsSignals; label: string; tone: string }[
 ];
 
 interface AnalyticsPanelProps {
-    projects: DashboardProject[];
+    /** Проект разбора; без него разбирается портфель активных проектов. */
+    projectId?: number | null;
     onOpenTask: (taskId: number) => void;
 }
 
+/** Тексты области: у портфеля и у проекта разные вопросы к аналитике. */
+const SCOPE_COPY = {
+    portfolio: {
+        title: "Сводка по проектам",
+        subtitle: "Состояние активных проектов: где горит и за что браться первым",
+        introTitle: "Статистика есть — нужна трактовка",
+        introText:
+            "Сводка сравнивает активные проекты между собой: где сорваны сроки, где работа встала и за какой проект браться сегодня. Запускается кнопкой — расписания нет.",
+        pendingText:
+            "Читаю показатели, вехи и проблемные задачи каждого активного проекта. Обычно это занимает до полуминуты.",
+    },
+    project: {
+        title: "Пульс проекта",
+        subtitle: "Разбор задач, комментариев, ИСР, доски и документов проекта",
+        introTitle: "Статистика есть — нужна трактовка",
+        introText:
+            "Пульс показывает, что и где просрочено, что сделано и как это шло по комментариям, и какие организационные шаги стоит сделать. Запускается кнопкой — расписания нет.",
+        pendingText:
+            "Читаю задачи, комментарии, историю изменений, ИСР, стикеры и документы. Обычно это занимает до полуминуты.",
+    },
+} as const;
+
 /**
- * Аналитика по кнопке: модель разбирает срез проектов и объясняет, что в нём
- * важно. Свод сохраняется на backend, поэтому переживает перезагрузку и
- * виден команде проекта целиком.
+ * Аналитика по кнопке: модель разбирает срез и объясняет, что в нём важно.
+ * Свод сохраняется на backend, поэтому переживает перезагрузку и виден
+ * команде целиком. Область задаётся снаружи: дашборд всегда спрашивает про
+ * портфель, страница проекта — только про свой проект.
  */
-export function AnalyticsPanel({ projects, onOpenTask }: AnalyticsPanelProps) {
+export function AnalyticsPanel({ projectId = null, onOpenTask }: AnalyticsPanelProps) {
     const queryClient = useQueryClient();
-    const [projectId, setProjectId] = useState<number | null>(null);
+    const copy = projectId ? SCOPE_COPY.project : SCOPE_COPY.portfolio;
 
     const reportQuery = useQuery({
         queryKey: queryKeys.dashboardAnalytics(projectId),
@@ -86,9 +103,6 @@ export function AnalyticsPanel({ projects, onOpenTask }: AnalyticsPanelProps) {
     });
 
     const report = reportQuery.data ?? null;
-    const scopeLabel = projectId
-        ? (projects.find((project) => project.id === projectId)?.name ?? "проекту")
-        : "всем проектам";
 
     return (
         <section
@@ -102,26 +116,9 @@ export function AnalyticsPanel({ projects, onOpenTask }: AnalyticsPanelProps) {
                     <Sparkles size={16} aria-hidden="true" />
                 </span>
                 <div className="min-w-0 flex-1">
-                    <h2 className="text-[13px] font-semibold text-primary">Аналитика</h2>
-                    <p className="truncate text-[11px] text-muted">
-                        Разбор задач, комментариев, ИСР, доски и документов по {scopeLabel}
-                    </p>
+                    <h2 className="text-[13px] font-semibold text-primary">{copy.title}</h2>
+                    <p className="truncate text-[11px] text-muted">{copy.subtitle}</p>
                 </div>
-                <Select
-                    aria-label="Область анализа"
-                    value={projectId ?? ""}
-                    onChange={(event) =>
-                        setProjectId(event.target.value ? Number(event.target.value) : null)
-                    }
-                    className="w-full sm:w-auto sm:min-w-40"
-                >
-                    <option value="">Все проекты</option>
-                    {projects.map((project) => (
-                        <option key={project.id} value={project.id}>
-                            {project.name}
-                        </option>
-                    ))}
-                </Select>
                 <Button
                     variant="primary"
                     onClick={() => generate.mutate()}
@@ -160,7 +157,7 @@ export function AnalyticsPanel({ projects, onOpenTask }: AnalyticsPanelProps) {
                     onOpenTask={onOpenTask}
                 />
             ) : (
-                <AnalyticsIntro pending={generate.isPending} />
+                <AnalyticsIntro pending={generate.isPending} copy={copy} />
             )}
         </section>
     );
@@ -180,7 +177,12 @@ function AnalyticsSkeleton() {
     );
 }
 
-function AnalyticsIntro({ pending }: { pending: boolean }) {
+interface AnalyticsIntroProps {
+    pending: boolean;
+    copy: (typeof SCOPE_COPY)[keyof typeof SCOPE_COPY];
+}
+
+function AnalyticsIntro({ pending, copy }: AnalyticsIntroProps) {
     return (
         <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
             <span className="ai-mark flex size-11 items-center justify-center rounded-[var(--radius-card)] text-ai-blue">
@@ -192,12 +194,10 @@ function AnalyticsIntro({ pending }: { pending: boolean }) {
             </span>
             <div className="flex max-w-lg flex-col gap-1.5">
                 <h3 className="text-[15px] font-semibold text-primary">
-                    {pending ? "Собираю картину работ" : "Статистика есть — нужна трактовка"}
+                    {pending ? "Собираю картину работ" : copy.introTitle}
                 </h3>
                 <p className="text-[13px] leading-relaxed text-muted">
-                    {pending
-                        ? "Читаю задачи, комментарии, историю изменений, ИСР, стикеры и документы. Обычно это занимает до полуминуты."
-                        : "Аналитика показывает, что и где просрочено, что сделано и как это шло по комментариям, и какие организационные шаги стоит сделать. Запускается кнопкой — расписания нет."}
+                    {pending ? copy.pendingText : copy.introText}
                 </p>
             </div>
         </div>
