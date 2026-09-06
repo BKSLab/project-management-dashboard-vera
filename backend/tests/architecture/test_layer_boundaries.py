@@ -4,15 +4,15 @@
 репозиторием внутри эндпоинта. Поэтому единственная защита — статическая
 проверка того, что каждый слой видит только соседний снизу.
 
-Сообщение об ошибке называет файл, имя и строку: тест должен объяснять,
-что именно нарушено.
+Запреты на импорт собраны в одну таблицу правил: новое правило — это
+строка таблицы, а не ещё один почти такой же тест. Сообщение об ошибке
+перечисляет все нарушения с файлом, именем и строкой.
 """
 
 import ast
 import inspect
+from dataclasses import dataclass
 from pathlib import Path
-
-import pytest
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 ENDPOINTS = SRC / "api" / "v1" / "endpoints"
@@ -64,6 +64,13 @@ def endpoint_files() -> list[Path]:
     return [path for path in sorted(ENDPOINTS.glob("*.py")) if path.name != "__init__.py"]
 
 
+def service_files() -> list[Path]:
+    """Возвращает модули сервисного слоя."""
+    return [
+        path for path in sorted((SRC / "services").glob("*.py")) if path.name != "__init__.py"
+    ]
+
+
 def imported_modules(path: Path) -> list[tuple[str, int]]:
     """Возвращает импортируемые модули с номерами строк."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -76,149 +83,84 @@ def imported_modules(path: Path) -> list[tuple[str, int]]:
     return found
 
 
-@pytest.mark.parametrize("path", endpoint_files(), ids=lambda path: path.name)
-def test_endpoint_does_not_import_the_data_layer(path: Path) -> None:
-    """Эндпоинт не знает ни репозиториев, ни моделей, ни SQLAlchemy.
+@dataclass(frozen=True)
+class ImportRule:
+    """Запрет на импорт для одного слоя.
 
-    Транспорт вызывает сервис и переводит его ошибку в HTTP-ответ. Прямой
-    доступ к данным здесь означал бы, что бизнес-правило живёт в
-    обработчике запроса.
+    Attributes:
+        layer: Название слоя в сообщении об ошибке.
+        files: Модули слоя.
+        forbidden: Префиксы запрещённых модулей.
+        allowed: Модули-исключения, разрешённые явно.
+        reason: Почему граница существует.
     """
-    offenders = [
-        f"{module}:{lineno}"
-        for module, lineno in imported_modules(path)
-        if module.startswith(DATA_LAYER_PREFIXES)
-    ]
 
-    assert not offenders, f"{path.name} импортирует слой данных: {offenders}"
-
-
-@pytest.mark.parametrize("path", endpoint_files(), ids=lambda path: path.name)
-def test_endpoint_does_not_import_client_implementations(path: Path) -> None:
-    """Эндпоинт не знает реализаций внешних клиентов."""
-    offenders = [
-        f"{module}:{lineno}"
-        for module, lineno in imported_modules(path)
-        if module in CLIENT_MODULES
-    ]
-
-    assert not offenders, f"{path.name} импортирует клиента внешней системы: {offenders}"
+    layer: str
+    files: tuple[Path, ...]
+    forbidden: tuple[str, ...]
+    reason: str
+    allowed: tuple[str, ...] = ()
 
 
-@pytest.mark.parametrize("path", endpoint_files(), ids=lambda path: path.name)
-def test_endpoint_does_not_construct_services(path: Path) -> None:
-    """Эндпоинт получает готовый сервис, а не собирает его сам.
-
-    Собранный вручную сервис невозможно подменить через
-    `dependency_overrides`, и его зависимости перестают быть видимыми в
-    графе приложения.
-    """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    offenders = [
-        f"{node.func.id}:{node.lineno}"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id.endswith(("Service", "Repository"))
-    ]
-
-    assert not offenders, f"{path.name} создаёт зависимость напрямую: {offenders}"
-
-
-@pytest.mark.parametrize("path", MCP_TRANSPORT_MODULES, ids=lambda path: path.name)
-def test_mcp_tool_does_not_import_the_data_layer(path: Path) -> None:
-    """Инструмент MCP не знает слоя данных — как и HTTP-эндпоинт.
-
-    Пока инструмент собирал репозитории сам, правила доступа и выборки
-    существовали в MCP отдельной копией и молча расходились с HTTP.
-    """
-    offenders = [
-        f"{module}:{lineno}"
-        for module, lineno in imported_modules(path)
-        if module.startswith(DATA_LAYER_PREFIXES) and module not in MODEL_ENUM_MODULES
-    ]
-
-    assert not offenders, f"{path.name} импортирует слой данных: {offenders}"
-
-
-@pytest.mark.parametrize("path", MCP_TRANSPORT_MODULES, ids=lambda path: path.name)
-def test_mcp_tool_does_not_construct_services(path: Path) -> None:
-    """Инструмент получает готовые сервисы из контекста вызова.
-
-    Сборка внутри обработчика вернула бы MCP собственный граф
-    зависимостей, который нельзя подменить в тесте.
-    """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    offenders = [
-        f"{node.func.id}:{node.lineno}"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id.endswith(("Service", "Repository"))
-    ]
-
-    assert not offenders, f"{path.name} создаёт зависимость напрямую: {offenders}"
-
-
-def test_worker_does_not_know_the_data_layer_or_the_session_factory() -> None:
-    """Фоновый индексатор не собирает репозитории и не ищет фабрику сессий.
-
-    Пока worker брал `async_session_factory` из модуля, его зависимости
-    нельзя было ни увидеть в сигнатуре, ни подменить в тесте без
-    monkeypatch модульных globals.
-    """
-    path = SRC / "knowledge" / "worker.py"
-    offenders = [
-        f"{module}:{lineno}"
-        for module, lineno in imported_modules(path)
-        if module.startswith(("src.repositories", "src.db.session", "sqlalchemy"))
-    ]
-
-    assert not offenders, f"worker.py импортирует слой данных: {offenders}"
-
-
-def test_worker_receives_its_dependencies_through_the_constructor() -> None:
-    """Конструктор worker-а перечисляет всё, от чего он зависит."""
-    from src.knowledge.worker import KnowledgeWorker
-
-    parameters = set(inspect.signature(KnowledgeWorker.__init__).parameters) - {"self"}
-
-    assert parameters == {"config", "queue", "index_service", "runtime"}
-
-
-def test_mcp_tool_context_does_not_expose_a_session() -> None:
-    """В контексте инструмента нет сессии базы данных.
-
-    Наличие сессии сделало бы границу необязательной: обработчик мог бы
-    обойти сервис, и проверка импортов этого бы не заметила.
-    """
-    from src.mcp_server.context import ToolContext
-
-    assert "session" not in ToolContext.__annotations__, (
-        "ToolContext снова отдаёт сессию: инструмент сможет ходить в базу мимо сервисов."
-    )
-
-
-@pytest.mark.parametrize(
-    "path",
-    [path for path in sorted((SRC / "services").glob("*.py")) if path.name != "__init__.py"],
-    ids=lambda path: path.name,
+IMPORT_RULES = (
+    ImportRule(
+        layer="HTTP-эндпоинт",
+        files=tuple(endpoint_files()),
+        forbidden=DATA_LAYER_PREFIXES,
+        reason=(
+            "транспорт вызывает сервис и переводит его ошибку в HTTP-ответ; "
+            "прямой доступ к данным означал бы бизнес-правило в обработчике запроса"
+        ),
+    ),
+    ImportRule(
+        layer="HTTP-эндпоинт",
+        files=tuple(endpoint_files()),
+        forbidden=CLIENT_MODULES,
+        reason="эндпоинт работает с сервисом, а не с реализацией внешнего клиента",
+    ),
+    ImportRule(
+        layer="инструмент MCP",
+        files=MCP_TRANSPORT_MODULES,
+        forbidden=DATA_LAYER_PREFIXES,
+        allowed=MODEL_ENUM_MODULES,
+        reason=(
+            "пока инструмент собирал репозитории сам, правила доступа и выборки "
+            "существовали в MCP отдельной копией и молча расходились с HTTP"
+        ),
+    ),
+    ImportRule(
+        layer="сервис",
+        files=tuple(service_files()),
+        forbidden=("fastapi", "src.dependencies", "src.db.session", "sqlalchemy"),
+        reason=(
+            "импорт FastAPI означал бы бизнес-правило в терминах HTTP, недоступное "
+            "из MCP и worker-а, а импорт SQLAlchemy — запрос мимо репозитория"
+        ),
+    ),
+    ImportRule(
+        layer="фоновый индексатор",
+        files=(SRC / "knowledge" / "worker.py",),
+        forbidden=("src.repositories", "src.db.session", "sqlalchemy"),
+        reason=(
+            "пока worker брал фабрику сессий из модуля, его зависимости нельзя было "
+            "ни увидеть в сигнатуре, ни подменить в тесте"
+        ),
+    ),
 )
-def test_service_does_not_import_transport(path: Path) -> None:
-    """Сервис не знает ни FastAPI, ни слоя зависимостей, ни SQL.
 
-    Импорт FastAPI в сервисе означает, что бизнес-правило описано в
-    терминах HTTP и не может быть вызвано из MCP или worker-а. Импорт
-    SQLAlchemy означал бы, что запрос строится мимо репозитория.
-    """
-    forbidden = ("fastapi", "src.dependencies", "src.db.session", "sqlalchemy")
-    offenders = [
-        f"{module}:{lineno}"
-        for module, lineno in imported_modules(path)
-        if module.startswith(forbidden)
-    ]
 
-    assert not offenders, f"{path.name} импортирует транспортный слой: {offenders}"
+def test_layers_import_only_what_they_are_allowed_to() -> None:
+    """Ни один слой не импортирует то, что ему запрещено таблицей правил."""
+    offenders: list[str] = []
+    for rule in IMPORT_RULES:
+        for path in rule.files:
+            offenders.extend(
+                f"{rule.layer} {path.name}:{lineno} → {module} ({rule.reason})"
+                for module, lineno in imported_modules(path)
+                if module.startswith(rule.forbidden) and module not in rule.allowed
+            )
+
+    assert not offenders, "Нарушены границы слоёв:\n  " + "\n  ".join(offenders)
 
 
 def test_repository_constructors_live_only_in_composition_modules() -> None:
@@ -226,6 +168,8 @@ def test_repository_constructors_live_only_in_composition_modules() -> None:
 
     Конструктор репозитория в другом месте означает скрытую зависимость
     от сессии: её нельзя ни увидеть в сигнатуре, ни подменить в тесте.
+    Правило обходит всё дерево, поэтому отдельные проверки эндпоинтов и
+    инструментов MCP не нужны — они попадают под него наравне со всеми.
     """
     allowed_dirs = (SRC / "repositories", SRC / "db")
     offenders: list[str] = []
@@ -237,13 +181,13 @@ def test_repository_constructors_live_only_in_composition_modules() -> None:
         if any(path.is_relative_to(item) for item in allowed_dirs):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id.endswith("Repository")
-            ):
-                offenders.append(f"{path.relative_to(SRC.parent)}:{node.lineno} {node.func.id}")
+        offenders.extend(
+            f"{path.relative_to(SRC.parent)}:{node.lineno} {node.func.id}"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id.endswith("Repository")
+        )
 
     assert not offenders, (
         "Репозитории создаются вне модулей сборки графа:\n  " + "\n  ".join(offenders)
@@ -255,7 +199,8 @@ def test_service_and_client_constructors_live_only_in_composition_modules() -> N
 
     Сервис, собранный внутри обработчика, невозможно подменить в тесте, а
     клиент, созданный на лету, заводит собственное соединение мимо
-    владельца ресурса.
+    владельца ресурса. Как и правило выше, проверка идёт по всему дереву
+    и покрывает транспорт HTTP и MCP.
     """
     allowed_dirs = (SRC / "services", SRC / "clients", SRC / "storage")
     offenders: list[str] = []
@@ -277,6 +222,28 @@ def test_service_and_client_constructors_live_only_in_composition_modules() -> N
 
     assert not offenders, (
         "Сервисы или клиенты создаются вне модулей сборки графа:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_worker_receives_its_dependencies_through_the_constructor() -> None:
+    """Конструктор worker-а перечисляет всё, от чего он зависит."""
+    from src.knowledge.worker import KnowledgeWorker
+
+    parameters = set(inspect.signature(KnowledgeWorker.__init__).parameters) - {"self"}
+
+    assert parameters == {"config", "queue", "index_service", "runtime"}
+
+
+def test_mcp_tool_context_does_not_expose_a_session() -> None:
+    """В контексте инструмента нет сессии базы данных.
+
+    Наличие сессии сделало бы границу необязательной: обработчик мог бы
+    обойти сервис, и проверка импортов этого бы не заметила.
+    """
+    from src.mcp_server.context import ToolContext
+
+    assert "session" not in ToolContext.__annotations__, (
+        "ToolContext снова отдаёт сессию: инструмент сможет ходить в базу мимо сервисов."
     )
 
 

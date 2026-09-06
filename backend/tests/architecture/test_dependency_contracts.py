@@ -4,14 +4,14 @@
 сервисе или вернувшийся глобальный runtime не ломают ни один сценарный
 тест, поэтому единственная защита от их возвращения — статический guard.
 
-Тест сообщает точный файл и строку: сообщение об ошибке должно объяснять,
-что именно нарушено, а не только факт нарушения.
+Один тест — одно правило по всему дереву. Проверка перечисляет все
+нарушения сразу: разбитая по файлам параметризация показывала только
+первый упавший файл и заставляла узнавать про остальные следующим
+прогоном.
 """
 
 import ast
 from pathlib import Path
-
-import pytest
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 
@@ -38,6 +38,17 @@ PENDING_SETTINGS_READERS: set[Path] = set()
 
 DEPENDENCIES = SRC / "dependencies"
 
+# Сценарии с медленным внешним вызовом. Каждый обязан работать через
+# короткую область базы, а не через репозитории, живущие вместе с ним.
+EXTERNAL_CALL_SERVICES = {
+    "analytics.py": "AnalyticsService",
+    "project_agent.py": "ProjectAgentService",
+    "task_descriptions.py": "TaskDescriptionService",
+    "task_documents.py": "TaskDocumentImportService",
+    "wbs_suggestion.py": "WbsSuggestionService",
+    "attachment_download.py": "AttachmentDownloadService",
+}
+
 
 def iter_python_files(*relative: str) -> list[Path]:
     """Возвращает исходные файлы указанных пакетов без кеша интерпретатора."""
@@ -47,6 +58,16 @@ def iter_python_files(*relative: str) -> list[Path]:
         target = [root] if root.is_file() else sorted(root.rglob("*.py"))
         files.extend(path for path in target if "__pycache__" not in path.parts)
     return files
+
+
+def parse(path: Path) -> ast.AST:
+    """Разбирает исходный файл в синтаксическое дерево."""
+    return ast.parse(path.read_text(encoding="utf-8"))
+
+
+def where(path: Path, line: int) -> str:
+    """Возвращает адрес нарушения в виде `путь:строка`."""
+    return f"{path.relative_to(SRC.parent)}:{line}"
 
 
 def calls_named(tree: ast.AST, name: str) -> list[int]:
@@ -63,58 +84,36 @@ def calls_named(tree: ast.AST, name: str) -> list[int]:
     return lines
 
 
-@pytest.mark.parametrize(
-    "path",
-    iter_python_files("services"),
-    ids=lambda path: path.name,
-)
-def test_service_never_reads_global_settings(path: Path) -> None:
-    """Сервис получает значения через конструктор, а не читает настройки."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    lines = calls_named(tree, "get_settings")
+def imported_names(tree: ast.AST) -> list[tuple[str, str, int]]:
+    """Возвращает импорты как тройки «модуль, имя, строка»."""
+    found: list[tuple[str, str, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            found.extend((node.module, alias.name, node.lineno) for alias in node.names)
+        elif isinstance(node, ast.Import):
+            found.extend((alias.name, alias.name, node.lineno) for alias in node.names)
+    return found
 
-    assert not lines, (
-        f"{path.relative_to(SRC.parent)} вызывает get_settings() в строках {lines}. "
-        "Нужное значение передаётся сервису конструктором."
+
+def caught_names(handler: ast.ExceptHandler) -> list[str]:
+    """Возвращает имена исключений, перехваченных клаузой."""
+    if handler.type is None:
+        return []
+    elements = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return [element.id for element in elements if isinstance(element, ast.Name)]
+
+
+def init_of(tree: ast.AST, class_name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    """Возвращает конструктор указанного класса."""
+    service = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name == class_name
     )
-
-
-@pytest.mark.parametrize(
-    "path",
-    iter_python_files("services", "mcp_server", "knowledge/worker.py", "api"),
-    ids=lambda path: path.name,
-)
-def test_no_module_finds_clients_by_itself(path: Path) -> None:
-    """Глобального локатора клиентов больше нет ни у кого."""
-    source = path.read_text(encoding="utf-8")
-
-    assert "get_knowledge_runtime()" not in source, (
-        f"{path.relative_to(SRC.parent)} ищет клиентов сам. "
-        "Клиенты создаёт lifespan и передаёт через зависимость."
-    )
-
-
-def test_global_runtime_locator_is_gone() -> None:
-    """Ленивый глобальный runtime удалён вместе со своим состоянием."""
-    source = (SRC / "knowledge" / "runtime.py").read_text(encoding="utf-8")
-
-    assert "global _runtime" not in source
-    assert "def get_knowledge_runtime(" not in source
-
-
-@pytest.mark.parametrize(
-    "path",
-    iter_python_files("mcp_server", "knowledge/worker.py"),
-    ids=lambda path: path.name,
-)
-def test_transport_and_worker_do_not_read_global_settings(path: Path) -> None:
-    """Транспорт и worker получают настройки аргументом, а не глобально."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    lines = calls_named(tree, "get_settings")
-
-    assert not lines, (
-        f"{path.relative_to(SRC.parent)} вызывает get_settings() в строках {lines}. "
-        "Настройки передаются из composition root."
+    return next(
+        node
+        for node in service.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == "__init__"
     )
 
 
@@ -122,17 +121,17 @@ def test_settings_are_read_only_in_declared_composition_points() -> None:
     """Список мест, читающих глобальные настройки, зафиксирован явно.
 
     Новая точка чтения — осознанное решение: она должна попасть в
-    allowlist вместе с обоснованием, а не появиться незаметно.
+    allowlist вместе с обоснованием, а не появиться незаметно. Правило
+    покрывает всё дерево, поэтому отдельные проверки по сервисам,
+    транспорту и worker-у не нужны: ни один из них в allowlist не входит.
     """
     allowed = SETTINGS_ALLOWLIST | PENDING_SETTINGS_READERS
-    offenders: list[str] = []
-    for path in iter_python_files("."):
-        if path in allowed:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        lines = calls_named(tree, "get_settings")
-        if lines:
-            offenders.append(f"{path.relative_to(SRC.parent)}:{lines}")
+    offenders = [
+        where(path, line)
+        for path in iter_python_files(".")
+        if path not in allowed
+        for line in calls_named(parse(path), "get_settings")
+    ]
 
     assert not offenders, (
         "Настройки читаются вне разрешённых точек сборки: " + ", ".join(offenders)
@@ -146,11 +145,11 @@ def test_pending_settings_readers_still_need_the_exception() -> None:
     отложенных: иначе исключение переживёт причину, ради которой оно
     появилось, и перестанет что-либо охранять.
     """
-    stale: list[str] = []
-    for path in PENDING_SETTINGS_READERS:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        if not calls_named(tree, "get_settings"):
-            stale.append(str(path.relative_to(SRC.parent)))
+    stale = [
+        str(path.relative_to(SRC.parent))
+        for path in PENDING_SETTINGS_READERS
+        if not calls_named(parse(path), "get_settings")
+    ]
 
     assert not stale, (
         "Файлы больше не читают настройки и должны быть убраны из "
@@ -158,96 +157,96 @@ def test_pending_settings_readers_still_need_the_exception() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "path",
-    iter_python_files("clients", "storage"),
-    ids=lambda path: path.name,
-)
-def test_client_does_not_create_its_own_transport(path: Path) -> None:
+def test_no_module_finds_clients_by_itself() -> None:
+    """Глобального локатора клиентов больше нет ни у кого."""
+    offenders = [
+        str(path.relative_to(SRC.parent))
+        for path in iter_python_files("services", "mcp_server", "knowledge/worker.py", "api")
+        if "get_knowledge_runtime()" in path.read_text(encoding="utf-8")
+    ]
+
+    assert not offenders, (
+        "Клиентов ищут сами: " + ", ".join(offenders) + ". "
+        "Клиенты создаёт lifespan и передаёт через зависимость."
+    )
+
+
+def test_global_runtime_locator_is_gone() -> None:
+    """Ленивый глобальный runtime удалён вместе со своим состоянием."""
+    source = (SRC / "knowledge" / "runtime.py").read_text(encoding="utf-8")
+
+    assert "global _runtime" not in source
+    assert "def get_knowledge_runtime(" not in source
+
+
+def test_client_does_not_create_its_own_transport() -> None:
     """Клиент получает transport готовым: у сетевого ресурса один владелец."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    created = [
-        node.lineno
-        for node in ast.walk(tree)
+    offenders = [
+        where(path, node.lineno)
+        for path in iter_python_files("clients", "storage")
+        for node in ast.walk(parse(path))
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id in {"AsyncClient", "AsyncQdrantClient"}
     ]
 
-    assert not created, (
-        f"{path.relative_to(SRC.parent)} создаёт сетевой клиент в строках {created}. "
+    assert not offenders, (
+        "Сетевой клиент создаётся внутри слоя клиентов: " + ", ".join(offenders) + ". "
         "Transport создаёт lifespan и передаёт конструктором."
     )
 
 
-@pytest.mark.parametrize(
-    "path",
-    [SRC / "dependencies" / "auth.py", SRC / "dependencies" / "access.py"],
-    ids=["auth", "access"],
-)
-def test_auth_and_access_adapters_do_not_touch_data(path: Path) -> None:
+def test_auth_and_access_adapters_do_not_touch_data() -> None:
     """Auth и access зависимости не обращаются к данным.
 
     Им разрешено единственное исключение — перевод ошибки сервиса в
     `HTTPException`. Всё остальное, включая правила доступа и чтение
     репозиториев, принадлежит сервисному слою.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    forbidden_prefixes = ("src.repositories", "src.db")
-    offenders: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            if node.module.startswith(forbidden_prefixes):
-                offenders.append(f"{node.module}:{node.lineno}")
-        elif isinstance(node, ast.Import):
-            offenders.extend(
-                f"{alias.name}:{node.lineno}"
-                for alias in node.names
-                if alias.name.startswith(forbidden_prefixes)
-            )
+    forbidden = ("src.repositories", "src.db")
+    offenders = [
+        f"{where(path, line)} ({module})"
+        for path in (DEPENDENCIES / "auth.py", DEPENDENCIES / "access.py")
+        for module, _, line in imported_names(parse(path))
+        if module.startswith(forbidden)
+    ]
 
     assert not offenders, (
-        f"{path.relative_to(SRC.parent)} обращается к слою данных: {offenders}. "
+        "Адаптеры auth/access обращаются к слою данных: " + ", ".join(offenders) + ". "
         "Правила доступа принадлежат сервису."
     )
 
 
-@pytest.mark.parametrize(
-    "path",
-    [SRC / "dependencies" / "auth.py", SRC / "dependencies" / "access.py"],
-    ids=["auth", "access"],
-)
-def test_required_dependencies_have_no_none_default(path: Path) -> None:
+def test_required_dependencies_have_no_none_default() -> None:
     """Обязательная зависимость не может отсутствовать молча.
 
     `= None` у репозитория или сервиса превращает ошибку сборки графа в
     падение по `AttributeError` где-то ниже.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
     offenders: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
-            continue
-        args = node.args
-        defaults = dict(
-            zip(args.args[len(args.args) - len(args.defaults) :], args.defaults, strict=True)
-        )
-        for argument, default in defaults.items():
-            annotation = ast.unparse(argument.annotation) if argument.annotation else ""
-            is_none_default = isinstance(default, ast.Constant) and default.value is None
-            looks_required = annotation.endswith(("ServiceDep", "RepositoryDep"))
-            if is_none_default and looks_required:
-                offenders.append(f"{node.name}({argument.arg}) в строке {node.lineno}")
+    for path in (DEPENDENCIES / "auth.py", DEPENDENCIES / "access.py"):
+        for node in ast.walk(parse(path)):
+            if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+                continue
+            args = node.args
+            defaults = dict(
+                zip(args.args[len(args.args) - len(args.defaults) :], args.defaults, strict=True)
+            )
+            for argument, default in defaults.items():
+                annotation = ast.unparse(argument.annotation) if argument.annotation else ""
+                is_none_default = isinstance(default, ast.Constant) and default.value is None
+                looks_required = annotation.endswith(("ServiceDep", "RepositoryDep"))
+                if is_none_default and looks_required:
+                    offenders.append(f"{where(path, node.lineno)} {node.name}({argument.arg})")
 
     assert not offenders, (
-        f"{path.relative_to(SRC.parent)}: обязательные зависимости объявлены "
-        f"необязательными: {offenders}"
+        "Обязательные зависимости объявлены необязательными: " + ", ".join(offenders)
     )
 
 
 def test_endpoints_never_receive_orm_models_from_access_guards() -> None:
     """Guard доступа не поднимает персистентную модель в эндпоинт."""
-    source = (SRC / "dependencies" / "access.py").read_text(encoding="utf-8")
+    source = (DEPENDENCIES / "access.py").read_text(encoding="utf-8")
     removed_aliases = (
         "AccessibleProjectDep",
         "OwnedProjectDep",
@@ -263,64 +262,47 @@ def test_endpoints_never_receive_orm_models_from_access_guards() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "path",
-    iter_python_files("clients", "storage"),
-    ids=lambda path: path.name,
-)
-def test_client_and_storage_do_not_import_service_errors(path: Path) -> None:
+def test_client_and_storage_do_not_import_service_errors() -> None:
     """Нижний слой не знает исключений вышестоящего.
 
     Клиент, поднимающий `*ServiceError`, фактически объявляет чужой
     контракт: вышестоящий сервис перестаёт быть местом, где решается,
     во что превращается сбой внешней системы.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    offenders: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom) or not node.module:
-            continue
-        if not node.module.startswith("src.exceptions"):
-            continue
-        if node.module in {"src.exceptions.clients", "src.exceptions.storage"}:
-            continue
-        offenders.extend(
-            f"{node.module}.{alias.name}:{node.lineno}"
-            for alias in node.names
-            if alias.name.endswith("ServiceError") or "Service" in alias.name
-        )
+    own = {"src.exceptions.clients", "src.exceptions.storage"}
+    offenders = [
+        f"{where(path, line)} ({module}.{name})"
+        for path in iter_python_files("clients", "storage")
+        for module, name, line in imported_names(parse(path))
+        if module.startswith("src.exceptions")
+        and module not in own
+        and (name.endswith("ServiceError") or "Service" in name)
+    ]
 
     assert not offenders, (
-        f"{path.relative_to(SRC.parent)} импортирует исключения сервисного слоя: {offenders}. "
-        "Преобразование принадлежит вызывающему сервису."
+        "Клиент или хранилище импортирует исключения сервисного слоя: "
+        + ", ".join(offenders)
+        + ". Преобразование принадлежит вызывающему сервису."
     )
 
 
-@pytest.mark.parametrize(
-    "path",
-    iter_python_files("api"),
-    ids=lambda path: path.name,
-)
-def test_endpoints_do_not_catch_lower_layer_errors(path: Path) -> None:
+def test_endpoints_do_not_catch_lower_layer_errors() -> None:
     """Эндпоинт не ловит ошибки клиента, хранилища или репозитория.
 
     Их обязан преобразовать сервис: если такая ошибка доходит до
     транспорта, значит граница слоя где-то пропущена.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
     forbidden_suffixes = ("ClientError", "StorageError", "RepositoryError")
-    offenders: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ExceptHandler) or node.type is None:
-            continue
-        elements = node.type.elts if isinstance(node.type, ast.Tuple) else [node.type]
-        for element in elements:
-            if isinstance(element, ast.Name) and element.id.endswith(forbidden_suffixes):
-                offenders.append(f"{element.id}:{node.lineno}")
+    offenders = [
+        f"{where(path, node.lineno)} ({name})"
+        for path in iter_python_files("api")
+        for node in ast.walk(parse(path))
+        if isinstance(node, ast.ExceptHandler)
+        for name in caught_names(node)
+        if name.endswith(forbidden_suffixes)
+    ]
 
-    assert not offenders, (
-        f"{path.relative_to(SRC.parent)} ловит ошибку нижнего слоя: {offenders}."
-    )
+    assert not offenders, "Эндпоинт ловит ошибку нижнего слоя: " + ", ".join(offenders)
 
 
 def test_broad_application_error_is_confined_to_transport_boundaries() -> None:
@@ -330,20 +312,13 @@ def test_broad_application_error_is_confined_to_transport_boundaries() -> None:
     обрабатывается, и молча проглатывает новое семейство ошибок.
     """
     allowed_prefixes = (SRC / "mcp_server",)
-    offenders: list[str] = []
-    for path in iter_python_files("."):
-        if any(path.is_relative_to(prefix) for prefix in allowed_prefixes):
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ExceptHandler) or node.type is None:
-                continue
-            elements = node.type.elts if isinstance(node.type, ast.Tuple) else [node.type]
-            offenders.extend(
-                f"{path.relative_to(SRC.parent)}:{node.lineno}"
-                for element in elements
-                if isinstance(element, ast.Name) and element.id == "ApplicationError"
-            )
+    offenders = [
+        where(path, node.lineno)
+        for path in iter_python_files(".")
+        if not any(path.is_relative_to(prefix) for prefix in allowed_prefixes)
+        for node in ast.walk(parse(path))
+        if isinstance(node, ast.ExceptHandler) and "ApplicationError" in caught_names(node)
+    ]
 
     assert not offenders, (
         "Широкий перехват ApplicationError вне транспортной границы: " + ", ".join(offenders)
@@ -359,8 +334,7 @@ def test_no_dead_reraise_of_own_errors_remains() -> None:
     """
     offenders: list[str] = []
     for path in iter_python_files("services"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
+        for node in ast.walk(parse(path)):
             if not isinstance(node, ast.Try):
                 continue
             for index, handler in enumerate(node.handlers):
@@ -381,110 +355,52 @@ def test_no_dead_reraise_of_own_errors_remains() -> None:
                 if any("Exception" in item or "BaseException" in item for item in later_types):
                     continue
                 offenders.append(
-                    f"{path.relative_to(SRC.parent)}:{handler.lineno} "
-                    f"({ast.unparse(handler.type)})"
+                    f"{where(path, handler.lineno)} ({ast.unparse(handler.type)})"
                 )
 
     assert not offenders, "Мёртвые клаузы `except ...: raise`: " + ", ".join(offenders)
 
 
-# Сценарии с медленным внешним вызовом. Каждый обязан работать через
-# короткую область базы, а не через репозитории, живущие вместе с ним.
-EXTERNAL_CALL_SERVICES = {
-    "analytics.py": "AnalyticsService",
-    "project_agent.py": "ProjectAgentService",
-    "task_descriptions.py": "TaskDescriptionService",
-    "task_documents.py": "TaskDocumentImportService",
-    "wbs_suggestion.py": "WbsSuggestionService",
-    "attachment_download.py": "AttachmentDownloadService",
-}
+def test_service_with_external_call_works_through_a_short_db_scope() -> None:
+    """Сервис с медленным внешним вызовом не удерживает соединение с базой.
 
-
-@pytest.mark.parametrize(
-    ("file_name", "class_name"),
-    sorted(EXTERNAL_CALL_SERVICES.items()),
-    ids=sorted(EXTERNAL_CALL_SERVICES.values()),
-)
-def test_service_with_external_call_holds_no_repositories(
-    file_name: str,
-    class_name: str,
-) -> None:
-    """Сервис с внешним вызовом не хранит репозитории как свои поля.
-
-    Хранимый репозиторий означает сессию, живущую столько же, сколько сам
-    сервис. Тогда соединение с PostgreSQL остаётся занятым и во время
-    ожидания модели, и во время передачи файла — ради чего короткая
-    область и вводилась.
+    Три свойства проверяются вместе, потому что нарушение любого из них
+    означает одно и то же: сессия живёт столько же, сколько сервис, и
+    соединение занято и во время ожидания модели, и во время передачи
+    файла. Хранимый репозиторий даёт длинную сессию напрямую, отсутствие
+    фабрики области не оставляет короткой альтернативы, а импорт
+    SQLAlchemy означает, что реализация области уехала из DI-слоя в сам
+    сервис.
     """
-    tree = ast.parse((SRC / "services" / file_name).read_text(encoding="utf-8"))
-    service = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ClassDef) and node.name == class_name
-    )
-    init = next(
-        node
-        for node in service.body
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == "__init__"
-    )
+    offenders: list[str] = []
+    for file_name, class_name in sorted(EXTERNAL_CALL_SERVICES.items()):
+        path = SRC / "services" / file_name
+        source = path.read_text(encoding="utf-8")
+        init = init_of(ast.parse(source), class_name)
 
-    stored: list[str] = []
-    for node in ast.walk(init):
-        if not isinstance(node, ast.Assign):
-            continue
-        for target in node.targets:
-            if (
-                isinstance(target, ast.Attribute)
-                and isinstance(target.value, ast.Name)
-                and target.value.id == "self"
-                and target.attr.endswith(("_repository", "unit_of_work"))
-            ):
-                stored.append(target.attr)
+        stored = [
+            target.attr
+            for node in ast.walk(init)
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "self"
+            and target.attr.endswith(("_repository", "unit_of_work"))
+        ]
+        if stored:
+            offenders.append(f"{class_name} хранит {stored}")
 
-    assert not stored, (
-        f"{class_name} хранит {stored}: сессия проживёт столько же, сколько сервис. "
-        "Работа с базой должна идти через короткую область."
-    )
+        arguments = {argument.arg for argument in init.args.args + init.args.kwonlyargs}
+        if "scope" not in arguments:
+            offenders.append(f"{class_name} не получает фабрику короткой области")
 
+        if "sqlalchemy" in source:
+            offenders.append(f"{class_name} импортирует SQLAlchemy")
 
-@pytest.mark.parametrize(
-    ("file_name", "class_name"),
-    sorted(EXTERNAL_CALL_SERVICES.items()),
-    ids=sorted(EXTERNAL_CALL_SERVICES.values()),
-)
-def test_service_with_external_call_receives_a_scope(
-    file_name: str,
-    class_name: str,
-) -> None:
-    """Такой сервис получает фабрику короткой области конструктором."""
-    tree = ast.parse((SRC / "services" / file_name).read_text(encoding="utf-8"))
-    service = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ClassDef) and node.name == class_name
-    )
-    init = next(
-        node
-        for node in service.body
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == "__init__"
-    )
-    arguments = {argument.arg for argument in init.args.args + init.args.kwonlyargs}
-
-    assert "scope" in arguments, f"{class_name} не получает фабрику короткой области."
-
-
-@pytest.mark.parametrize(
-    "file_name",
-    sorted(EXTERNAL_CALL_SERVICES),
-    ids=sorted(EXTERNAL_CALL_SERVICES),
-)
-def test_service_with_external_call_does_not_import_sqlalchemy(file_name: str) -> None:
-    """Сервис не знает о SQLAlchemy: реализация области живёт в DI-слое."""
-    source = (SRC / "services" / file_name).read_text(encoding="utf-8")
-
-    assert "sqlalchemy" not in source, (
-        f"{file_name} импортирует SQLAlchemy: реализация короткой области "
-        "принадлежит слою сборки зависимостей."
+    assert not offenders, (
+        "Сервисы с внешним вызовом работают не через короткую область: "
+        + "; ".join(offenders)
     )
 
 
@@ -514,57 +430,52 @@ def factories_wrapped_in_aliases(tree: ast.AST) -> set[str]:
     return wrapped
 
 
-@pytest.mark.parametrize("path", dependency_modules(), ids=lambda path: path.name)
-def test_every_dependency_factory_has_a_dep_alias(path: Path) -> None:
+def test_every_dependency_factory_has_a_dep_alias() -> None:
     """У каждой публичной фабрики зависимости есть свой `...Dep`-алиас.
 
     Алиас — единственная форма, которую видят потребители: без него
     каждый вызывающий пишет `Annotated[..., Depends(...)]` заново, и
     подмена в тестах перестаёт быть однозначной.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    factories = {
-        node.name
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-        and node.name.startswith(("get_", "require_"))
-    }
+    offenders: list[str] = []
+    for path in dependency_modules():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        factories = {
+            node.name
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            and node.name.startswith(("get_", "require_"))
+        }
+        missing = sorted(factories - factories_wrapped_in_aliases(tree))
+        offenders.extend(f"{path.name}: {name}" for name in missing)
 
-    missing = sorted(factories - factories_wrapped_in_aliases(tree))
-
-    assert not missing, f"{path.name}: фабрики без `...Dep`-алиаса: {missing}"
+    assert not offenders, "Фабрики без `...Dep`-алиаса: " + ", ".join(offenders)
 
 
-@pytest.mark.parametrize(
-    "path",
-    iter_python_files("dependencies", "api"),
-    ids=lambda path: path.name,
-)
-def test_dependencies_are_declared_through_aliases(path: Path) -> None:
+def test_dependencies_are_declared_through_aliases() -> None:
     """Потребитель объявляет зависимость алиасом, а не `Depends` в сигнатуре.
 
     Повторённый вручную `Annotated[..., Depends(...)]` расходится с
     алиасом молча: тип и фабрика начинают жить отдельно друг от друга.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
     offenders: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            continue
-        arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
-        offenders.extend(
-            f"{node.name}({argument.arg}):{argument.lineno}"
-            for argument in arguments
-            if argument.annotation is not None
-            and any(
-                isinstance(sub, ast.Call)
-                and isinstance(sub.func, ast.Name)
-                and sub.func.id == "Depends"
-                for sub in ast.walk(argument.annotation)
+    for path in iter_python_files("dependencies", "api"):
+        for node in ast.walk(parse(path)):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+            offenders.extend(
+                f"{where(path, argument.lineno)} {node.name}({argument.arg})"
+                for argument in arguments
+                if argument.annotation is not None
+                and any(
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Name)
+                    and sub.func.id == "Depends"
+                    for sub in ast.walk(argument.annotation)
+                )
             )
-        )
 
     assert not offenders, (
-        f"{path.relative_to(SRC.parent)} объявляет зависимость в сигнатуре "
-        f"вместо `...Dep`-алиаса: {offenders}"
+        "Зависимость объявлена в сигнатуре вместо `...Dep`-алиаса: " + ", ".join(offenders)
     )

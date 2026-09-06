@@ -7,12 +7,14 @@
 
 Реальное поведение `RETURNING`, видимости и отката подтверждают
 integration-тесты на PostgreSQL.
+
+Каждое правило проверяется одним тестом по всему пакету репозиториев:
+сообщение перечисляет все нарушения сразу, а добавление репозитория не
+добавляет новых тестов.
 """
 
 import ast
 from pathlib import Path
-
-import pytest
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 REPOSITORIES = SRC / "repositories"
@@ -73,93 +75,94 @@ def calls_in(node: ast.AST, names: set[str]) -> list[tuple[str, int]]:
     return found
 
 
-@pytest.mark.parametrize("path", repository_files(), ids=lambda path: path.name)
-def test_no_refresh_after_dml(path: Path) -> None:
+def test_no_refresh_after_dml() -> None:
     """После записи нет дочитывания: серверные значения приходят из RETURNING.
 
     Отдельный `refresh()` превращал каждую вставку в два обращения к базе
     ради `created_at` и `updated_at`.
     """
     offenders = [
-        f"{method.name}:{lineno}"
+        f"{path.name}:{method.name}:{lineno}"
+        for path in repository_files()
         for method in public_methods(path)
         for _, lineno in calls_in(method, {"refresh"})
     ]
 
     assert not offenders, (
-        f"{path.name} дочитывает результат после DML: {offenders}. "
+        "Результат дочитывается после DML: " + ", ".join(offenders) + ". "
         "Серверные значения должны приходить из самого запроса."
     )
 
 
-@pytest.mark.parametrize("path", repository_files(), ids=lambda path: path.name)
-def test_ordinary_public_method_issues_one_statement(path: Path) -> None:
+def test_ordinary_public_method_issues_one_statement() -> None:
     """Обычный публичный метод не выполняет несколько запросов подряд.
 
     Несколько запросов в одном методе — это оркестрация, и принадлежит она
     сервису: только он владеет транзакцией и знает бизнес-смысл порядка.
     """
     offenders: list[str] = []
-    for method in public_methods(path):
-        key = (path.name, method.name)
-        if key in BATCH_METHODS or key in MULTI_STATEMENT_ALLOWLIST:
-            continue
-        statements = [
-            (name, lineno)
-            for name, lineno in calls_in(method, QUERY_CALLS)
-            if name != "flush"
-        ]
-        if len(statements) > 1:
-            offenders.append(f"{method.name}: {statements}")
+    for path in repository_files():
+        for method in public_methods(path):
+            key = (path.name, method.name)
+            if key in BATCH_METHODS or key in MULTI_STATEMENT_ALLOWLIST:
+                continue
+            statements = [
+                (name, lineno)
+                for name, lineno in calls_in(method, QUERY_CALLS)
+                if name != "flush"
+            ]
+            if len(statements) > 1:
+                offenders.append(f"{path.name}:{method.name}: {statements}")
 
     assert not offenders, (
-        f"{path.name} выполняет несколько запросов в одном публичном методе:\n  "
-        + "\n  ".join(offenders)
+        "Несколько запросов в одном публичном методе:\n  " + "\n  ".join(offenders)
     )
 
 
-@pytest.mark.parametrize("path", repository_files(), ids=lambda path: path.name)
-def test_public_method_does_not_call_another_public_method(path: Path) -> None:
+def test_public_method_does_not_call_another_public_method() -> None:
     """Публичный метод не собирается из других публичных методов.
 
     Такая сборка прячет второй запрос за вызовом, который выглядит как
     один, и делает число обращений к базе невидимым в месте вызова.
     """
-    names = {method.name for method in public_methods(path)}
     offenders: list[str] = []
-    for method in public_methods(path):
-        if (path.name, method.name) in MULTI_STATEMENT_ALLOWLIST:
-            continue
-        for item in ast.walk(method):
-            if (
-                isinstance(item, ast.Call)
+    for path in repository_files():
+        names = {method.name for method in public_methods(path)}
+        for method in public_methods(path):
+            if (path.name, method.name) in MULTI_STATEMENT_ALLOWLIST:
+                continue
+            offenders.extend(
+                f"{path.name}:{method.name} -> {item.func.attr}:{item.lineno}"
+                for item in ast.walk(method)
+                if isinstance(item, ast.Call)
                 and isinstance(item.func, ast.Attribute)
                 and isinstance(item.func.value, ast.Name)
                 and item.func.value.id == "self"
                 and item.func.attr in names
                 and item.func.attr != method.name
-            ):
-                offenders.append(f"{method.name} -> {item.func.attr}:{item.lineno}")
-
-    assert not offenders, f"{path.name}: публичный метод вызывает другой публичный: {offenders}"
-
-
-@pytest.mark.parametrize("path", repository_files(), ids=lambda path: path.name)
-def test_batch_methods_do_not_loop_over_queries(path: Path) -> None:
-    """Массовая операция не превращается в запрос на каждую строку."""
-    offenders: list[str] = []
-    for method in public_methods(path):
-        if (path.name, method.name) not in BATCH_METHODS:
-            continue
-        for loop in ast.walk(method):
-            if not isinstance(loop, ast.For | ast.AsyncFor):
-                continue
-            inside = calls_in(loop, QUERY_CALLS)
-            if inside:
-                offenders.append(f"{method.name}: {inside}")
+            )
 
     assert not offenders, (
-        f"{path.name}: массовая операция выполняет запрос внутри цикла: {offenders}"
+        "Публичный метод собран из других публичных: " + ", ".join(offenders)
+    )
+
+
+def test_batch_methods_do_not_loop_over_queries() -> None:
+    """Массовая операция не превращается в запрос на каждую строку."""
+    offenders: list[str] = []
+    for path in repository_files():
+        for method in public_methods(path):
+            if (path.name, method.name) not in BATCH_METHODS:
+                continue
+            for loop in ast.walk(method):
+                if not isinstance(loop, ast.For | ast.AsyncFor):
+                    continue
+                inside = calls_in(loop, QUERY_CALLS)
+                if inside:
+                    offenders.append(f"{path.name}:{method.name}: {inside}")
+
+    assert not offenders, (
+        "Массовая операция выполняет запрос внутри цикла: " + ", ".join(offenders)
     )
 
 
