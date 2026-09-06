@@ -13,6 +13,10 @@ from src.db.models.projects import ProjectStatus
 from src.db.models.tasks import TaskPriority
 from src.exceptions.analytics import AnalyticsEmptyScopeError, AnalyticsServiceError
 from src.exceptions.projects import ProjectNotFoundError, ProjectsRepositoryError
+from src.prompts.analytics import (
+    ANALYTICS_PORTFOLIO_SYSTEM_PROMPT,
+    ANALYTICS_PROJECT_SYSTEM_PROMPT,
+)
 from src.schemas.analytics import (
     AnalyticsDraftSchema,
     AnalyticsFindingDraftSchema,
@@ -23,7 +27,7 @@ from src.schemas.analytics import (
     AnalyticsScope,
     AnalyticsSeverity,
 )
-from src.services.analytics import AnalyticsService
+from src.services.analytics import PORTFOLIO_ATTENTION_TASKS, AnalyticsService
 from src.services.db_scope import AnalyticsDbScope
 
 TODAY = date.today()
@@ -49,6 +53,8 @@ def project() -> SimpleNamespace:
         status=ProjectStatus.ACTIVE,
         color="#58a6ff",
         icon=None,
+        start_date=None,
+        due_date=None,
     )
 
 
@@ -277,6 +283,11 @@ async def test_generate_puts_overdue_tasks_first_in_model_context() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_reports_context_boundaries_to_user() -> None:
+    """Портфельная сводка честно называет, сколько задач в неё вошло.
+
+    Портфель берёт от каждого проекта только проблемные и недавно закрытые
+    задачи: пользователь должен видеть, что разбор шёл не по всем 240.
+    """
     stages = [stage(1, "В работе", False)]
     tasks = [task(index, stage_id=1) for index in range(1, 121)]
     service, reports_repository, _db = build_service(
@@ -289,7 +300,7 @@ async def test_generate_reports_context_boundaries_to_user() -> None:
 
     context = reports_repository.save.call_args.kwargs["data"]["context_summary"]
     assert context["tasks_total"] == 240
-    assert context["tasks_included"] == 120
+    assert context["tasks_included"] == PORTFOLIO_ATTENTION_TASKS * 2
     assert context["truncated"] is True
     assert context["omitted"]
 
@@ -408,3 +419,116 @@ async def test_report_payload_keeps_only_verifiable_references() -> None:
     assert result.project_key == "PROJ"
     assert result.health is AnalyticsHealth.RISK
     assert result.findings[0].kind is AnalyticsFindingKind.OVERDUE
+
+
+@pytest.mark.asyncio
+async def test_portfolio_takes_only_projects_in_work() -> None:
+    """Сводка дашборда разбирает активные проекты и молчит про остальные.
+
+    Приостановленный, завершённый и ещё не начатый проект решения на
+    сегодня не требуют, а место в контексте занимают наравне с активными.
+    Если активных нет вовсе, это не пустой отчёт, а явный отказ.
+    """
+    active = project()
+    paused = SimpleNamespace(**vars(project()) | {"id": 2, "key": "PAUSE", "status": ProjectStatus.PAUSED})
+    service, reports_repository, _db = build_service(
+        projects=[active, paused],
+        stages=[stage(1, "В работе", False)],
+        tasks=[task(11, stage_id=1)],
+    )
+
+    await service.generate(**actor(), project_id=None)
+
+    content = json.loads(service.llm_client.get_structured_response.call_args.kwargs["content"])
+    assert [item["key"] for item in content["projects"]] == ["PROJ"]
+    assert reports_repository.save.call_args.kwargs["data"]["context_summary"]["projects"] == 1
+
+    service, _, _db = build_service(
+        projects=[paused],
+        stages=[stage(1, "В работе", False)],
+        tasks=[task(11, stage_id=1)],
+    )
+
+    with pytest.raises(AnalyticsEmptyScopeError) as error:
+        await service.generate(**actor(), project_id=None)
+
+    assert "в работе" in error.value.error_details
+
+
+@pytest.mark.asyncio
+async def test_each_scope_gets_its_own_prompt() -> None:
+    """Портфель и проект разбираются разными prompt-ами.
+
+    Вопросы у областей разные: «за какой проект браться» против «что
+    происходит внутри проекта». Общий prompt отвечал на оба посредственно.
+    """
+    service, _, _db = build_service(
+        stages=[stage(1, "В работе", False)],
+        tasks=[task(11, stage_id=1)],
+    )
+
+    await service.generate(**actor(), project_id=None)
+    portfolio_prompt = service.llm_client.get_structured_response.call_args.kwargs["system_prompt"]
+
+    await service.generate(**actor(), project_id=PROJECT_ID)
+    project_prompt = service.llm_client.get_structured_response.call_args.kwargs["system_prompt"]
+
+    assert portfolio_prompt == ANALYTICS_PORTFOLIO_SYSTEM_PROMPT
+    assert project_prompt == ANALYTICS_PROJECT_SYSTEM_PROMPT
+    assert portfolio_prompt != project_prompt
+
+
+@pytest.mark.asyncio
+async def test_portfolio_slice_carries_project_signals_instead_of_task_details() -> None:
+    """Портфельный срез — сводка по проектам, а не разбор их внутренностей.
+
+    По каждому проекту модель получает показатели, ближайшие вехи и
+    несколько задач как доказательство. Комментарии, документы, стикеры,
+    ИСР и история сюда не попадают: на уровне портфеля они не помогают
+    выбрать проект, а бюджет контекста тратят быстрее всего.
+    """
+    stages = [stage(1, "В работе", False), stage(2, "Готово", True)]
+    tasks = [
+        task(11, stage_id=1, due_date=TODAY - timedelta(days=3)),
+        task(12, stage_id=1, due_date=TODAY + timedelta(days=2)),
+        task(13, stage_id=2),
+    ]
+    milestones = [
+        SimpleNamespace(
+            title="Веха",
+            due_date=TODAY - timedelta(days=1),
+            status=ProjectMilestoneStatus.PLANNED,
+        )
+    ]
+    service, _, db = build_service(stages=stages, tasks=tasks, milestones=milestones)
+
+    await service.generate(**actor(), project_id=None)
+
+    content = json.loads(service.llm_client.get_structured_response.call_args.kwargs["content"])
+    entry = content["projects"][0]
+    assert set(entry) == {
+        "key",
+        "name",
+        "status",
+        "description",
+        "start_date",
+        "due_date",
+        "signals",
+        "milestones",
+        "attention_tasks",
+        "recently_closed",
+    }
+    assert entry["signals"]["overdue_tasks"] == 1
+    assert entry["signals"]["done_tasks"] == 1
+    assert [item["title"] for item in entry["milestones"]] == ["Веха"]
+    # Завершённая задача попадает в подтверждение движения, а не в проблемы.
+    assert [item["key"] for item in entry["attention_tasks"]] == ["PROJ-11", "PROJ-12"]
+    assert [item["key"] for item in entry["recently_closed"]] == ["PROJ-13"]
+    assert entry["attention_tasks"][0]["days_overdue"] == 3
+
+    # Тяжёлые источники для портфеля даже не читаются.
+    db.comments.get_for_tasks.assert_not_awaited()
+    db.documents.get_by_project.assert_not_awaited()
+    db.stickers.list_by_project_id.assert_not_awaited()
+    db.activity.get_recent_by_project.assert_not_awaited()
+    db.wbs_nodes.get_by_project.assert_not_awaited()

@@ -1,5 +1,8 @@
 
-from src.prompts.analytics import ANALYTICS_SYSTEM_PROMPT
+from src.prompts.analytics import (
+    ANALYTICS_PORTFOLIO_SYSTEM_PROMPT,
+    ANALYTICS_PROJECT_SYSTEM_PROMPT,
+)
 from src.prompts.base import (
     LANGUAGE_RULE,
     PM_ROLE,
@@ -15,7 +18,8 @@ from src.prompts.task_description import TASK_DESCRIPTION_REPHRASE_PROMPT
 from src.prompts.wbs_suggestion import WBS_SUGGESTION_SYSTEM_PROMPT
 
 ALL_PROMPTS = {
-    "analytics": ANALYTICS_SYSTEM_PROMPT,
+    "analytics_portfolio": ANALYTICS_PORTFOLIO_SYSTEM_PROMPT,
+    "analytics_project": ANALYTICS_PROJECT_SYSTEM_PROMPT,
     "wbs_suggestion": WBS_SUGGESTION_SYSTEM_PROMPT,
     "task_description": TASK_DESCRIPTION_REPHRASE_PROMPT,
     "project_agent": PROJECT_AGENT_SYSTEM_PROMPT,

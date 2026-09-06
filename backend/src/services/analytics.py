@@ -13,7 +13,7 @@ from src.db.models.documents import Document
 from src.db.models.project_milestones import ProjectMilestone, ProjectMilestoneStatus
 from src.db.models.project_stages import ProjectStage
 from src.db.models.project_stickers import ProjectSticker
-from src.db.models.projects import Project
+from src.db.models.projects import Project, ProjectStatus
 from src.db.models.task_activity import TaskActivity
 from src.db.models.task_comments import TaskComment
 from src.db.models.task_dependencies import TaskDependency
@@ -39,7 +39,10 @@ from src.exceptions.task_dependencies import TaskDependenciesRepositoryError
 from src.exceptions.tasks import TasksRepositoryError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.exceptions.wbs_nodes import WbsNodesRepositoryError
-from src.prompts.analytics import ANALYTICS_SYSTEM_PROMPT
+from src.prompts.analytics import (
+    ANALYTICS_PORTFOLIO_SYSTEM_PROMPT,
+    ANALYTICS_PROJECT_SYSTEM_PROMPT,
+)
 from src.schemas.analytics import (
     AnalyticsContextSchema,
     AnalyticsDraftSchema,
@@ -66,6 +69,21 @@ MAX_CONTEXT_CHARS = 90_000
 STALE_TASK_DAYS = 14
 DESCRIPTION_TASKS_LIMIT = 25
 NAME_LIMIT = 302
+
+# Портфельная сводка отвечает на вопрос «за какой проект браться сейчас»,
+# поэтому берёт только проекты в работе. Запланированный, приостановленный
+# и завершённый проект решения сегодняшнего дня не требуют, а место в
+# контексте занимают наравне с активными.
+PORTFOLIO_STATUSES = frozenset({ProjectStatus.ACTIVE})
+
+# Сколько проблемных задач показывается по каждому проекту портфеля: это
+# доказательство оценки, а не список работ.
+PORTFOLIO_ATTENTION_TASKS = 6
+# Сколько недавно закрытых задач подтверждает движение по проекту.
+PORTFOLIO_PROGRESS_TASKS = 4
+# Ближайшие и просроченные вехи проекта в портфельном срезе.
+PORTFOLIO_MILESTONES = 3
+PORTFOLIO_DESCRIPTION_CHARS = 240
 
 RepositoryErrors = (
     AnalyticsReportsRepositoryError,
@@ -257,9 +275,14 @@ class AnalyticsService:
         signals = _build_signals(slices=slices, today=today)
         content, context = _build_content(slices=slices, scope=scope, signals=signals, today=today)
 
+        system_prompt = (
+            ANALYTICS_PROJECT_SYSTEM_PROMPT
+            if scope is AnalyticsScope.PROJECT
+            else ANALYTICS_PORTFOLIO_SYSTEM_PROMPT
+        )
         try:
             draft = await self.llm_client.get_structured_response(
-                system_prompt=ANALYTICS_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 content=content,
                 schema=AnalyticsDraftSchema,
                 max_completion_tokens=MAX_COMPLETION_TOKENS,
@@ -326,14 +349,24 @@ class AnalyticsService:
                 raise ProjectNotFoundError(project_id=project_id)
             return [project]
 
-        projects = [
+        available = [
             project
             for project in await db.projects.get_all()
             if project.id in allowed_ids
         ]
-        if not projects:
+        if not available:
             raise AnalyticsEmptyScopeError(
                 error_details=f"У пользователя id={user_id} нет доступных проектов.",
+            )
+
+        projects = [project for project in available if project.status in PORTFOLIO_STATUSES]
+        if not projects:
+            raise AnalyticsEmptyScopeError(
+                error_details=(
+                    f"У пользователя id={user_id} нет проектов в работе: "
+                    f"доступно {len(available)}, все вне статуса "
+                    f"{', '.join(sorted(status.value for status in PORTFOLIO_STATUSES))}."
+                ),
             )
         return projects
 
@@ -344,17 +377,40 @@ class AnalyticsService:
         project: Project,
         scope: AnalyticsScope,
     ) -> _ProjectSlice:
-        """Загружает всё, что относится к одному проекту анализа."""
-        limits = PROJECT_LIMITS if scope is AnalyticsScope.PROJECT else PORTFOLIO_LIMITS
+        """Загружает всё, что относится к одному проекту анализа.
+
+        Портфельная сводка читает только то, из чего считаются показатели и
+        список проблемных задач: комментарии, документы, стикеры, историю и
+        ИСР она всё равно не показывает, а на десяти проектах это десятки
+        лишних запросов и лишний объём в контексте модели.
+        """
+        deep = scope is AnalyticsScope.PROJECT
+        limits = PROJECT_LIMITS if deep else PORTFOLIO_LIMITS
         stages = await db.stages.get_by_project(project_id=project.id)
         tasks = await db.tasks.get_by_project(project_id=project.id)
+        dependencies = await db.dependencies.get_by_project(project_id=project.id)
+        milestones = await db.milestones.get_by_project(project_id=project.id)
+
+        if not deep:
+            return _ProjectSlice(
+                project=project,
+                stages=stages,
+                tasks=tasks,
+                comments={},
+                activity=[],
+                dependencies=dependencies,
+                nodes=[],
+                milestones=milestones,
+                stickers=[],
+                documents=[],
+                document_task_ids={},
+            )
+
         activity = await db.activity.get_recent_by_project(
             project_id=project.id,
             limit=limits.activity,
         )
-        dependencies = await db.dependencies.get_by_project(project_id=project.id)
         nodes = await db.wbs_nodes.get_by_project(project_id=project.id)
-        milestones = await db.milestones.get_by_project(project_id=project.id)
         stickers = await db.stickers.list_by_project_id(project_id=project.id)
         documents = await db.documents.get_by_project(project_id=project.id)
 
@@ -473,11 +529,20 @@ def _build_content(
 ) -> tuple[str, AnalyticsContextSchema]:
     """Собирает JSON-срез рабочего пространства и описание его границ.
 
-    Срез сначала строится по полным лимитам; если он не влезает в бюджет
-    контекста, пересобирается по ужатым. Так модель получает максимум данных,
-    а пользователь — честное перечисление того, что в анализ не вошло.
+    У портфеля и у проекта разные вопросы, поэтому и срезы разные.
+    Портфельный — сводка по каждому проекту: показатели, ближайшие вехи и
+    несколько задач как доказательство. Он компактен по построению и в
+    пересборке не нуждается.
+
+    Проектный срез сначала строится по полным лимитам; если он не влезает в
+    бюджет контекста, пересобирается по ужатым. Так модель получает максимум
+    данных, а пользователь — честное перечисление того, что не вошло.
     """
-    base = PROJECT_LIMITS if scope is AnalyticsScope.PROJECT else PORTFOLIO_LIMITS
+    if scope is AnalyticsScope.PORTFOLIO:
+        payload, context = _render_portfolio(slices=slices, signals=signals, today=today)
+        return json.dumps(payload, ensure_ascii=False), context
+
+    base = PROJECT_LIMITS
     payload, context = _render(
         slices=slices, limits=base, scope=scope, signals=signals, today=today
     )
@@ -512,6 +577,154 @@ def _tighten(limits: _Limits) -> _Limits:
         activity=max(limits.activity // 2, 10),
         description_chars=max(limits.description_chars // 2, 120),
     )
+
+
+def _render_portfolio(
+    slices: list[_ProjectSlice],
+    signals: AnalyticsSignalsSchema,
+    today: date,
+) -> tuple[dict[str, Any], AnalyticsContextSchema]:
+    """Строит портфельный срез: паспорт и показатели каждого проекта.
+
+    Здесь нет ни комментариев, ни документов, ни истории: на уровне
+    портфеля они не помогают выбрать проект, а бюджет контекста тратят
+    быстрее всего. Вместо них — показатели проекта, его ближайшие вехи и
+    несколько задач, которые эти показатели объясняют.
+    """
+    rendered_projects: list[dict[str, Any]] = []
+    counts_tasks = 0
+    counts_milestones = 0
+    omitted: list[str] = []
+
+    for project_slice in slices:
+        project_signals = _build_signals(slices=[project_slice], today=today)
+        done_stage_ids = _done_stage_ids(project_slice.stages)
+        stage_names = {stage.id: stage.name for stage in project_slice.stages}
+        blocked_by = _blocked_by(
+            dependencies=project_slice.dependencies,
+            done_stage_ids=done_stage_ids,
+            tasks=project_slice.tasks,
+            project_key=project_slice.project.key,
+        )
+
+        attention_source = [
+            task for task in project_slice.tasks if task.stage_id not in done_stage_ids
+        ]
+        attention_tasks = _select_tasks(
+            tasks=attention_source,
+            stages=project_slice.stages,
+            limit=PORTFOLIO_ATTENTION_TASKS,
+            today=today,
+        )
+        rendered_attention = [
+            {
+                "key": build_task_key(project_key=project_slice.project.key, number=task.number),
+                "title": task.title,
+                "stage": stage_names.get(task.stage_id, "—"),
+                "priority": task.priority.value,
+                "assignee": task.assignee,
+                "due": task.due_date.isoformat() if task.due_date else None,
+                "days_overdue": (today - task.due_date).days
+                if task.due_date and task.due_date < today
+                else None,
+                "stale_days": (datetime.now(UTC) - task.updated_at).days
+                if task.updated_at
+                else None,
+                "blocked_by": blocked_by.get(task.id) or None,
+            }
+            for task in attention_tasks
+        ]
+        counts_tasks += len(rendered_attention)
+
+        # Движение по проекту подтверждается недавно закрытыми задачами:
+        # без него оценка держится на одних просрочках.
+        recent_done = sorted(
+            (task for task in project_slice.tasks if task.stage_id in done_stage_ids),
+            key=lambda task: task.updated_at or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )[:PORTFOLIO_PROGRESS_TASKS]
+        rendered_progress = [
+            {
+                "key": build_task_key(project_key=project_slice.project.key, number=task.number),
+                "title": task.title,
+                "closed_around": task.updated_at.date().isoformat() if task.updated_at else None,
+            }
+            for task in recent_done
+        ]
+        counts_tasks += len(rendered_progress)
+
+        # Вехи сортируются по близости срока: просроченные и ближайшие
+        # решают судьбу проекта, дальние на сегодняшний выбор не влияют.
+        milestones = sorted(
+            (
+                milestone
+                for milestone in project_slice.milestones
+                if milestone.status is not ProjectMilestoneStatus.ACHIEVED
+            ),
+            key=lambda milestone: milestone.due_date,
+        )[:PORTFOLIO_MILESTONES]
+        rendered_milestones = [
+            {
+                "title": milestone.title,
+                "due": milestone.due_date.isoformat(),
+                "status": milestone.status.value,
+                "days_left": (milestone.due_date - today).days,
+            }
+            for milestone in milestones
+        ]
+        counts_milestones += len(rendered_milestones)
+
+        skipped = len(project_slice.tasks) - len(rendered_attention) - len(rendered_progress)
+        if skipped > 0:
+            omitted.append(
+                f"{project_slice.project.key}: в сводку вошли "
+                f"{len(rendered_attention) + len(rendered_progress)} из "
+                f"{len(project_slice.tasks)} задач — самые проблемные и недавно закрытые"
+            )
+
+        rendered_projects.append(
+            {
+                "key": project_slice.project.key,
+                "name": project_slice.project.name,
+                "status": project_slice.project.status.value,
+                "description": _cut(
+                    project_slice.project.description_md or "",
+                    PORTFOLIO_DESCRIPTION_CHARS,
+                )
+                or None,
+                "start_date": project_slice.project.start_date.isoformat()
+                if project_slice.project.start_date
+                else None,
+                "due_date": project_slice.project.due_date.isoformat()
+                if project_slice.project.due_date
+                else None,
+                "signals": project_signals.model_dump(mode="json"),
+                "milestones": rendered_milestones,
+                "attention_tasks": rendered_attention,
+                "recently_closed": rendered_progress,
+            }
+        )
+
+    payload = {
+        "today": today.isoformat(),
+        "scope": AnalyticsScope.PORTFOLIO.value,
+        "signals": signals.model_dump(mode="json"),
+        "projects": rendered_projects,
+    }
+    context = AnalyticsContextSchema(
+        projects=len(slices),
+        tasks_total=sum(len(project_slice.tasks) for project_slice in slices),
+        tasks_included=counts_tasks,
+        comments_included=0,
+        documents_included=0,
+        stickers_included=0,
+        wbs_nodes_included=0,
+        milestones_included=counts_milestones,
+        activity_included=0,
+        truncated=bool(omitted),
+        omitted=omitted,
+    )
+    return payload, context
 
 
 def _render(
