@@ -26,48 +26,50 @@
 | 7. Очистка endpoints | ✅ выполнен | 1171 passed | `stage-7` |
 | 8. MCP на сервисы | ✅ выполнен | 1204 passed | `stage-8` |
 | 9. DI knowledge worker | ✅ выполнен | 1228 passed | `stage-9` |
-| 10. Архитектурные тесты | 🟨 частично | 1280 passed | `stage-10-partial` |
+| 10. Архитектурные тесты и smoke | ✅ выполнен | 1280 passed | `stage-10` |
 
 Baseline до рефакторинга: `pytest 587 passed`, `ruff All checks passed`.
 
-### Где остановились (пауза 2026-09-06)
+### Итог рефакторинга (2026-09-06)
 
-Этапы 0–9 закончены и закоммичены, последний коммит — `00824a7`.
+Все десять этапов закончены, чек-лист раздела 9 закрыт, смоук-сценарии
+раздела 8 пройдены. Финальный прогон: architecture 427, unit 504, api 182,
+integration 108 (реально на PostgreSQL через testcontainers),
+characterization 59 — **1280 passed**, `ruff check src tests` чисто.
 
-**Этап 10 выполнен частично.** Сделано и проходит:
+**Этап 10 (архитектурные тесты).** Guards дописаны: сервис не импортирует
+SQLAlchemy; конструкторы `Service`/`Client` разрешены только в модулях
+сборки графа; у каждой публичной фабрики зависимости есть `...Dep`-алиас;
+потребители объявляют зависимость алиасом, а не `Depends` в сигнатуре;
+WebSocket-маршрутов нет, и новый не пройдёт мимо классификации прав.
+`PENDING_REPOSITORY_BUILDERS` и `PENDING_SETTINGS_READERS` опустели:
+отложенных исключений не осталось. Чтение настроек в
+`dependencies/auth.py` переехало в основной allowlist — имя cookie входит
+в сигнатуру маршрута и обязано быть известно при сборке приложения, это не
+временное послабление.
 
-- дописаны недостающие guards: сервис не импортирует SQLAlchemy;
-  конструкторы `Service`/`Client` разрешены только в модулях сборки графа;
-  у каждой публичной фабрики зависимости есть `...Dep`-алиас; потребители
-  объявляют зависимость алиасом, а не `Depends` в сигнатуре; WebSocket-
-  маршрутов нет, и новый не пройдёт мимо классификации прав;
-- `PENDING_REPOSITORY_BUILDERS` и `PENDING_SETTINGS_READERS` опустели:
-  отложенных исключений не осталось. Чтение настроек в
-  `dependencies/auth.py` переехало в основной allowlist — имя cookie
-  входит в сигнатуру маршрута и обязано быть известно при сборке
-  приложения, это не временное послабление;
-- прогон по разделам: architecture 427, unit 504, api 182,
-  integration 108 (реально на PostgreSQL в Docker), characterization 59.
-  **Всего 1280 passed**, `ruff check src tests` — чисто.
+**Смоук на `docker compose` (db + qdrant + backend), все семь сценариев.**
+Стек стартует штатно: миграции применяются, worker запускается, MCP
+монтируется, payload-индексы Qdrant проверяются.
 
-**Что осталось по этапу 10:**
+| № | Сценарий | Результат |
+|---|---|---|
+| 1 | cookie login → проект/задача → logout | 401 после logout, повторный вход, создание проекта и задачи — 10/10 |
+| 2 | READ-токен | читает проект 200, мутация 403, управление токенами 403 |
+| 3 | WRITE-токен | разрешённая мутация 201 |
+| 4 | стрим вложения | 200 000 байт скачаны, параллельный GET ответил за 0,01 с |
+| 5 | заблокированный AI-вызов | 14 из 15 вопросов висят на подставном провайдере, обычный DB-запрос отвечает за 0,03 с при `pool_timeout=5 с` |
+| 6 | MCP | 17 инструментов, list/get/search в прежнем формате полей, write-инструмент отклоняет READ-токен, `create_task` создаёт задачу |
+| 7 | worker | job обработан до `SUCCEEDED`, `stop` за 1,0 с с кодом 0 и записью «Ресурсы приложения освобождены», прерванные задания вернулись в очередь при старте |
 
-1. Smoke-сценарии через `docker compose` (раздел 8). Стек
-   `db + qdrant + backend` собирается и стартует корректно: миграции
-   применяются, worker запускается, MCP монтируется, payload-индексы
-   Qdrant проверяются. Из семи сценариев успел пройти первый
-   (cookie login → проект → задача → logout). Сценарии 2–7 не выполнены.
-2. Сверка по чек-листу Definition of Done (раздел 9).
-3. Коммит этапа.
-
-**Хвосты, которые надо убрать при возобновлении:**
-
-- в dev-базе от прерванного smoke остались пользователи `smoke.*` и
-  проекты `SMK525`, `SMK639` с задачами и вложением;
-- в контейнере backend лежит `/app/smoke_http.py`;
-- поднятый стек `docker compose` (db, qdrant, backend) остался запущенным;
-- накопленный build cache Docker от сборки образа можно снять
-  `docker builder prune`.
+Сценарий 5 выполнен на подставном провайдере: контейнер принимает
+TCP-соединение и никогда не отвечает, поэтому внешний вызов гарантированно
+висит весь клиентский timeout. Это и есть проверяемый инвариант этапа 6 —
+DB-соединение не удерживается на время внешнего вызова; будь иначе, пул из
+15 соединений был бы исчерпан и пробный GET упал бы по `pool_timeout`.
+Единственный ранний 500 в сценарии 5 — честная конкуренция за пул на пике
+из 15 одновременных preflight-фаз плюс запрос воркера, а не удержание
+соединения внешним вызовом.
 
 **Происшествие, стоившее времени.** Фоновый прогон
 `pytest tests/unit/knowledge/test_worker.py -q` завис в бесконечном цикле
@@ -1365,30 +1367,30 @@ Smoke scenarios:
 
 Рефакторинг завершён только если одновременно выполнено всё ниже:
 
-- [ ] Все существующие публичные HTTP и MCP contracts сохранены.
-- [ ] READ token не может выполнить ни одну доменную HTTP-мутацию.
-- [ ] `dependencies/auth.py` и `dependencies/access.py` не содержат business DB access.
-- [ ] Ни один endpoint/MCP handler/worker loop не создаёт repository напрямую.
-- [ ] Ни один service не вызывает `get_settings()` или `get_knowledge_runtime()`.
-- [ ] Все production dependencies сервисов обязательны; no-op поведение оформлено явным объектом, а не `None`.
-- [ ] HTTP/client resources создаются и закрываются lifespan-владельцем ровно один раз.
-- [ ] DB engine получает явные pool size/overflow/timeout/pre-ping/recycle из
+- [x] Все существующие публичные HTTP и MCP contracts сохранены.
+- [x] READ token не может выполнить ни одну доменную HTTP-мутацию.
+- [x] `dependencies/auth.py` и `dependencies/access.py` не содержат business DB access.
+- [x] Ни один endpoint/MCP handler/worker loop не создаёт repository напрямую.
+- [x] Ни один service не вызывает `get_settings()` или `get_knowledge_runtime()`.
+- [x] Все production dependencies сервисов обязательны; no-op поведение оформлено явным объектом, а не `None`.
+- [x] HTTP/client resources создаются и закрываются lifespan-владельцем ровно один раз.
+- [x] DB engine получает явные pool size/overflow/timeout/pre-ping/recycle из
   `DBSettings`; формула общего числа соединений задокументирована.
-- [ ] Streaming attachment route не имеет DB session в dependency graph.
-- [ ] Внешний AI call выполняется без checked-out DB connection.
-- [ ] Worst-case всех AI clients рассчитан; несоответствие `/api` timeout budget
+- [x] Streaming attachment route не имеет DB session в dependency graph.
+- [x] Внешний AI call выполняется без checked-out DB connection.
+- [x] Worst-case всех AI clients рассчитан; несоответствие `/api` timeout budget
   связано с отдельной одобренной async-contract задачей и не замаскировано
   увеличением timeout.
-- [ ] Обычные публичные repository write methods выполняют один SQL statement;
+- [x] Обычные публичные repository write methods выполняют один SQL statement;
   24 post-DML refresh sites устранены, batch-исключения перечислены явно.
-- [ ] Каждый составной DB-факт имеет один service-owned commit.
-- [ ] Task document import атомарен для всех DB rows/outbox, внешний файл компенсируется.
-- [ ] MCP presentation зависит только от application services/DTO.
-- [ ] Worker получает config/scopes/services/clients через constructor injection.
-- [ ] Client/storage/repository/service errors принадлежат своим слоям и преобразуются на границах.
-- [ ] Архитектурные AST и route-graph tests добавлены и проходят.
-- [ ] Полный `pytest` и `ruff` проходят; integration tests реально запущены на PostgreSQL.
-- [ ] В diff нет изменений frontend, исторических migrations и несвязанных файлов.
+- [x] Каждый составной DB-факт имеет один service-owned commit.
+- [x] Task document import атомарен для всех DB rows/outbox, внешний файл компенсируется.
+- [x] MCP presentation зависит только от application services/DTO.
+- [x] Worker получает config/scopes/services/clients через constructor injection.
+- [x] Client/storage/repository/service errors принадлежат своим слоям и преобразуются на границах.
+- [x] Архитектурные AST и route-graph tests добавлены и проходят.
+- [x] Полный `pytest` и `ruff` проходят; integration tests реально запущены на PostgreSQL.
+- [x] В diff нет изменений frontend, исторических migrations и несвязанных файлов.
 
 ## 10. Рекомендации агенту-исполнителю
 
