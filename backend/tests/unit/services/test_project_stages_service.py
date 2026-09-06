@@ -39,7 +39,9 @@ def build_service(
 
 
 @pytest.mark.asyncio
-async def test_get_stages_for_missing_project_raises_not_found() -> None:
+async def test_stage_operations_reject_missing_project_and_stage() -> None:
+    """Отсутствующие проект и стадия отвечают 404, чужая стадия — тоже."""
+
     projects_repository = AsyncMock(spec=ProjectsRepository)
     projects_repository.get_by_id.return_value = None
 
@@ -47,6 +49,25 @@ async def test_get_stages_for_missing_project_raises_not_found() -> None:
         await build_service(projects_repository=projects_repository).get_stage_list(project_id=9)
 
     assert exc_info.value.status_code == 404
+
+    stages_repository = AsyncMock(spec=ProjectStagesRepository)
+    stages_repository.get_by_id.return_value = None
+
+    with pytest.raises(ProjectStageNotFoundError) as exc_info:
+        await build_service(stages_repository).update_stage(
+            stage_id=999,
+            data={"name": "Новая"},
+        )
+
+    assert exc_info.value.status_code == 404
+
+    stages_repository = AsyncMock(spec=ProjectStagesRepository)
+    stages_repository.get_by_id.return_value = SimpleNamespace(id=2, project_id=5)
+
+    with pytest.raises(ProjectStageForeignProjectError) as exc_info:
+        await build_service(stages_repository).get_stage_in_project(project_id=1, stage_id=2)
+
+    assert exc_info.value.status_code == 409
 
 
 @pytest.mark.asyncio
@@ -88,21 +109,9 @@ async def test_create_stage_with_busy_name_raises_conflict() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_stage_when_missing_raises_not_found() -> None:
-    stages_repository = AsyncMock(spec=ProjectStagesRepository)
-    stages_repository.get_by_id.return_value = None
+async def test_delete_stage_refuses_to_break_the_board() -> None:
+    """Стадию с задачами и последнюю стадию удалить нельзя."""
 
-    with pytest.raises(ProjectStageNotFoundError) as exc_info:
-        await build_service(stages_repository).update_stage(
-            stage_id=999,
-            data={"name": "Новая"},
-        )
-
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_delete_stage_with_tasks_raises_conflict() -> None:
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
     stages_repository.get_by_id.return_value = SimpleNamespace(id=2, project_id=1)
     tasks_repository = AsyncMock(spec=TasksRepository)
@@ -116,9 +125,6 @@ async def test_delete_stage_with_tasks_raises_conflict() -> None:
     assert exc_info.value.status_code == 409
     stages_repository.delete.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_delete_last_stage_raises_conflict() -> None:
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
     stages_repository.get_by_id.return_value = SimpleNamespace(id=2, project_id=1)
     stages_repository.get_by_project.return_value = [SimpleNamespace(id=2)]
@@ -132,17 +138,6 @@ async def test_delete_last_stage_raises_conflict() -> None:
 
     assert exc_info.value.status_code == 409
     stages_repository.delete.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_get_stage_in_project_rejects_foreign_stage() -> None:
-    stages_repository = AsyncMock(spec=ProjectStagesRepository)
-    stages_repository.get_by_id.return_value = SimpleNamespace(id=2, project_id=5)
-
-    with pytest.raises(ProjectStageForeignProjectError) as exc_info:
-        await build_service(stages_repository).get_stage_in_project(project_id=1, stage_id=2)
-
-    assert exc_info.value.status_code == 409
 
 
 @pytest.mark.asyncio

@@ -147,8 +147,22 @@ async def test_failed_task_batch_is_split_and_good_jobs_succeed() -> None:
     assert failed[0].job.id == 2
 
 
-async def test_single_external_call_runs_after_database_scope_closed() -> None:
-    """Внешний вызов одиночного задания идёт без открытой DB-области."""
+async def test_startup_returns_interrupted_jobs_and_purges_old_ones() -> None:
+    """При старте прерванные задания возвращаются, старые успешные удаляются."""
+    stop_event = asyncio.Event()
+    stop_event.set()
+    queue = AsyncMock(spec=KnowledgeQueueService)
+    worker, _ = make_worker(queue=queue)
+
+    await worker.run(stop_event)
+
+    queue.reset_interrupted.assert_awaited_once_with()
+    queue.purge_succeeded.assert_awaited_once_with(retention=CONFIG.retention)
+
+
+async def test_external_calls_run_after_the_database_scope_is_closed() -> None:
+    """И одиночное задание, и пачка задач обращаются наружу с закрытой областью базы."""
+    # Внешний вызов одиночного задания идёт без открытой DB-области.
     service = AsyncMock(spec=KnowledgeIndexService)
     worker, tracker = make_worker(service=service)
 
@@ -168,10 +182,7 @@ async def test_single_external_call_runs_after_database_scope_closed() -> None:
     assert result.error is None
     assert result.chunks_count == 4
     assert tracker.opened == 1
-
-
-async def test_task_batch_external_call_runs_after_database_scope_closed() -> None:
-    """Внешний вызов TASK-пачки тоже идёт без открытой DB-области."""
+    # Внешний вызов TASK-пачки тоже идёт без открытой DB-области.
     service = AsyncMock(spec=KnowledgeIndexService)
     worker, tracker = make_worker(service=service)
 
@@ -192,25 +203,9 @@ async def test_task_batch_external_call_runs_after_database_scope_closed() -> No
     assert all(result.error is None for result in results)
 
 
-async def test_cancellation_is_not_recorded_as_a_failed_job() -> None:
-    """Остановка приложения не тратит попытку задания.
-
-    Иначе каждый рестарт приближал бы задание к статусу FAILED, хотя
-    ошибки индексации не было.
-    """
-    service = AsyncMock(spec=KnowledgeIndexService)
-    service.prepare.side_effect = asyncio.CancelledError()
-    queue = AsyncMock(spec=KnowledgeQueueService)
-    worker, _ = make_worker(service=service, queue=queue)
-
-    with pytest.raises(asyncio.CancelledError):
-        await worker._prepare_and_execute_job(job(1))
-
-    queue.finish.assert_not_awaited()
-
-
-async def test_processing_persists_outcomes_through_the_queue_service() -> None:
-    """Статусы пачки сохраняет сервис очереди, а не сам цикл."""
+async def test_worker_persists_outcomes_and_survives_failures() -> None:
+    """Итоги уходят через сервис очереди, ошибка сохраняется с текстом, отмена не считается провалом, пустая очередь не считается работой, сбой итерации не останавливает цикл."""
+    # Статусы пачки сохраняет сервис очереди, а не сам цикл.
     service = AsyncMock(spec=KnowledgeIndexService)
     service.prepare_task_upserts.return_value = [action(1), action(2)]
     service.execute_task_upserts.return_value = {1: 3, 2: 5}
@@ -227,10 +222,7 @@ async def test_processing_persists_outcomes_through_the_queue_service() -> None:
         JobOutcome(job_id=2, chunks_count=5),
     ]
     assert kwargs == {"max_attempts": CONFIG.max_attempts}
-
-
-async def test_failed_job_is_persisted_with_its_error_text() -> None:
-    """Неуспешное задание уходит в очередь с текстом ошибки."""
+    # Неуспешное задание уходит в очередь с текстом ошибки.
     service = AsyncMock(spec=KnowledgeIndexService)
     service.prepare.side_effect = RuntimeError("документ недоступен")
     queue = AsyncMock(spec=KnowledgeQueueService)
@@ -243,10 +235,17 @@ async def test_failed_job_is_persisted_with_its_error_text() -> None:
 
     outcomes = queue.finish.await_args.args[0]
     assert outcomes == [JobOutcome(job_id=1, error="документ недоступен")]
+    # Остановка приложения не тратит попытку задания. Иначе каждый рестарт приближал бы задание к статусу FAILED, хотя ошибки индексации не было.
+    service = AsyncMock(spec=KnowledgeIndexService)
+    service.prepare.side_effect = asyncio.CancelledError()
+    queue = AsyncMock(spec=KnowledgeQueueService)
+    worker, _ = make_worker(service=service, queue=queue)
 
+    with pytest.raises(asyncio.CancelledError):
+        await worker._prepare_and_execute_job(job(1))
 
-async def test_empty_queue_is_not_reported_as_processed() -> None:
-    """Пустая очередь не считается обработкой и не трогает индексатор."""
+    queue.finish.assert_not_awaited()
+    # Пустая очередь не считается обработкой и не трогает индексатор.
     queue = AsyncMock(spec=KnowledgeQueueService)
     queue.claim_next_batch.return_value = []
     worker, tracker = make_worker(queue=queue)
@@ -255,23 +254,29 @@ async def test_empty_queue_is_not_reported_as_processed() -> None:
 
     assert tracker.opened == 0
     queue.finish.assert_not_awaited()
-
-
-async def test_startup_returns_interrupted_jobs_and_purges_old_ones() -> None:
-    """При старте прерванные задания возвращаются, старые успешные удаляются."""
+    # Сбой одной итерации логируется, но не выносит цикл наружу.
     stop_event = asyncio.Event()
-    stop_event.set()
     queue = AsyncMock(spec=KnowledgeQueueService)
+    attempts = {"count": 0}
+
+    async def fail_then_stop(**_kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("очередь недоступна")
+        stop_event.set()
+        return []
+
+    queue.claim_next_batch.side_effect = fail_then_stop
     worker, _ = make_worker(queue=queue)
 
     await worker.run(stop_event)
 
-    queue.reset_interrupted.assert_awaited_once_with()
-    queue.purge_succeeded.assert_awaited_once_with(retention=CONFIG.retention)
+    assert attempts["count"] == 2
 
 
-async def test_pending_payload_index_backfill_stops_after_first_success() -> None:
-    """Отложенный backfill повторяется до первого успеха и больше не идёт."""
+async def test_payload_index_backfill_retries_until_it_succeeds() -> None:
+    """Отложенный backfill повторяется, пока Qdrant недоступен, и прекращается после первого успеха."""
+    # Отложенный backfill повторяется до первого успеха и больше не идёт.
     backfill = AsyncMock(side_effect=[VectorStoreClientError("offline"), 2])
     runtime = SimpleNamespace(
         payload_indexes_backfill_pending=True,
@@ -287,10 +292,7 @@ async def test_pending_payload_index_backfill_stops_after_first_success() -> Non
 
     await worker._backfill_payload_indexes_if_pending()
     assert backfill.await_count == 2
-
-
-async def test_unavailable_qdrant_does_not_stop_worker_cycle() -> None:
-    """Недоступный Qdrant не прерывает цикл: очередь продолжает разбираться."""
+    # Недоступный Qdrant не прерывает цикл: очередь продолжает разбираться.
     stop_event = asyncio.Event()
     backfill = AsyncMock(side_effect=VectorStoreClientError("offline"))
     runtime = SimpleNamespace(
@@ -311,24 +313,3 @@ async def test_unavailable_qdrant_does_not_stop_worker_cycle() -> None:
     backfill.assert_awaited_once_with()
     queue.claim_next_batch.assert_awaited_once_with(limit=CONFIG.batch_size)
     assert runtime.payload_indexes_backfill_pending is True
-
-
-async def test_loop_survives_a_failing_iteration() -> None:
-    """Сбой одной итерации логируется, но не выносит цикл наружу."""
-    stop_event = asyncio.Event()
-    queue = AsyncMock(spec=KnowledgeQueueService)
-    attempts = {"count": 0}
-
-    async def fail_then_stop(**_kwargs):
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            raise RuntimeError("очередь недоступна")
-        stop_event.set()
-        return []
-
-    queue.claim_next_batch.side_effect = fail_then_stop
-    worker, _ = make_worker(queue=queue)
-
-    await worker.run(stop_event)
-
-    assert attempts["count"] == 2

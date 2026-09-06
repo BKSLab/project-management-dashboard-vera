@@ -241,7 +241,13 @@ async def test_generate_saves_report_with_resolved_task_links() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_drops_task_keys_absent_in_scope() -> None:
+async def test_generate_keeps_only_references_that_exist_in_the_scope() -> None:
+    """Ссылки модели на несуществующие задачу и проект отбрасываются.
+
+    Модель свободна назвать любой ключ, а отчёт обязан ссылаться только
+    на то, что действительно попало в срез: иначе в интерфейсе появится
+    ссылка в никуда.
+    """
     stages = [stage(1, "В работе", False)]
     tasks = [task(11, stage_id=1)]
     service, reports_repository, _db = build_service(
@@ -255,10 +261,6 @@ async def test_generate_drops_task_keys_absent_in_scope() -> None:
     payload = reports_repository.save.call_args.kwargs["data"]["payload"]
     assert payload["findings"][0]["tasks"] == []
 
-
-@pytest.mark.asyncio
-async def test_generate_drops_unknown_project_key() -> None:
-    stages = [stage(1, "В работе", False)]
     service, reports_repository, _db = build_service(stages=stages, tasks=[task(11, stage_id=1)])
 
     await service.generate(**actor(), project_id=PROJECT_ID)
@@ -347,53 +349,36 @@ async def test_generate_reports_context_boundaries_to_user() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_raises_empty_scope_when_projects_have_no_tasks() -> None:
-    service, _, db = build_service(stages=[stage(1, "В работе", False)], tasks=[])
-
+async def test_generate_distinguishes_empty_scope_absence_and_failure() -> None:
+    """Пустой срез, чужой проект и сбой базы отвечают тремя разными ошибками."""
+    service, _, _db = build_service(stages=[stage(1, "В работе", False)], tasks=[])
     with pytest.raises(AnalyticsEmptyScopeError):
         await service.generate(**actor(), project_id=PROJECT_ID)
 
-
-@pytest.mark.asyncio
-async def test_generate_raises_not_found_for_foreign_project() -> None:
-    service, _, db = build_service(allowed_ids=set())
-
+    service, _, _db = build_service(allowed_ids=set())
     with pytest.raises(ProjectNotFoundError):
         await service.generate(**actor(), project_id=PROJECT_ID)
 
-
-@pytest.mark.asyncio
-async def test_generate_raises_service_error_when_repository_fails() -> None:
     service, _, db = build_service()
     db.projects.get_by_id.side_effect = ProjectsRepositoryError("сбой")
-
     with pytest.raises(AnalyticsServiceError):
         await service.generate(**actor(), project_id=PROJECT_ID)
 
 
 @pytest.mark.asyncio
-async def test_get_latest_returns_none_when_report_missing() -> None:
+async def test_get_latest_checks_access_and_picks_the_right_report() -> None:
+    """Отсутствие отчёта — не ошибка, чужой проект — 404, портфель — по автору."""
     service, reports_repository, _db = build_service()
     reports_repository.get_latest_for_project.return_value = None
-
     assert await service.get_latest(user_id=USER_ID, project_id=PROJECT_ID) is None
 
-
-@pytest.mark.asyncio
-async def test_get_latest_raises_not_found_for_foreign_project() -> None:
-    service, _, db = build_service(allowed_ids=set())
-
+    service, _, _db = build_service(allowed_ids=set())
     with pytest.raises(ProjectNotFoundError):
         await service.get_latest(user_id=USER_ID, project_id=PROJECT_ID)
 
-
-@pytest.mark.asyncio
-async def test_get_latest_portfolio_report_is_selected_by_author() -> None:
     service, reports_repository, _db = build_service()
     reports_repository.get_latest_portfolio.return_value = None
-
     await service.get_latest(user_id=USER_ID, project_id=None)
-
     reports_repository.get_latest_portfolio.assert_awaited_once_with(user_id=USER_ID)
 
 

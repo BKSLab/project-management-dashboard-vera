@@ -5,8 +5,10 @@
 именно попадает в сервис и что видит вызывающий, а не состояние БД.
 """
 
+from dataclasses import fields
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
@@ -46,6 +48,12 @@ def write_tools(tools):
 
     def install():
         services = tools(ApiTokenScope.WRITE)
+        # Повторный вызов внутри одного теста начинает новый сценарий:
+        # история вызовов предыдущего не должна в него просачиваться.
+        for field in fields(services):
+            double = getattr(services, field.name)
+            if isinstance(double, AsyncMock):
+                double.reset_mock()
         services.query.resolve_task.return_value = RESOLVED
         services.query.resolve_stage.return_value = IN_PROGRESS
         services.tasks.create_task.return_value = saved_task()
@@ -80,8 +88,9 @@ async def test_create_task_uses_the_owner_of_the_token_as_author(write_tools) ->
     assert services.tasks.create_task.await_args.kwargs["created_by_user_id"] == 1
 
 
-async def test_create_task_resolves_stage_by_name(write_tools) -> None:
-    """Название стадии превращается в идентификатор сервисом проекта."""
+async def test_create_task_resolves_optional_fields(write_tools) -> None:
+    """Стадия по названию, приоритет и дата из строки, исполнитель по точному логину команды."""
+    # Название стадии превращается в идентификатор сервисом проекта.
     services = write_tools()
 
     await wt.create_task(FakeContext(), project_key="PROJ", title="Новая", stage="в работе")
@@ -91,10 +100,7 @@ async def test_create_task_resolves_stage_by_name(write_tools) -> None:
         stage_name="в работе",
     )
     assert services.tasks.create_task.await_args.kwargs["data"]["stage_id"] == 11
-
-
-async def test_create_task_parses_priority_and_date(write_tools) -> None:
-    """Приоритет и срок приходят строками, а уходят типизированными."""
+    # Приоритет и срок приходят строками, а уходят типизированными.
     services = write_tools()
 
     await wt.create_task(
@@ -108,10 +114,7 @@ async def test_create_task_parses_priority_and_date(write_tools) -> None:
     payload = services.tasks.create_task.await_args.kwargs["data"]
     assert payload["priority"] is TaskPriority.HIGH
     assert payload["due_date"] == date(2026, 10, 1)
-
-
-async def test_create_task_resolves_executor_by_exact_team_login(write_tools) -> None:
-    """Исполнитель разрешается сервисом команды проекта."""
+    # Исполнитель разрешается сервисом команды проекта.
     services = write_tools()
     services.members.resolve_member_user_id.return_value = 42
 
@@ -124,11 +127,9 @@ async def test_create_task_resolves_executor_by_exact_team_login(write_tools) ->
     assert services.tasks.create_task.await_args.kwargs["data"]["executor_id"] == 42
 
 
-async def test_create_task_does_not_reveal_unknown_or_external_user(write_tools) -> None:
-    """Несуществующий и посторонний логин дают один и тот же ответ.
-
-    Различие в тексте позволило бы перебором проверять, кто есть в системе.
-    """
+async def test_create_task_rejects_unusable_arguments(write_tools) -> None:
+    """Неизвестный или внешний пользователь, неизвестный приоритет, битая дата и чужой проект."""
+    # Несуществующий и посторонний логин дают один и тот же ответ. Различие в тексте позволило бы перебором проверять, кто есть в системе.
     services = write_tools()
     services.members.resolve_member_user_id.side_effect = ProjectMemberUserNotFoundError(
         username="stranger"
@@ -139,10 +140,7 @@ async def test_create_task_does_not_reveal_unknown_or_external_user(write_tools)
 
     assert str(error.value) == "Активный пользователь с таким логином не входит в команду проекта."
     services.tasks.create_task.assert_not_awaited()
-
-
-async def test_create_task_rejects_unknown_priority(write_tools) -> None:
-    """Неверный приоритет отвечает списком допустимых значений."""
+    # Неверный приоритет отвечает списком допустимых значений.
     services = write_tools()
 
     with pytest.raises(ToolError) as error:
@@ -150,10 +148,7 @@ async def test_create_task_rejects_unknown_priority(write_tools) -> None:
 
     assert "HIGH" in str(error.value)
     services.tasks.create_task.assert_not_awaited()
-
-
-async def test_create_task_rejects_bad_date(write_tools) -> None:
-    """Дата вне ISO-формата отклоняется до вызова сервиса."""
+    # Дата вне ISO-формата отклоняется до вызова сервиса.
     services = write_tools()
 
     with pytest.raises(ToolError) as error:
@@ -166,10 +161,7 @@ async def test_create_task_rejects_bad_date(write_tools) -> None:
 
     assert "ГГГГ-ММ-ДД" in str(error.value)
     services.tasks.create_task.assert_not_awaited()
-
-
-async def test_create_task_rejects_foreign_project(write_tools) -> None:
-    """Недоступный проект не даёт создать в нём задачу."""
+    # Недоступный проект не даёт создать в нём задачу.
     services = write_tools()
     services.query.resolve_project_id.side_effect = ProjectNotFoundError(project_id=0)
 
@@ -180,8 +172,9 @@ async def test_create_task_rejects_foreign_project(write_tools) -> None:
     services.tasks.create_task.assert_not_awaited()
 
 
-async def test_update_task_without_fields_is_rejected(write_tools) -> None:
-    """Пустое изменение — ошибка, а не молчаливый успех."""
+async def test_update_task_touches_only_given_fields_and_clears_by_empty_value(write_tools) -> None:
+    """Изменяются только переданные поля; пустая строка очищает исполнителя и срок, пустой запрос отклоняется."""
+    # Пустое изменение — ошибка, а не молчаливый успех.
     services = write_tools()
 
     with pytest.raises(ToolError) as error:
@@ -189,10 +182,7 @@ async def test_update_task_without_fields_is_rejected(write_tools) -> None:
 
     assert "ни одного поля" in str(error.value)
     services.tasks.update_task.assert_not_awaited()
-
-
-async def test_update_task_touches_only_given_fields(write_tools) -> None:
-    """Переданный заголовок меняется, остальные поля не упоминаются."""
+    # Переданный заголовок меняется, остальные поля не упоминаются.
     services = write_tools()
 
     result = await wt.update_task(FakeContext(), task_key=TASK_KEY, title="  Другой  ")
@@ -202,20 +192,14 @@ async def test_update_task_touches_only_given_fields(write_tools) -> None:
         "data": {"title": "Другой"},
     }
     assert result == {"task_key": TASK_KEY, "updated_fields": ["title"]}
-
-
-async def test_update_task_empty_assignee_clears_it(write_tools) -> None:
-    """Пустая строка снимает исполнителя и не ищет пользователя."""
+    # Пустая строка снимает исполнителя и не ищет пользователя.
     services = write_tools()
 
     await wt.update_task(FakeContext(), task_key=TASK_KEY, assignee="   ")
 
     assert services.tasks.update_task.await_args.kwargs["data"] == {"executor_id": None}
     services.members.resolve_member_user_id.assert_not_awaited()
-
-
-async def test_update_task_empty_due_date_clears_it(write_tools) -> None:
-    """Пустая строка снимает срок, а не считается неверной датой."""
+    # Пустая строка снимает срок, а не считается неверной датой.
     services = write_tools()
 
     await wt.update_task(FakeContext(), task_key=TASK_KEY, due_date="")
@@ -223,8 +207,9 @@ async def test_update_task_empty_due_date_clears_it(write_tools) -> None:
     assert services.tasks.update_task.await_args.kwargs["data"] == {"due_date": None}
 
 
-async def test_move_task_resolves_stage_and_reports_done(write_tools) -> None:
-    """Перевод в завершающую стадию виден в ответе инструмента."""
+async def test_move_task_resolves_stage_by_name(write_tools) -> None:
+    """Стадия ищется по названию, неизвестная — с перечислением доступных."""
+    # Перевод в завершающую стадию виден в ответе инструмента.
     services = write_tools()
     services.query.resolve_stage.return_value = DONE
 
@@ -232,10 +217,7 @@ async def test_move_task_resolves_stage_and_reports_done(write_tools) -> None:
 
     services.tasks.move_task.assert_awaited_once_with(task_id=TASK_ID, stage_id=12)
     assert result == {"task_key": TASK_KEY, "stage": "Готово", "is_done": True}
-
-
-async def test_move_task_unknown_stage_lists_available(write_tools) -> None:
-    """Неизвестная стадия отвечает списком доступных."""
+    # Неизвестная стадия отвечает списком доступных.
     services = write_tools()
     services.query.resolve_stage.side_effect = UnknownStageError(
         stage_name="Ревью",
@@ -249,11 +231,9 @@ async def test_move_task_unknown_stage_lists_available(write_tools) -> None:
     services.tasks.move_task.assert_not_awaited()
 
 
-async def test_delete_task_requires_confirmation(write_tools) -> None:
-    """Без confirm=true удаление не выполняется и задача даже не ищется.
-
-    Удаление необратимо, поэтому подтверждение проверяется раньше всего.
-    """
+async def test_delete_task_requires_explicit_confirmation(write_tools) -> None:
+    """Без подтверждения задача не удаляется, с подтверждением — удаляется."""
+    # Без confirm=true удаление не выполняется и задача даже не ищется. Удаление необратимо, поэтому подтверждение проверяется раньше всего.
     services = write_tools()
 
     with pytest.raises(ToolError) as error:
@@ -262,10 +242,7 @@ async def test_delete_task_requires_confirmation(write_tools) -> None:
     assert "confirm=true" in str(error.value)
     services.tasks.delete_task.assert_not_awaited()
     services.query.resolve_task.assert_not_awaited()
-
-
-async def test_delete_task_with_confirmation(write_tools) -> None:
-    """С подтверждением задача удаляется по своему идентификатору."""
+    # С подтверждением задача удаляется по своему идентификатору.
     services = write_tools()
 
     result = await wt.delete_task(FakeContext(), task_key=TASK_KEY, confirm=True)
@@ -274,8 +251,9 @@ async def test_delete_task_with_confirmation(write_tools) -> None:
     assert result == {"task_key": TASK_KEY, "deleted": True}
 
 
-async def test_add_comment_defaults_author_to_token_owner(write_tools) -> None:
-    """Без подписи автором становится владелец токена."""
+async def test_add_comment_resolves_its_author(write_tools) -> None:
+    """Автором становится владелец токена, если явный автор не указан."""
+    # Без подписи автором становится владелец токена.
     services = write_tools()
     services.comments.add_comment.return_value = SimpleNamespace(
         author_name="Тестов Тест",
@@ -287,10 +265,7 @@ async def test_add_comment_defaults_author_to_token_owner(write_tools) -> None:
     assert services.comments.add_comment.await_args.kwargs["author_name"] == "Тестов Тест"
     assert result["task_key"] == TASK_KEY
     assert result["created_at"] == "2026-09-01T10:00:00+00:00"
-
-
-async def test_add_comment_uses_explicit_author(write_tools) -> None:
-    """Явная подпись сохраняется как есть."""
+    # Явная подпись сохраняется как есть.
     services = write_tools()
     services.comments.add_comment.return_value = SimpleNamespace(
         author_name="Аналитик",
@@ -302,12 +277,9 @@ async def test_add_comment_uses_explicit_author(write_tools) -> None:
     assert services.comments.add_comment.await_args.kwargs["author_name"] == "Аналитик"
 
 
-async def test_set_task_dates_uses_domain_task_service(write_tools) -> None:
-    """Даты меняются тем же сервисом, что и через HTTP.
-
-    Так изменение попадает в историю задачи и очередь индексации знаний
-    независимо от канала.
-    """
+async def test_set_task_dates_and_milestones_use_domain_services(write_tools) -> None:
+    """Даты задачи и вехи проходят через доменные сервисы; пустой запрос и неизвестный статус отклоняются."""
+    # Даты меняются тем же сервисом, что и через HTTP. Так изменение попадает в историю задачи и очередь индексации знаний независимо от канала.
     services = write_tools()
     services.tasks.update_task.return_value = saved_task(
         start_date=date(2026, 9, 1),
@@ -327,10 +299,7 @@ async def test_set_task_dates_uses_domain_task_service(write_tools) -> None:
     }
     assert result["updated_fields"] == ["due_date", "start_date"]
     assert result["due_date"] == "2026-10-01"
-
-
-async def test_set_task_dates_without_dates_is_rejected(write_tools) -> None:
-    """Вызов без дат не доходит до сервиса."""
+    # Вызов без дат не доходит до сервиса.
     services = write_tools()
 
     with pytest.raises(ToolError) as error:
@@ -338,10 +307,7 @@ async def test_set_task_dates_without_dates_is_rejected(write_tools) -> None:
 
     assert "ни одной даты" in str(error.value)
     services.tasks.update_task.assert_not_awaited()
-
-
-async def test_create_milestone_uses_display_project_key_and_write_service(write_tools) -> None:
-    """Веха создаётся сервисом, а в ответе возвращается отображаемый ключ."""
+    # Веха создаётся сервисом, а в ответе возвращается отображаемый ключ.
     services = write_tools()
     services.milestones.create_milestone.return_value = SimpleNamespace(
         title="MVP",
@@ -367,10 +333,7 @@ async def test_create_milestone_uses_display_project_key_and_write_service(write
         "status": "PLANNED",
         "created": True,
     }
-
-
-async def test_create_milestone_rejects_unknown_status(write_tools) -> None:
-    """Неизвестный статус вехи отклоняется до вызова сервиса."""
+    # Неизвестный статус вехи отклоняется до вызова сервиса.
     services = write_tools()
 
     with pytest.raises(ToolError) as error:

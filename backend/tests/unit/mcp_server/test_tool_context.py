@@ -176,8 +176,9 @@ async def test_tool_context_without_app_resources_fails_loudly() -> None:
     assert str(error.value) == RESOURCES_MISSING
 
 
-async def test_resolve_project_returns_identifier_of_available_project() -> None:
-    """Доступный проект отдаётся идентификатором, а не ORM-моделью."""
+async def test_resolve_project_hides_foreign_and_missing_projects() -> None:
+    """Доступный проект отдаёт идентификатор, чужой и отсутствующий — одно сообщение."""
+    # Доступный проект отдаётся идентификатором, а не ORM-моделью.
     tools = make_tools()
 
     assert await resolve_project(tools, "PROJ") == PROJECT_ID
@@ -185,10 +186,7 @@ async def test_resolve_project_returns_identifier_of_available_project() -> None
         project_id=PROJECT_ID,
         user_id=1,
     )
-
-
-async def test_resolve_project_rejects_foreign_project() -> None:
-    """Чужой проект недоступен, хотя и существует."""
+    # Чужой проект недоступен, хотя и существует.
     tools = make_tools()
     tools.services.access.ensure_project_access.side_effect = ResourceNotAvailableError(
         resource="Проект",
@@ -199,14 +197,7 @@ async def test_resolve_project_rejects_foreign_project() -> None:
         await resolve_project(tools, "PROJ")
 
     assert str(error.value) == PROJECT_NOT_AVAILABLE
-
-
-async def test_resolve_project_missing_project_gives_same_message() -> None:
-    """Несуществующий проект отвечает тем же текстом, что и чужой.
-
-    Разные ответы позволили бы перебором ключей узнавать, какие проекты
-    существуют в системе.
-    """
+    # Несуществующий проект отвечает тем же текстом, что и чужой. Разные ответы позволили бы перебором ключей узнавать, какие проекты существуют в системе.
     tools = make_tools()
     tools.services.query.resolve_project_id.side_effect = ProjectNotFoundError(project_id=0)
 
@@ -228,8 +219,9 @@ async def test_resolve_task_rejects_malformed_key(value: str) -> None:
     tools.services.query.resolve_task.assert_not_awaited()
 
 
-async def test_resolve_task_returns_identifiers_of_available_task() -> None:
-    """Задача отдаётся идентификаторами и своим отображаемым ключом."""
+async def test_resolve_task_checks_key_access_and_existence() -> None:
+    """Ключ задачи: разбор, проверка доступа к проекту раньше номера, неизвестный номер."""
+    # Задача отдаётся идентификаторами и своим отображаемым ключом.
     tools = make_tools()
     tools.services.query.resolve_task.return_value = ResolvedTask(
         task_id=7,
@@ -245,10 +237,7 @@ async def test_resolve_task_returns_identifiers_of_available_task() -> None:
         project_key="PROJ",
         number=142,
     )
-
-
-async def test_resolve_task_rejects_unknown_number() -> None:
-    """Отсутствующий номер задачи в доступном проекте — отказ."""
+    # Отсутствующий номер задачи в доступном проекте — отказ.
     tools = make_tools()
     tools.services.query.resolve_task.side_effect = TaskNotFoundError(task_id=0)
 
@@ -256,14 +245,7 @@ async def test_resolve_task_rejects_unknown_number() -> None:
         await resolve_task(tools, "PROJ-999")
 
     assert str(error.value) == TASK_NOT_AVAILABLE
-
-
-async def test_resolve_task_checks_project_access_first() -> None:
-    """Доступ к проекту проверяется раньше поиска задачи.
-
-    Иначе по разнице ответов можно было бы понять, есть ли в чужом
-    проекте задача с таким номером.
-    """
+    # Доступ к проекту проверяется раньше поиска задачи. Иначе по разнице ответов можно было бы понять, есть ли в чужом проекте задача с таким номером.
     tools = make_tools()
     tools.services.access.ensure_project_access.side_effect = ResourceNotAvailableError(
         resource="Проект",

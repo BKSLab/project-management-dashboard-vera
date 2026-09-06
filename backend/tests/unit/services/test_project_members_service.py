@@ -80,7 +80,9 @@ async def test_member_list_places_owner_first_and_exposes_safe_identity() -> Non
 
 
 @pytest.mark.asyncio
-async def test_add_member_uses_exact_username_and_member_role() -> None:
+async def test_add_member_validates_the_candidate() -> None:
+    """Добавление участника: точный логин, неизвестный или отключённый пользователь, повторное добавление."""
+
     users = AsyncMock(spec=UsersRepository)
     added_user = user(2, username="known.login")
     users.get_by_username.return_value = added_user
@@ -100,9 +102,6 @@ async def test_add_member_uses_exact_username_and_member_role() -> None:
     assert result.user.username == "known.login"
     unit_of_work.commit.assert_awaited_once()
 
-
-@pytest.mark.asyncio
-async def test_add_member_does_not_expose_unknown_or_inactive_user() -> None:
     users = AsyncMock(spec=UsersRepository)
     users.get_by_username.return_value = None
 
@@ -111,9 +110,6 @@ async def test_add_member_does_not_expose_unknown_or_inactive_user() -> None:
 
     assert error.value.detail == "Пользователь с таким логином не найден."
 
-
-@pytest.mark.asyncio
-async def test_add_existing_member_is_conflict() -> None:
     users = AsyncMock(spec=UsersRepository)
     users.get_by_username.return_value = user(2)
     members = AsyncMock(spec=ProjectMembersRepository)
@@ -166,7 +162,9 @@ async def test_owner_cannot_be_removed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_member_avatar_is_read_only_for_current_project_member() -> None:
+async def test_member_avatar_is_available_only_while_membership_lasts() -> None:
+    """Аватар доступен участнику проекта и перестаёт запрашиваться после исключения."""
+
     members = AsyncMock(spec=ProjectMembersRepository)
     members.get.return_value = member(2)
     users_service = AsyncMock(spec=UsersService)
@@ -180,9 +178,6 @@ async def test_member_avatar_is_read_only_for_current_project_member() -> None:
     assert result == (b"image", "image/webp")
     users_service.get_avatar.assert_awaited_once_with(user_id=2)
 
-
-@pytest.mark.asyncio
-async def test_removed_member_avatar_is_not_requested_from_user_service() -> None:
     members = AsyncMock(spec=ProjectMembersRepository)
     members.get.return_value = None
     users_service = AsyncMock(spec=UsersService)

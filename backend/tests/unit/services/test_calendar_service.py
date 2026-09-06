@@ -129,7 +129,9 @@ async def test_get_range_builds_compact_calendar_with_client_today() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_range_rejects_reversed_and_excessive_ranges() -> None:
+async def test_get_range_validates_its_window_and_filters() -> None:
+    """Границы окна: обратный интервал, превышение предела, ровно предел и чужие фильтры."""
+
     service, projects, _, _, _, _ = build_service()
 
     with pytest.raises(CalendarRangeError):
@@ -149,9 +151,6 @@ async def test_get_range_rejects_reversed_and_excessive_ranges() -> None:
 
     projects.get_by_id.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_get_range_accepts_exact_limit_and_rejects_one_day_more() -> None:
     service, projects, _, _, _, _ = build_service()
 
     result = await service.get_range(
@@ -171,9 +170,6 @@ async def test_get_range_accepts_exact_limit_and_rejects_one_day_more() -> None:
         )
     projects.get_by_id.assert_awaited_once()
 
-
-@pytest.mark.asyncio
-async def test_get_range_rejects_foreign_reference_filters() -> None:
     service, _, tasks, _, _, _ = build_service()
 
     with pytest.raises(CalendarFilterError) as exc_info:
@@ -227,7 +223,9 @@ async def test_get_unscheduled_uses_extra_row_for_cursor() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_range_returns_due_date_history_and_explainable_risks() -> None:
+async def test_get_range_explains_dates_milestones_and_dependencies() -> None:
+    """Календарь объясняет риски: история сроков, вехи с отклонением плана, частично заданный базовый план и связи задач."""
+
     service, _, tasks, _, _, activity = build_service()
     overdue = make_task(due_date=TODAY - timedelta(days=3))
     overdue.assignee = None
@@ -259,9 +257,6 @@ async def test_get_range_returns_due_date_history_and_explainable_risks() -> Non
     assert result.recent_changes[0].from_date == date(2026, 8, 28)
     assert result.recent_changes[0].to_date == date(2026, 8, 30)
 
-
-@pytest.mark.asyncio
-async def test_get_range_returns_system_and_user_milestones_with_plan_drift() -> None:
     service, projects, tasks, _, _, _ = build_service()
     projects.get_by_id.return_value.due_date = date(2026, 9, 30)
     task = make_task(due_date=date(2026, 9, 12))
@@ -292,9 +287,6 @@ async def test_get_range_returns_system_and_user_milestones_with_plan_drift() ->
         ("Дедлайн проекта", True),
     ]
 
-
-@pytest.mark.asyncio
-async def test_get_range_handles_each_partially_filled_baseline() -> None:
     service, _, tasks, _, _, _ = build_service()
     only_start = make_task(task_id=1, due_date=date(2026, 9, 12))
     only_start.baseline_start_date = date(2026, 9, 1)
@@ -312,9 +304,6 @@ async def test_get_range_handles_each_partially_filled_baseline() -> None:
     assert result.tasks[0].drift_days is None
     assert result.tasks[1].drift_days == 4
 
-
-@pytest.mark.asyncio
-async def test_get_range_adds_dependency_links_and_explainable_risks() -> None:
     service, _, tasks, _, _, _ = build_service()
     predecessor = make_task(task_id=1, due_date=date(2026, 9, 10))
     successor = make_task(task_id=2, due_date=date(2026, 9, 15))

@@ -184,7 +184,9 @@ async def test_suggest_drops_invalid_parts_of_model_answer() -> None:
 
 
 @pytest.mark.asyncio
-async def test_suggest_without_tasks_is_rejected() -> None:
+async def test_suggest_rejects_empty_scope_and_wraps_model_failure() -> None:
+    """Без задач подсказка не запрашивается, сбой модели становится ошибкой сервиса."""
+
     service, mocks = build_service(tasks=[])
 
     with pytest.raises(WbsSuggestionEmptyError):
@@ -192,9 +194,6 @@ async def test_suggest_without_tasks_is_rejected() -> None:
 
     mocks["llm"].get_structured_response.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_suggest_wraps_model_failure() -> None:
     service, _ = build_service(tasks=[task(11)], llm_error=ValueError("сломался парсер"))
 
     with pytest.raises(WbsSuggestionError) as exc_info:
@@ -249,7 +248,9 @@ async def test_apply_numbers_tasks_inside_each_node() -> None:
 
 
 @pytest.mark.asyncio
-async def test_apply_rejects_unknown_parent() -> None:
+async def test_apply_rejects_unusable_draft() -> None:
+    """Черновик отклоняется целиком: неизвестный родитель, чужая задача, задача дважды и слишком большая глубина."""
+
     service, mocks = build_service(tasks=[task(11)])
 
     with pytest.raises(WbsSuggestionInvalidError) as exc_info:
@@ -262,9 +263,6 @@ async def test_apply_rejects_unknown_parent() -> None:
     assert exc_info.value.status_code == 422
     mocks["wbs"].save.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_apply_rejects_task_from_another_project() -> None:
     service, mocks = build_service(tasks=[task(11)])
 
     with pytest.raises(WbsSuggestionInvalidError):
@@ -276,9 +274,6 @@ async def test_apply_rejects_task_from_another_project() -> None:
 
     mocks["wbs"].save.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_apply_rejects_task_placed_twice() -> None:
     service, _ = build_service(tasks=[task(11)])
 
     with pytest.raises(WbsSuggestionInvalidError):
@@ -291,9 +286,6 @@ async def test_apply_rejects_task_placed_twice() -> None:
             ],
         )
 
-
-@pytest.mark.asyncio
-async def test_apply_rejects_too_deep_draft() -> None:
     service, _ = build_service(tasks=[task(11)])
 
     with pytest.raises(WbsSuggestionInvalidError):

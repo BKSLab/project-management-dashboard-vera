@@ -96,7 +96,9 @@ def make_job(operation: KnowledgeIndexOperation, entity_type: KnowledgeEntityTyp
 
 
 @pytest.mark.asyncio
-async def test_upsert_existing_task_replaces_point_without_deleting_task_context(tmp_path) -> None:
+async def test_task_context_is_replaced_or_deleted_as_a_whole(tmp_path) -> None:
+    """Обновление задачи заменяет её точку, исчезнувшая задача уносит весь свой контекст."""
+
     service, _, _, runtime, _, _ = build_service(tmp_path)
 
     await service.process(make_job(KnowledgeIndexOperation.UPSERT, KnowledgeEntityType.TASK))
@@ -104,6 +106,21 @@ async def test_upsert_existing_task_replaces_point_without_deleting_task_context
     runtime.qdrant_client.delete_task_context.assert_not_awaited()
     runtime.qdrant_client.delete_entity.assert_not_awaited()
     runtime.qdrant_client.upsert_documents.assert_awaited_once()
+
+    service, _, _, runtime, _, _ = build_service(tmp_path)
+    service.tasks_repository.get_by_id.return_value = None
+
+    await service.process(make_job(KnowledgeIndexOperation.UPSERT, KnowledgeEntityType.TASK))
+
+    runtime.qdrant_client.delete_task_context.assert_awaited_once_with(project_id=1, task_id=7)
+    runtime.qdrant_client.upsert_documents.assert_not_awaited()
+
+    service, _, _, runtime, _, _ = build_service(tmp_path)
+
+    await service.process(make_job(KnowledgeIndexOperation.DELETE, KnowledgeEntityType.TASK))
+
+    runtime.qdrant_client.delete_task_context.assert_awaited_once_with(project_id=1, task_id=7)
+    runtime.embedding_client.get_embeddings.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -129,27 +146,6 @@ async def test_milestone_semantic_document_excludes_operational_dates(tmp_path) 
     assert "MVP" in texts[0]
     assert "Критерии запуска" in texts[0]
     assert str(datetime.now(UTC).date()) not in texts[0]
-
-
-@pytest.mark.asyncio
-async def test_upsert_missing_task_deletes_entire_task_context(tmp_path) -> None:
-    service, _, _, runtime, _, _ = build_service(tmp_path)
-    service.tasks_repository.get_by_id.return_value = None
-
-    await service.process(make_job(KnowledgeIndexOperation.UPSERT, KnowledgeEntityType.TASK))
-
-    runtime.qdrant_client.delete_task_context.assert_awaited_once_with(project_id=1, task_id=7)
-    runtime.qdrant_client.upsert_documents.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_delete_task_deletes_entire_task_context(tmp_path) -> None:
-    service, _, _, runtime, _, _ = build_service(tmp_path)
-
-    await service.process(make_job(KnowledgeIndexOperation.DELETE, KnowledgeEntityType.TASK))
-
-    runtime.qdrant_client.delete_task_context.assert_awaited_once_with(project_id=1, task_id=7)
-    runtime.embedding_client.get_embeddings.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -273,7 +269,9 @@ async def test_unavailable_vision_model_fails_job_instead_of_skipping_image(tmp_
     runtime.qdrant_client.upsert_documents.assert_not_awaited()
 
 
-def test_comment_document_does_not_depend_on_mutable_task_title(tmp_path) -> None:
+def test_document_text_does_not_depend_on_mutable_task_title(tmp_path) -> None:
+    """Тексты комментария и вложения не зависят от изменяемого заголовка задачи."""
+
     _, project, task, _, _, _ = build_service(tmp_path)
     comment = TaskComment(
         id=5,
@@ -288,8 +286,6 @@ def test_comment_document_does_not_depend_on_mutable_task_title(tmp_path) -> Non
     assert "Задача: PROJ-12" in document.text
     assert task.title not in document.text
 
-
-def test_attachment_document_does_not_depend_on_mutable_task_title(tmp_path) -> None:
     _, project, task, _, _, _ = build_service(tmp_path)
     attachment = TaskAttachment(
         id=11,

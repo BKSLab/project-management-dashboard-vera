@@ -13,8 +13,8 @@
 | 0. Baseline и инструмент покрытия | ✅ выполнен | 1280 | 79% | `consolidation-0` |
 | 1. Архитектурные guards | ✅ выполнен | 894 | 79% | `consolidation-1` |
 | 2. Матрицы прав в api | ✅ выполнен | 795 | 79% | `consolidation-2` |
-| 3. Сервисный слой unit | ⬜ | ~500 | | |
-| 4. knowledge, mcp, clients unit | ⬜ | ~430 | | |
+| 3. Сервисный слой unit | ✅ выполнен | 692 | 79% | `consolidation-3` |
+| 4. knowledge, mcp, clients unit | ✅ выполнен | 626 | 79% | `consolidation-4` |
 | 5. Integration на PostgreSQL | ⬜ | ~370 | | |
 | 6. Characterization и финал | ⬜ | ≤320 | | |
 

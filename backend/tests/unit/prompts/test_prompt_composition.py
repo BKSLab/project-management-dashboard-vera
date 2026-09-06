@@ -1,4 +1,3 @@
-import pytest
 
 from src.prompts.analytics import ANALYTICS_SYSTEM_PROMPT
 from src.prompts.base import (
@@ -26,32 +25,39 @@ ALL_PROMPTS = {
 ROLE_PROMPTS = {name: value for name, value in ALL_PROMPTS.items() if name != "tool_selection"}
 
 
-@pytest.mark.parametrize("prompt", ALL_PROMPTS.values(), ids=ALL_PROMPTS.keys())
-def test_every_prompt_declares_input_as_untrusted(prompt: str) -> None:
-    assert UNTRUSTED_DATA_RULE in prompt
+def test_every_prompt_keeps_the_shared_composition_rules() -> None:
+    """Каждый prompt объявляет данные недоверенными и требует JSON.
+
+    Правило проверяется по всему набору сразу: сообщение называет все
+    prompt-ы, из которых блок выпал, а не первый попавшийся.
+    """
+    without_untrusted = [name for name, text in ALL_PROMPTS.items() if UNTRUSTED_DATA_RULE not in text]
+    assert not without_untrusted, f"Нет правила о недоверенных данных: {without_untrusted}"
+
+    without_json = [
+        name
+        for name, text in ALL_PROMPTS.items()
+        if "Верни" not in text or "JSON" not in text
+    ]
+    assert not without_json, f"Нет объявленного JSON-контракта: {without_json}"
 
 
-@pytest.mark.parametrize("prompt", ROLE_PROMPTS.values(), ids=ROLE_PROMPTS.keys())
-def test_reasoning_prompts_share_the_same_role_and_context(prompt: str) -> None:
-    assert PM_ROLE in prompt
-    assert TRACKER_CONTEXT in prompt
+def test_reasoning_prompts_open_with_the_shared_role_and_context() -> None:
+    """Рассуждающие prompt-ы начинаются с роли и несут контекст трекера.
 
+    Инструмент выбора инструментов сюда не входит намеренно: роль и
+    языковое правило только мешали бы ему выбирать.
+    """
+    problems = [
+        name
+        for name, text in ROLE_PROMPTS.items()
+        if not text.startswith(PM_ROLE) or TRACKER_CONTEXT not in text
+    ]
+    assert not problems, f"Роль или контекст трекера потеряны: {problems}"
 
-@pytest.mark.parametrize("prompt", ROLE_PROMPTS.values(), ids=ROLE_PROMPTS.keys())
-def test_reasoning_prompts_start_with_the_role(prompt: str) -> None:
-    assert prompt.startswith(PM_ROLE)
-
-
-def test_tool_selection_prompt_stays_free_of_role_and_language_rule() -> None:
     assert PM_ROLE not in PROJECT_AGENT_TOOL_SELECTION_PROMPT
     assert TRACKER_CONTEXT not in PROJECT_AGENT_TOOL_SELECTION_PROMPT
     assert LANGUAGE_RULE not in PROJECT_AGENT_TOOL_SELECTION_PROMPT
-
-
-@pytest.mark.parametrize("prompt", ALL_PROMPTS.values(), ids=ALL_PROMPTS.keys())
-def test_every_prompt_declares_its_json_contract(prompt: str) -> None:
-    assert "Верни" in prompt
-    assert "JSON" in prompt
 
 
 def test_role_names_the_principles_instead_of_relying_on_a_standard_edition() -> None:

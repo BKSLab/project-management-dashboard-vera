@@ -105,6 +105,7 @@ def build_service(
 
 @pytest.mark.asyncio
 async def test_get_structure_returns_flat_lists_and_stats() -> None:
+    """Структура отдаётся плоскими списками со сводкой по задачам."""
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [node(1), node(2, parent_id=1)]
     tasks_repository = AsyncMock(spec=TasksRepository)
@@ -127,7 +128,20 @@ async def test_get_structure_returns_flat_lists_and_stats() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_node_appends_to_end_of_level() -> None:
+async def test_get_structure_wraps_repository_error() -> None:
+    """Сбой репозитория выходит наружу ошибкой сервисного слоя."""
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.side_effect = WbsNodesRepositoryError("БД недоступна")
+
+    with pytest.raises(WbsNodesServiceError) as exc_info:
+        await build_service(wbs_repository).get_structure(project_id=1)
+
+    assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_create_node_computes_position_within_its_level() -> None:
+    """Новый узел встаёт в конец своего уровня, первый — на базовую позицию."""
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [
         node(1, position=1000.0),
@@ -135,44 +149,20 @@ async def test_create_node_appends_to_end_of_level() -> None:
         node(3, parent_id=1, position=5000.0),
     ]
     wbs_repository.save.return_value = node(4, position=3000.0)
+    service = build_service(wbs_repository)
 
-    await build_service(wbs_repository).create_node(
-        project_id=1,
-        title="Deployment",
-        parent_id=None,
-    )
-
+    await service.create_node(project_id=1, title="Deployment", parent_id=None)
     assert wbs_repository.save.await_args.kwargs["data"]["position"] == 3000.0
 
-
-@pytest.mark.asyncio
-async def test_create_first_node_of_level_uses_base_position() -> None:
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [node(1)]
     wbs_repository.save.return_value = node(2, parent_id=1)
-
-    await build_service(wbs_repository).create_node(project_id=1, title="API", parent_id=1)
-
+    await service.create_node(project_id=1, title="API", parent_id=1)
     assert wbs_repository.save.await_args.kwargs["data"]["position"] == POSITION_STEP
 
 
 @pytest.mark.asyncio
-async def test_create_node_does_not_enqueue_index_job() -> None:
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = []
-    wbs_repository.save.return_value = node(1)
-    knowledge_events = AsyncMock(spec=KnowledgeEvents)
-
-    await build_service(
-        wbs_repository,
-        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
-    ).create_node(project_id=1, title="Backend", parent_id=None)
-
-    assert knowledge_events.method_calls == []
-
-
-@pytest.mark.asyncio
 async def test_create_node_with_unknown_parent_raises_not_found() -> None:
+    """Несуществующий родитель — отказ до записи."""
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [node(1)]
 
@@ -188,42 +178,29 @@ async def test_create_node_with_unknown_parent_raises_not_found() -> None:
 
 
 @pytest.mark.asyncio
-async def test_move_node_into_own_descendant_raises_cycle() -> None:
+async def test_move_node_into_itself_or_its_descendant_raises_cycle() -> None:
+    """Узел нельзя вложить ни в себя, ни в собственного потомка."""
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [
         node(1),
         node(2, parent_id=1),
         node(3, parent_id=2),
     ]
+    service = build_service(wbs_repository)
 
     with pytest.raises(WbsNodeCycleError) as exc_info:
-        await build_service(wbs_repository).move_node(
-            project_id=1,
-            node_id=1,
-            parent_id=3,
-            before_id=None,
-        )
-
+        await service.move_node(project_id=1, node_id=1, parent_id=3, before_id=None)
     assert exc_info.value.status_code == 409
+
+    with pytest.raises(WbsNodeCycleError):
+        await service.move_node(project_id=1, node_id=1, parent_id=1, before_id=None)
+
     wbs_repository.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_move_node_into_itself_raises_cycle() -> None:
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = [node(1)]
-
-    with pytest.raises(WbsNodeCycleError):
-        await build_service(wbs_repository).move_node(
-            project_id=1,
-            node_id=1,
-            parent_id=1,
-            before_id=None,
-        )
-
-
-@pytest.mark.asyncio
-async def test_move_node_before_sibling_lands_between_neighbours() -> None:
+async def test_move_node_positions_it_between_neighbours_or_at_the_end() -> None:
+    """Позиция вычисляется по соседям: между ними либо в конец уровня."""
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [
         node(1, position=1000.0),
@@ -231,112 +208,11 @@ async def test_move_node_before_sibling_lands_between_neighbours() -> None:
         node(3, position=3000.0),
     ]
     wbs_repository.update.return_value = node(3, position=1500.0)
-
     await build_service(wbs_repository).move_node(
-        project_id=1,
-        node_id=3,
-        parent_id=None,
-        before_id=2,
+        project_id=1, node_id=3, parent_id=None, before_id=2
     )
-
     assert wbs_repository.update.await_args.kwargs["data"]["position"] == 1500.0
 
-
-@pytest.mark.asyncio
-async def test_reorder_siblings_does_not_enqueue_index_job() -> None:
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = [
-        node(1, position=1000.0),
-        node(2, position=2000.0),
-    ]
-    wbs_repository.update.return_value = node(2, position=500.0)
-    knowledge_events = AsyncMock(spec=KnowledgeEvents)
-
-    await build_service(
-        wbs_repository,
-        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
-    ).move_node(project_id=1, node_id=2, parent_id=None, before_id=1)
-
-    knowledge_events.upsert_many.assert_not_awaited()
-    knowledge_events.reindex_project.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_rename_node_enqueues_tasks_from_subtree_before_commit() -> None:
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    root = node(1)
-    wbs_repository.get_by_id.return_value = root
-    wbs_repository.get_by_project.return_value = [root, node(2, parent_id=1), node(3)]
-    wbs_repository.update.return_value = node(1, title="Platform")
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_ids_by_wbs_nodes.return_value = [11, 12]
-    knowledge_events = AsyncMock(spec=KnowledgeEvents)
-    unit_of_work = AsyncMock(spec=UnitOfWork)
-    manager = MagicMock()
-    manager.attach_mock(knowledge_events.upsert_many, "enqueue_many")
-    manager.attach_mock(unit_of_work.commit, "commit")
-
-    await build_service(
-        wbs_repository,
-        tasks_repository,
-        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
-        unit_of_work=unit_of_work,
-    ).update_node(project_id=1, node_id=1, title="Platform")
-
-    tasks_repository.get_ids_by_wbs_nodes.assert_awaited_once_with({1, 2})
-    knowledge_events.upsert_many.assert_awaited_once_with(
-        project_id=1,
-        entity_type=KnowledgeEntityType.TASK,
-        entity_ids=[11, 12],
-    )
-    assert manager.mock_calls[-2:] == [
-        call.enqueue_many(**knowledge_events.upsert_many.await_args.kwargs),
-        call.commit(),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_rename_node_rejects_node_from_another_project() -> None:
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_id.return_value = node(1, project_id=2)
-
-    with pytest.raises(WbsNodeForeignProjectError):
-        await build_service(wbs_repository).update_node(
-            project_id=1,
-            node_id=1,
-            title="Platform",
-        )
-
-    wbs_repository.get_by_project.assert_not_awaited()
-    wbs_repository.update.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_reparent_node_enqueues_only_tasks_from_subtree() -> None:
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = [
-        node(1),
-        node(2, parent_id=1),
-        node(3),
-    ]
-    wbs_repository.update.return_value = node(1, parent_id=3)
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_ids_by_wbs_nodes.return_value = [20, 21]
-    knowledge_events = AsyncMock(spec=KnowledgeEvents)
-
-    await build_service(
-        wbs_repository,
-        tasks_repository,
-        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
-    ).move_node(project_id=1, node_id=1, parent_id=3, before_id=None)
-
-    tasks_repository.get_ids_by_wbs_nodes.assert_awaited_once_with({1, 2})
-    assert knowledge_events.upsert_many.await_args.kwargs["entity_ids"] == [20, 21]
-    knowledge_events.reindex_project.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_move_node_to_level_end_when_before_is_absent() -> None:
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [
         node(1, position=1000.0),
@@ -344,14 +220,9 @@ async def test_move_node_to_level_end_when_before_is_absent() -> None:
         node(3, parent_id=1, position=1000.0),
     ]
     wbs_repository.update.return_value = node(3, position=3000.0)
-
     await build_service(wbs_repository).move_node(
-        project_id=1,
-        node_id=3,
-        parent_id=None,
-        before_id=None,
+        project_id=1, node_id=3, parent_id=None, before_id=None
     )
-
     updated = wbs_repository.update.await_args.kwargs["data"]
     assert updated["position"] == 3000.0
     assert updated["parent_id"] is None
@@ -359,6 +230,7 @@ async def test_move_node_to_level_end_when_before_is_absent() -> None:
 
 @pytest.mark.asyncio
 async def test_move_node_compacts_level_when_gap_is_exhausted() -> None:
+    """Когда между соседями не осталось зазора, уровень перенумеровывается."""
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [
         node(1, position=1000.0),
@@ -381,7 +253,114 @@ async def test_move_node_compacts_level_when_gap_is_exhausted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_structure_only_changes_do_not_reindex_knowledge() -> None:
+    """Создание узла и перестановка соседей не ставят заданий индексации.
+
+    Текст задач при этом не меняется, а переиндексация проекта — дорогая
+    операция: лишний повод её запустить дороже самого изменения.
+    """
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = []
+    wbs_repository.save.return_value = node(1)
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    await build_service(wbs_repository, knowledge_events=knowledge_events).create_node(
+        project_id=1, title="Backend", parent_id=None
+    )
+    assert knowledge_events.method_calls == []
+
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [
+        node(1, position=1000.0),
+        node(2, position=2000.0),
+    ]
+    wbs_repository.update.return_value = node(2, position=500.0)
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    await build_service(wbs_repository, knowledge_events=knowledge_events).move_node(
+        project_id=1, node_id=2, parent_id=None, before_id=1
+    )
+    knowledge_events.upsert_many.assert_not_awaited()
+    knowledge_events.reindex_project.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rename_node_enqueues_tasks_from_subtree_before_commit() -> None:
+    """Переименование ставит задачи поддерева в очередь до коммита.
+
+    Порядок принципиален: задание обязано попасть в базу той же
+    транзакцией, что и само переименование.
+    """
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    root = node(1)
+    wbs_repository.get_by_id.return_value = root
+    wbs_repository.get_by_project.return_value = [root, node(2, parent_id=1), node(3)]
+    wbs_repository.update.return_value = node(1, title="Platform")
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_ids_by_wbs_nodes.return_value = [11, 12]
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    unit_of_work = AsyncMock(spec=UnitOfWork)
+    manager = MagicMock()
+    manager.attach_mock(knowledge_events.upsert_many, "enqueue_many")
+    manager.attach_mock(unit_of_work.commit, "commit")
+
+    await build_service(
+        wbs_repository,
+        tasks_repository,
+        knowledge_events=knowledge_events,
+        unit_of_work=unit_of_work,
+    ).update_node(project_id=1, node_id=1, title="Platform")
+
+    tasks_repository.get_ids_by_wbs_nodes.assert_awaited_once_with({1, 2})
+    knowledge_events.upsert_many.assert_awaited_once_with(
+        project_id=1,
+        entity_type=KnowledgeEntityType.TASK,
+        entity_ids=[11, 12],
+    )
+    assert manager.mock_calls[-2:] == [
+        call.enqueue_many(**knowledge_events.upsert_many.await_args.kwargs),
+        call.commit(),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reparent_and_delete_enqueue_only_tasks_of_the_subtree() -> None:
+    """Перенос и удаление узла переиндексируют только задачи поддерева.
+
+    Обе операции меняют путь ИСР у одних и тех же задач, поэтому и
+    правило у них одно: переиндексация проекта целиком не нужна.
+    """
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [node(1), node(2, parent_id=1), node(3)]
+    wbs_repository.update.return_value = node(1, parent_id=3)
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_ids_by_wbs_nodes.return_value = [20, 21]
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    await build_service(
+        wbs_repository, tasks_repository, knowledge_events=knowledge_events
+    ).move_node(project_id=1, node_id=1, parent_id=3, before_id=None)
+    tasks_repository.get_ids_by_wbs_nodes.assert_awaited_once_with({1, 2})
+    assert knowledge_events.upsert_many.await_args.kwargs["entity_ids"] == [20, 21]
+    knowledge_events.reindex_project.assert_not_awaited()
+
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [node(1), node(2, parent_id=1), node(3)]
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_ids_by_wbs_nodes.return_value = [31, 32]
+    tasks_repository.clear_wbs_node.return_value = 2
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    await build_service(
+        wbs_repository, tasks_repository, knowledge_events=knowledge_events
+    ).delete_node(project_id=1, node_id=1)
+    knowledge_events.upsert_many.assert_awaited_once_with(
+        project_id=1,
+        entity_type=KnowledgeEntityType.TASK,
+        entity_ids=[31, 32],
+    )
+    knowledge_events.reindex_project.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_delete_node_releases_tasks_without_deleting_them() -> None:
+    """Удаление раздела возвращает его задачи в пул, а не удаляет их."""
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [
         node(1),
@@ -405,30 +384,8 @@ async def test_delete_node_releases_tasks_without_deleting_them() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_node_enqueues_released_tasks_from_deleted_subtree() -> None:
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = [node(1), node(2, parent_id=1), node(3)]
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_ids_by_wbs_nodes.return_value = [31, 32]
-    tasks_repository.clear_wbs_node.return_value = 2
-    knowledge_events = AsyncMock(spec=KnowledgeEvents)
-
-    await build_service(
-        wbs_repository,
-        tasks_repository,
-        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
-    ).delete_node(project_id=1, node_id=1)
-
-    knowledge_events.upsert_many.assert_awaited_once_with(
-        project_id=1,
-        entity_type=KnowledgeEntityType.TASK,
-        entity_ids=[31, 32],
-    )
-    knowledge_events.reindex_project.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_assign_task_records_history_and_updates_node() -> None:
+async def test_assign_and_unassign_task_record_the_change_in_history() -> None:
+    """Перенос задачи в раздел и обратно записывается событием истории."""
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [node(5, title="API")]
     tasks_repository = AsyncMock(spec=TasksRepository)
@@ -438,9 +395,7 @@ async def test_assign_task_records_history_and_updates_node() -> None:
     activity_repository = AsyncMock(spec=TaskActivityRepository)
 
     result = await build_service(
-        wbs_repository,
-        tasks_repository,
-        activity_repository,
+        wbs_repository, tasks_repository, activity_repository
     ).assign_task(project_id=1, task_id=11, wbs_node_id=5)
 
     assert tasks_repository.update.await_args.kwargs["data"] == {
@@ -455,67 +410,13 @@ async def test_assign_task_records_history_and_updates_node() -> None:
     assert event["to_value"] == "API"
     assert result.wbs_node_id == 5
 
-
-@pytest.mark.asyncio
-async def test_assign_task_to_unknown_node_raises_not_found() -> None:
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = []
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_id.return_value = task(11)
-
-    with pytest.raises(WbsNodeNotFoundError):
-        await build_service(wbs_repository, tasks_repository).assign_task(
-            project_id=1,
-            task_id=11,
-            wbs_node_id=77,
-        )
-
-    tasks_repository.update.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_assign_task_of_another_project_raises_conflict() -> None:
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    foreign_task = task(11)
-    foreign_task.project_id = 5
-    tasks_repository.get_by_id.return_value = foreign_task
-
-    with pytest.raises(TaskForeignProjectError) as exc_info:
-        await build_service(tasks_repository=tasks_repository).assign_task(
-            project_id=1,
-            task_id=11,
-            wbs_node_id=5,
-        )
-
-    assert exc_info.value.status_code == 409
-
-
-@pytest.mark.asyncio
-async def test_assign_missing_task_raises_not_found() -> None:
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_id.return_value = None
-
-    with pytest.raises(TaskNotFoundError):
-        await build_service(tasks_repository=tasks_repository).assign_task(
-            project_id=1,
-            task_id=999,
-            wbs_node_id=5,
-        )
-
-
-@pytest.mark.asyncio
-async def test_unassign_task_returns_it_to_pool() -> None:
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = [node(5, title="API")]
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_id.return_value = task(11, wbs_node_id=5, wbs_position=1000.0)
     tasks_repository.update.return_value = task(11)
     activity_repository = AsyncMock(spec=TaskActivityRepository)
 
     result = await build_service(
-        wbs_repository,
-        tasks_repository,
-        activity_repository,
+        wbs_repository, tasks_repository, activity_repository
     ).unassign_task(project_id=1, task_id=11)
 
     assert tasks_repository.update.await_args.kwargs["data"] == {
@@ -531,7 +432,62 @@ async def test_unassign_task_returns_it_to_pool() -> None:
 
 
 @pytest.mark.asyncio
-async def test_place_task_on_canvas_keeps_it_outside_structure() -> None:
+async def test_assign_task_rejects_unknown_node_and_foreign_or_missing_task() -> None:
+    """Отказ наступает до записи для всех трёх некорректных случаев."""
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = []
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = task(11)
+    with pytest.raises(WbsNodeNotFoundError):
+        await build_service(wbs_repository, tasks_repository).assign_task(
+            project_id=1, task_id=11, wbs_node_id=77
+        )
+    tasks_repository.update.assert_not_awaited()
+
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    foreign_task = task(11)
+    foreign_task.project_id = 5
+    tasks_repository.get_by_id.return_value = foreign_task
+    with pytest.raises(TaskForeignProjectError) as exc_info:
+        await build_service(tasks_repository=tasks_repository).assign_task(
+            project_id=1, task_id=11, wbs_node_id=5
+        )
+    assert exc_info.value.status_code == 409
+
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = None
+    with pytest.raises(TaskNotFoundError):
+        await build_service(tasks_repository=tasks_repository).assign_task(
+            project_id=1, task_id=999, wbs_node_id=5
+        )
+
+
+@pytest.mark.asyncio
+async def test_assign_task_to_same_node_is_noop() -> None:
+    """Повторное назначение в тот же раздел не пишет ни задачу, ни историю."""
+    wbs_repository = AsyncMock(spec=WbsNodesRepository)
+    wbs_repository.get_by_project.return_value = [node(5)]
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = task(11, wbs_node_id=5)
+    activity_repository = AsyncMock(spec=TaskActivityRepository)
+
+    await build_service(wbs_repository, tasks_repository, activity_repository).assign_task(
+        project_id=1,
+        task_id=11,
+        wbs_node_id=5,
+    )
+
+    tasks_repository.update.assert_not_awaited()
+    activity_repository.save.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_place_task_switches_between_canvas_and_structure() -> None:
+    """Холст и раздел взаимоисключающи: одно место хранения за раз.
+
+    Задача на холсте теряет позицию в разделе и не пишет событие истории,
+    а задача, положенная в раздел, теряет координаты холста.
+    """
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = []
     tasks_repository = AsyncMock(spec=TasksRepository)
@@ -540,16 +496,8 @@ async def test_place_task_on_canvas_keeps_it_outside_structure() -> None:
     activity_repository = AsyncMock(spec=TaskActivityRepository)
 
     result = await build_service(
-        wbs_repository,
-        tasks_repository,
-        activity_repository,
-    ).place_task(
-        project_id=1,
-        task_id=11,
-        wbs_node_id=None,
-        canvas_x=420.0,
-        canvas_y=180.0,
-    )
+        wbs_repository, tasks_repository, activity_repository
+    ).place_task(project_id=1, task_id=11, wbs_node_id=None, canvas_x=420.0, canvas_y=180.0)
 
     assert tasks_repository.update.await_args.kwargs["data"] == {
         "wbs_node_id": None,
@@ -561,9 +509,6 @@ async def test_place_task_on_canvas_keeps_it_outside_structure() -> None:
     activity_repository.save.assert_not_awaited()
     assert result.canvas_x == 420.0
 
-
-@pytest.mark.asyncio
-async def test_place_task_in_node_clears_canvas_coordinates() -> None:
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [node(5, title="API")]
     tasks_repository = AsyncMock(spec=TasksRepository)
@@ -582,7 +527,8 @@ async def test_place_task_in_node_clears_canvas_coordinates() -> None:
 
 
 @pytest.mark.asyncio
-async def test_place_task_before_sibling_gets_position_between_neighbours() -> None:
+async def test_place_task_orders_it_among_siblings() -> None:
+    """Позиция внутри раздела считается по соседям и уплотняется при нужде."""
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_repository.get_by_project.return_value = [node(5)]
     tasks_repository = AsyncMock(spec=TasksRepository)
@@ -602,11 +548,6 @@ async def test_place_task_before_sibling_gets_position_between_neighbours() -> N
 
     assert tasks_repository.update.await_args.kwargs["data"]["wbs_position"] == 1500.0
 
-
-@pytest.mark.asyncio
-async def test_place_task_compacts_positions_of_tasks_without_order() -> None:
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = [node(5)]
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_id.return_value = task(11)
     tasks_repository.get_by_wbs_node.return_value = [
@@ -628,41 +569,24 @@ async def test_place_task_compacts_positions_of_tasks_without_order() -> None:
 
 
 @pytest.mark.asyncio
-async def test_assign_task_to_same_node_is_noop() -> None:
+async def test_rename_node_rejects_node_from_another_project() -> None:
+    """Узел чужого проекта не читается и не пишется."""
     wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.return_value = [node(5)]
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_id.return_value = task(11, wbs_node_id=5)
-    activity_repository = AsyncMock(spec=TaskActivityRepository)
+    wbs_repository.get_by_id.return_value = node(1, project_id=2)
 
-    await build_service(wbs_repository, tasks_repository, activity_repository).assign_task(
-        project_id=1,
-        task_id=11,
-        wbs_node_id=5,
-    )
+    with pytest.raises(WbsNodeForeignProjectError):
+        await build_service(wbs_repository).update_node(
+            project_id=1,
+            node_id=1,
+            title="Platform",
+        )
 
-    tasks_repository.update.assert_not_awaited()
-    activity_repository.save.assert_not_awaited()
+    wbs_repository.get_by_project.assert_not_awaited()
+    wbs_repository.update.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_get_structure_wraps_repository_error() -> None:
-    wbs_repository = AsyncMock(spec=WbsNodesRepository)
-    wbs_repository.get_by_project.side_effect = WbsNodesRepositoryError("БД недоступна")
-
-    with pytest.raises(WbsNodesServiceError) as exc_info:
-        await build_service(wbs_repository).get_structure(project_id=1)
-
-    assert exc_info.value.status_code == 500
-
-
-def test_next_position_on_empty_level() -> None:
+def test_next_position_covers_empty_level_first_place_and_exhausted_gap() -> None:
+    """Расчёт позиции: пустой уровень, вставка перед первым, кончившийся зазор."""
     assert _next_position(positions=[], before_index=0) == POSITION_STEP
-
-
-def test_next_position_before_first_sibling_halves_it() -> None:
     assert _next_position(positions=[1000.0], before_index=0) == 500.0
-
-
-def test_next_position_signals_compaction_when_gap_is_too_small() -> None:
     assert _next_position(positions=[1000.0, 1000.0000001], before_index=1) is None

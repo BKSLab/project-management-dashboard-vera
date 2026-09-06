@@ -94,8 +94,9 @@ async def test_issue_token_returns_secret_once_and_stores_only_hash() -> None:
     assert result.token.prefix == result.secret[:8]
 
 
-async def test_issue_token_without_ttl_creates_endless_token() -> None:
-    """Отсутствие срока означает бессрочный токен."""
+async def test_issue_token_sets_lifetime_and_respects_the_limit() -> None:
+    """Срок жизни токена: бессрочный, с TTL и отказ при исчерпании лимита."""
+    # Отсутствие срока означает бессрочный токен.
     repository = FakeTokensRepository()
     service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
@@ -105,10 +106,7 @@ async def test_issue_token_without_ttl_creates_endless_token() -> None:
     )
 
     assert repository.created["expires_at"] is None
-
-
-async def test_issue_token_sets_expiration_from_ttl() -> None:
-    """Срок жизни отсчитывается от момента выпуска."""
+    # Срок жизни отсчитывается от момента выпуска.
     repository = FakeTokensRepository()
     service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
@@ -120,10 +118,7 @@ async def test_issue_token_sets_expiration_from_ttl() -> None:
     expires_at = repository.created["expires_at"]
     assert expires_at is not None
     assert timedelta(days=9) < expires_at - datetime.now(UTC) <= timedelta(days=10)
-
-
-async def test_issue_token_rejects_over_limit() -> None:
-    """Достигнутый предел действующих токенов запрещает выпуск."""
+    # Достигнутый предел действующих токенов запрещает выпуск.
     repository = FakeTokensRepository(active_count=10)
     service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
@@ -136,8 +131,9 @@ async def test_issue_token_rejects_over_limit() -> None:
     assert repository.created is None
 
 
-async def test_list_tokens_never_exposes_hash() -> None:
-    """Список токенов не содержит ни секрета, ни его хеша."""
+async def test_token_list_and_revocation_keep_the_secret_safe() -> None:
+    """Список не отдаёт хеш, отзыв неизвестного токена — 404, отзыв идёт с владельцем."""
+    # Список токенов не содержит ни секрета, ни его хеша.
     repository = FakeTokensRepository(tokens=[_token(token_hash="секретный-хеш")])
     service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
@@ -146,19 +142,13 @@ async def test_list_tokens_never_exposes_hash() -> None:
     assert len(tokens) == 1
     assert "token_hash" not in tokens[0].model_dump()
     assert "секретный-хеш" not in str(tokens[0].model_dump())
-
-
-async def test_revoke_unknown_token_raises_not_found() -> None:
-    """Отзыв чужого или несуществующего токена не молчит."""
+    # Отзыв чужого или несуществующего токена не молчит.
     repository = FakeTokensRepository(tokens=[])
     service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 
     with pytest.raises(ApiTokenNotFoundError):
         await service.revoke_token(token_id=99, user_id=1)
-
-
-async def test_revoke_passes_owner_to_repository() -> None:
-    """Отзыв всегда ограничен владельцем токена."""
+    # Отзыв всегда ограничен владельцем токена.
     repository = FakeTokensRepository(tokens=[_token(id=5)])
     service = ApiTokensService(tokens_repository=repository, max_active_tokens=MAX_ACTIVE_TOKENS)
 

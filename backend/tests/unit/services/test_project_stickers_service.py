@@ -162,26 +162,26 @@ async def test_update_uses_revision_replaces_tasks_and_preserves_author() -> Non
 
 
 @pytest.mark.asyncio
-async def test_update_rejects_stale_revision_before_write() -> None:
+async def test_stale_revision_never_overwrites_someone_elses_change() -> None:
+    """Устаревшая ревизия отклоняется и до записи, и по её результату.
+
+    Проверка перед записью ловит явно старую версию, а нулевое число
+    затронутых строк — гонку двух одновременных правок. Оба случая для
+    клиента одинаковы: его версия больше не актуальна.
+    """
     repository = AsyncMock(spec=ProjectStickersRepository)
     repository.get_by_id.return_value = sticker(revision=5)
-
     with pytest.raises(ProjectStickerRevisionConflictError):
         await service(repository).update_sticker(
             project_id=1,
             sticker_id=4,
             data=ProjectStickerUpdateSchema(revision=4, body="Поздняя версия"),
         )
-
     repository.update_fields.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_update_detects_compare_and_swap_race() -> None:
     repository = AsyncMock(spec=ProjectStickersRepository)
     repository.get_by_id.return_value = sticker(revision=2)
     repository.update_fields.return_value = False
-
     with pytest.raises(ProjectStickerRevisionConflictError):
         await service(repository).update_sticker(
             project_id=1,
@@ -189,17 +189,32 @@ async def test_update_detects_compare_and_swap_race() -> None:
             data=ProjectStickerUpdateSchema(revision=2, color="green"),
         )
 
+    repository = AsyncMock(spec=ProjectStickersRepository)
+    repository.get_by_id.return_value = sticker(revision=3)
+    repository.delete.return_value = False
+    with pytest.raises(ProjectStickerRevisionConflictError):
+        await service(repository).delete_sticker(project_id=1, sticker_id=4, revision=3)
+
 
 @pytest.mark.asyncio
-async def test_update_missing_sticker_is_not_found() -> None:
+async def test_missing_sticker_is_not_found_on_update_and_move() -> None:
+    """Отсутствующий стикер отвечает 404, а не конфликтом ревизии."""
     repository = AsyncMock(spec=ProjectStickersRepository)
     repository.get_by_id.return_value = None
-
     with pytest.raises(ProjectStickerNotFoundError):
         await service(repository).update_sticker(
             project_id=1,
             sticker_id=404,
             data=ProjectStickerUpdateSchema(revision=1, body="Текст"),
+        )
+
+    repository = AsyncMock(spec=ProjectStickersRepository)
+    repository.update_position.return_value = False
+    with pytest.raises(ProjectStickerNotFoundError):
+        await service(repository).move_sticker(
+            project_id=1,
+            sticker_id=404,
+            data=ProjectStickerPositionUpdateSchema(canvas_x=10.0, canvas_y=20.0),
         )
 
 
@@ -232,19 +247,6 @@ async def test_move_updates_only_canvas_position_and_commits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_move_missing_sticker_is_not_found() -> None:
-    repository = AsyncMock(spec=ProjectStickersRepository)
-    repository.update_position.return_value = False
-
-    with pytest.raises(ProjectStickerNotFoundError):
-        await service(repository).move_sticker(
-            project_id=1,
-            sticker_id=404,
-            data=ProjectStickerPositionUpdateSchema(canvas_x=10.0, canvas_y=20.0),
-        )
-
-
-@pytest.mark.asyncio
 async def test_delete_uses_revision_and_commits() -> None:
     repository = AsyncMock(spec=ProjectStickersRepository)
     repository.get_by_id.return_value = sticker(revision=3)
@@ -263,20 +265,6 @@ async def test_delete_uses_revision_and_commits() -> None:
         expected_revision=3,
     )
     unit_of_work.commit.assert_awaited_once_with()
-
-
-@pytest.mark.asyncio
-async def test_delete_detects_compare_and_swap_race() -> None:
-    repository = AsyncMock(spec=ProjectStickersRepository)
-    repository.get_by_id.return_value = sticker(revision=3)
-    repository.delete.return_value = False
-
-    with pytest.raises(ProjectStickerRevisionConflictError):
-        await service(repository).delete_sticker(
-            project_id=1,
-            sticker_id=4,
-            revision=3,
-        )
 
 
 @pytest.mark.asyncio

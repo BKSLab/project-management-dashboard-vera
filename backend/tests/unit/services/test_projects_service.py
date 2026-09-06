@@ -220,7 +220,9 @@ async def test_get_project_list_wraps_repository_error() -> None:
     assert exc_info.value.status_code == 500
 
 
-def test_build_project_stats_counts_progress_and_deadlines() -> None:
+def test_build_project_stats_summarises_progress_and_deadlines() -> None:
+    """Сводка проекта: прогресс, просроченные задачи и пустой проект."""
+
     stages = [
         stage(1, "Бэклог", 0),
         stage(2, "В работе", 1),
@@ -246,8 +248,6 @@ def test_build_project_stats_counts_progress_and_deadlines() -> None:
     assert stats.next_due_date == TODAY + timedelta(days=2)
     assert [item.tasks_count for item in stats.stage_breakdown] == [2, 2, 1]
 
-
-def test_build_project_stats_marks_overdue_backlog_task() -> None:
     stages = [stage(1, "Бэклог", 0), stage(2, "Готово", 1, is_done=True)]
     tasks = [task(1, 1, due_date=TODAY - timedelta(days=1))]
 
@@ -257,8 +257,6 @@ def test_build_project_stats_marks_overdue_backlog_task() -> None:
     assert stats.in_progress_tasks == 0
     assert stats.next_due_date is None
 
-
-def test_build_project_stats_for_empty_project() -> None:
     stats = build_project_stats(project_id=1, stages=[], tasks=[], today=TODAY)
 
     assert stats.total_tasks == 0

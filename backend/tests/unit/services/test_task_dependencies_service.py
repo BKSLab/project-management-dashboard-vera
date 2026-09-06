@@ -74,7 +74,9 @@ async def test_create_finish_to_start_dependency_commits_through_uow() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dependency_rejects_self_reference_without_db_write() -> None:
+async def test_dependency_rejects_every_kind_of_cycle() -> None:
+    """Связь на себя, задача чужого проекта и косвенный цикл отклоняются."""
+
     service, repository, _, uow = build_service()
 
     with pytest.raises(TaskDependencySelfReferenceError):
@@ -86,9 +88,6 @@ async def test_dependency_rejects_self_reference_without_db_write() -> None:
     repository.save.assert_not_awaited()
     uow.commit.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_dependency_rejects_task_from_another_project() -> None:
     service, repository, tasks, uow = build_service()
     tasks.get_by_ids.return_value = [
         SimpleNamespace(id=1, project_id=1),
@@ -104,9 +103,6 @@ async def test_dependency_rejects_task_from_another_project() -> None:
     repository.save.assert_not_awaited()
     uow.commit.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_dependency_rejects_indirect_cycle() -> None:
     service, repository, _, uow = build_service()
     repository.get_by_project.return_value = [
         dependency(predecessor_id=1, successor_id=2),

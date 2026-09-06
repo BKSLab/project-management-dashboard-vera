@@ -50,7 +50,9 @@ def test_metrics_ignore_duplicate_prediction_ids() -> None:
     assert metrics.mrr == 0.5
 
 
-def test_unapproved_candidates_cannot_be_run(tmp_path: Path) -> None:
+def test_eval_fixture_is_valid_and_unapproved_candidates_are_blocked(tmp_path: Path) -> None:
+    """Неодобренные кандидаты не запускаются, пустой эталон отвергается, файл кандидатов не содержит одобренных вопросов."""
+
     dataset = tmp_path / "candidates.json"
     dataset.write_text(
         json.dumps(
@@ -73,8 +75,6 @@ def test_unapproved_candidates_cannot_be_run(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="не утверждён"):
         load_retrieval_examples(dataset)
 
-
-def test_empty_ground_truth_is_rejected(tmp_path: Path) -> None:
     dataset = tmp_path / "empty.json"
     dataset.write_text(
         json.dumps(
@@ -97,8 +97,6 @@ def test_empty_ground_truth_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="ground truth"):
         load_retrieval_examples(dataset)
 
-
-def test_candidate_questions_are_unapproved_and_have_no_ground_truth() -> None:
     payload = json.loads(CANDIDATES.read_text(encoding="utf-8"))
 
     assert "ТРЕБУЕТ УТВЕРЖДЕНИЯ" in payload["notice"]

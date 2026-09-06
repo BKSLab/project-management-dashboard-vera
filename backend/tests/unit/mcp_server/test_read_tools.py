@@ -117,12 +117,9 @@ def task_dto(number: int = 142, **overrides) -> TaskSummaryDto:
     return TaskSummaryDto(**values)
 
 
-async def test_list_projects_returns_only_the_service_result(tools) -> None:
-    """Инструмент отдаёт то, что вернул сценарий, и не фильтрует сам.
-
-    Раньше фильтрация по доступу жила в обработчике: правило «что видно
-    владельцу токена» существовало только в MCP.
-    """
+async def test_list_projects_returns_service_result_and_reports_failure(tools) -> None:
+    """Список проектов приходит из сервиса; его сбой становится ошибкой инструмента."""
+    # Инструмент отдаёт то, что вернул сценарий, и не фильтрует сам. Раньше фильтрация по доступу жила в обработчике: правило «что видно владельцу токена» существовало только в MCP.
     services = tools()
     services.query.list_accessible_projects.return_value = [PROJECT]
 
@@ -130,10 +127,7 @@ async def test_list_projects_returns_only_the_service_result(tools) -> None:
 
     assert [item["project_key"] for item in result] == ["PROJ"]
     services.query.list_accessible_projects.assert_awaited_once_with(user_id=1)
-
-
-async def test_list_projects_reports_service_failure(tools) -> None:
-    """Сбой сценария превращается в ToolError без внутренних деталей."""
+    # Сбой сценария превращается в ToolError без внутренних деталей.
     services = tools()
     services.query.list_accessible_projects.side_effect = ProjectsServiceError("сбой БД")
 
@@ -143,8 +137,9 @@ async def test_list_projects_reports_service_failure(tools) -> None:
     assert "сбой БД" not in str(error.value)
 
 
-async def test_get_project_returns_stages_with_counts(tools) -> None:
-    """Карточка проекта содержит стадии и число задач в каждой."""
+async def test_get_project_returns_stages_and_hides_foreign_projects(tools) -> None:
+    """Карточка проекта со стадиями; чужой проект недоступен."""
+    # Карточка проекта содержит стадии и число задач в каждой.
     services = tools()
     services.query.get_project_overview.return_value = ProjectOverviewDto(
         summary=PROJECT,
@@ -164,10 +159,7 @@ async def test_get_project_returns_stages_with_counts(tools) -> None:
         {"name": "В работе", "is_done_stage": False, "task_count": 2},
         {"name": "Готово", "is_done_stage": True, "task_count": 0},
     ]
-
-
-async def test_get_project_rejects_foreign_project(tools) -> None:
-    """Чужой проект неотличим от несуществующего."""
+    # Чужой проект неотличим от несуществующего.
     services = tools()
     services.query.resolve_project_id.side_effect = ProjectNotFoundError(project_id=0)
 
@@ -177,8 +169,9 @@ async def test_get_project_rejects_foreign_project(tools) -> None:
     assert str(error.value) == "Проект недоступен."
 
 
-async def test_list_tasks_passes_filters_to_the_use_case(tools) -> None:
-    """Фильтры уходят в сценарий, а не применяются в обработчике."""
+async def test_list_tasks_applies_filters_and_reports_unknown_stage(tools) -> None:
+    """Фильтры доходят до use case, неизвестная стадия перечисляет доступные."""
+    # Фильтры уходят в сценарий, а не применяются в обработчике.
     services = tools()
     services.query.list_tasks.return_value = [task_dto()]
 
@@ -199,13 +192,7 @@ async def test_list_tasks_passes_filters_to_the_use_case(tools) -> None:
         only_open=True,
         limit=5,
     )
-
-
-async def test_list_tasks_unknown_stage_lists_available(tools) -> None:
-    """Неизвестная стадия отвечает списком доступных.
-
-    Без него вызывающему пришлось бы угадывать написание.
-    """
+    # Неизвестная стадия отвечает списком доступных. Без него вызывающему пришлось бы угадывать написание.
     services = tools()
     services.query.list_tasks.side_effect = UnknownStageError(
         stage_name="Ревью",
@@ -219,8 +206,9 @@ async def test_list_tasks_unknown_stage_lists_available(tools) -> None:
     assert "Готово" in str(error.value)
 
 
-async def test_get_task_returns_details_and_comment_count(tools) -> None:
-    """Карточка задачи содержит описание, путь ИСР и число комментариев."""
+async def test_get_task_returns_details_with_done_flag(tools) -> None:
+    """Карточка задачи с числом комментариев и признаком завершения."""
+    # Карточка задачи содержит описание, путь ИСР и число комментариев.
     services = tools()
     services.query.resolve_task.return_value = ResolvedTask(
         task_id=7,
@@ -241,10 +229,7 @@ async def test_get_task_returns_details_and_comment_count(tools) -> None:
     assert result["wbs_path"] == "1.2 Раздел"
     assert result["comment_count"] == 3
     services.query.get_task_details.assert_awaited_once_with(task_id=7)
-
-
-async def test_get_task_marks_done_stage(tools) -> None:
-    """Задача в завершающей стадии помечается как выполненная."""
+    # Задача в завершающей стадии помечается как выполненная.
     services = tools()
     services.query.resolve_task.return_value = ResolvedTask(
         task_id=7,
@@ -293,8 +278,9 @@ async def test_list_comments_returns_body_and_author(tools) -> None:
     ]
 
 
-async def test_search_tasks_delegates_to_the_use_case(tools) -> None:
-    """Поиск выполняется сценарием, обработчик только форматирует ответ."""
+async def test_search_tasks_delegates_and_survives_no_matches(tools) -> None:
+    """Поиск уходит в use case и на пустом результате отдаёт пустой список."""
+    # Поиск выполняется сценарием, обработчик только форматирует ответ.
     services = tools()
     services.query.search_tasks.return_value = [task_dto()]
 
@@ -306,18 +292,16 @@ async def test_search_tasks_delegates_to_the_use_case(tools) -> None:
         query="отчёт",
         limit=7,
     )
-
-
-async def test_search_tasks_returns_empty_without_matches(tools) -> None:
-    """Отсутствие совпадений — пустой список, а не ошибка."""
+    # Отсутствие совпадений — пустой список, а не ошибка.
     services = tools()
     services.query.search_tasks.return_value = []
 
     assert await srv.search_tasks(FakeContext(), project_key="PROJ", query="нет") == []
 
 
-async def test_get_calendar_range_returns_display_keys(tools) -> None:
-    """Календарь отдаётся отображаемыми ключами, без внутренних id."""
+async def test_calendar_range_presents_keys_limits_and_rejects_bad_dates(tools) -> None:
+    """Отображаемые ключи, пометка обрезанного результата и отказ на битой дате."""
+    # Календарь отдаётся отображаемыми ключами, без внутренних id.
     services = tools()
     services.calendar.get_range.return_value = calendar_response([calendar_task()])
 
@@ -333,13 +317,7 @@ async def test_get_calendar_range_returns_display_keys(tools) -> None:
     assert "id" not in result["tasks"][0]
     assert result["milestones"][0]["title"] == "MVP"
     assert result["truncated"] is False
-
-
-async def test_get_calendar_range_marks_truncated_result(tools) -> None:
-    """Обрезанный по лимиту ответ помечается явно.
-
-    Иначе вызывающий принял бы неполный список за полный.
-    """
+    # Обрезанный по лимиту ответ помечается явно. Иначе вызывающий принял бы неполный список за полный.
     services = tools()
     services.calendar.get_range.return_value = calendar_response(
         [calendar_task(id=7, key="PROJ-1"), calendar_task(id=8, key="PROJ-2")]
@@ -355,10 +333,7 @@ async def test_get_calendar_range_marks_truncated_result(tools) -> None:
 
     assert [item["task_key"] for item in result["tasks"]] == ["PROJ-1"]
     assert result["truncated"] is True
-
-
-async def test_get_calendar_range_rejects_bad_date(tools) -> None:
-    """Некорректная дата отвечает понятным сообщением о формате."""
+    # Некорректная дата отвечает понятным сообщением о формате.
     tools()
 
     with pytest.raises(ToolError) as error:

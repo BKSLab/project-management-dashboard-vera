@@ -20,7 +20,9 @@ def build_client(*, collection_exists: bool = True) -> tuple[ProjectQdrantClient
 
 
 @pytest.mark.asyncio
-async def test_ensure_collection_creates_payload_indexes_for_existing_collection() -> None:
+async def test_payload_indexes_follow_the_collection_lifecycle() -> None:
+    """Индексы payload создаются при появлении коллекции, восстанавливаются при пересоздании и забываются при удалении."""
+
     client, qdrant = build_client(collection_exists=True)
 
     await client.ensure_collection(project_id=7)
@@ -35,9 +37,6 @@ async def test_ensure_collection_creates_payload_indexes_for_existing_collection
         for call in qdrant.create_payload_index.await_args_list
     )
 
-
-@pytest.mark.asyncio
-async def test_ensure_collection_creates_collection_and_payload_indexes() -> None:
     client, qdrant = build_client(collection_exists=False)
 
     await client.ensure_collection(project_id=8)
@@ -45,9 +44,6 @@ async def test_ensure_collection_creates_collection_and_payload_indexes() -> Non
     qdrant.create_collection.assert_awaited_once()
     assert qdrant.create_payload_index.await_count == len(PAYLOAD_INDEX_FIELDS)
 
-
-@pytest.mark.asyncio
-async def test_recreate_collection_restores_payload_indexes() -> None:
     client, qdrant = build_client(collection_exists=True)
 
     await client.recreate_collection(project_id=9)
@@ -56,9 +52,6 @@ async def test_recreate_collection_restores_payload_indexes() -> None:
     qdrant.create_collection.assert_awaited_once()
     assert qdrant.create_payload_index.await_count == len(PAYLOAD_INDEX_FIELDS)
 
-
-@pytest.mark.asyncio
-async def test_delete_collection_invalidates_payload_index_memo() -> None:
     client, qdrant = build_client(collection_exists=True)
     client._indexed_collections.add("project_7")
     qdrant.collection_exists.side_effect = [True, False]
@@ -103,7 +96,9 @@ async def test_payload_indexes_are_checked_once_per_runtime() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_uses_query_api_and_groups_by_source_id() -> None:
+async def test_search_uses_query_api_with_optional_entity_filter() -> None:
+    """Поиск группирует по источнику и передаёт фильтр типа только когда он задан."""
+
     client, qdrant = build_client(collection_exists=True)
     task = SimpleNamespace(score=0.9, payload={"source_id": "task:5"})
     document = SimpleNamespace(score=0.8, payload={"source_id": "document:5"})
@@ -126,9 +121,6 @@ async def test_search_uses_query_api_and_groups_by_source_id() -> None:
     assert call.kwargs["query"] == [1.0, 0.0, 0.0]
     qdrant.search.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_search_passes_entity_type_filter_to_query_api() -> None:
     client, qdrant = build_client(collection_exists=True)
     qdrant.query_points_groups.return_value = SimpleNamespace(groups=[])
 
@@ -144,9 +136,6 @@ async def test_search_passes_entity_type_filter_to_query_api() -> None:
     assert query_filter.must[0].key == "entity_type"
     assert query_filter.must[0].match.value == "document"
 
-
-@pytest.mark.asyncio
-async def test_search_without_entity_type_omits_filter() -> None:
     client, qdrant = build_client(collection_exists=True)
     qdrant.query_points_groups.return_value = SimpleNamespace(groups=[])
 

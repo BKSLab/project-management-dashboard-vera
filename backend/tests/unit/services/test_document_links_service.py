@@ -59,7 +59,9 @@ async def test_create_link_rejects_objects_from_different_projects() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_link_with_missing_document_raises_not_found() -> None:
+async def test_create_link_rejects_missing_objects() -> None:
+    """Связь не создаётся, если документа или задачи нет."""
+
     documents_repository = AsyncMock(spec=DocumentsRepository)
     documents_repository.get_by_id.return_value = None
 
@@ -70,9 +72,6 @@ async def test_create_link_with_missing_document_raises_not_found() -> None:
             user_id=USER_ID,
         )
 
-
-@pytest.mark.asyncio
-async def test_create_link_with_missing_task_raises_not_found() -> None:
     documents_repository = AsyncMock(spec=DocumentsRepository)
     documents_repository.get_by_id.return_value = SimpleNamespace(id=1, project_id=1)
     tasks_repository = AsyncMock(spec=TasksRepository)

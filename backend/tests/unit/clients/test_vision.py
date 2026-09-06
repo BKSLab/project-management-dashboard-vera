@@ -53,7 +53,9 @@ async def test_joins_multipart_content() -> None:
     )
 
 
-async def test_retries_then_succeeds() -> None:
+async def test_vision_retries_transient_failures_only() -> None:
+    """Временный сбой повторяется, исчерпание попыток даёт ошибку провайдера, ошибка клиента не повторяется."""
+
     attempts = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -70,8 +72,6 @@ async def test_retries_then_succeeds() -> None:
     )
     assert attempts["count"] == 2
 
-
-async def test_raises_provider_error_after_all_attempts() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": "boom"})
 
@@ -79,14 +79,7 @@ async def test_raises_provider_error_after_all_attempts() -> None:
         await build_client(handler).extract_text(
             image_data_url="data:image/jpeg;base64,QUJD"
         )
-
-
-async def test_client_error_is_not_retried() -> None:
-    """Обычная 4xx завершается сразу: повтор её не исправит.
-
-    Раньше `401` повторялся наравне с таймаутом и умножал бюджет вызова на
-    число попыток, ничего не меняя в результате.
-    """
+    # Обычная 4xx завершается сразу: повтор её не исправит. Раньше `401` повторялся наравне с таймаутом и умножал бюджет вызова на число попыток, ничего не меняя в результате.
     attempts = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:

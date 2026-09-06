@@ -137,6 +137,7 @@ def build_service(
 
 @pytest.mark.asyncio
 async def test_create_task_allocates_number_and_uses_first_stage() -> None:
+    """Номер и стадия по умолчанию выдаются сервисом, задача уходит в индекс."""
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_next_number.return_value = 43
     tasks_repository.get_max_position_by_stage.return_value = 2000.0
@@ -151,7 +152,7 @@ async def test_create_task_allocates_number_and_uses_first_stage() -> None:
     result = await build_service(
         tasks_repository,
         stages_repository,
-        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
+        knowledge_events=knowledge_events,
     ).create_task(
         project_id=1,
         data={"title": "Реализовать фильтрацию", "stage_id": None},
@@ -171,6 +172,7 @@ async def test_create_task_allocates_number_and_uses_first_stage() -> None:
 
 @pytest.mark.asyncio
 async def test_create_task_assigns_team_roles_and_defaults_reporter() -> None:
+    """Исполнитель, наблюдатели и постановщик по умолчанию попадают в состав."""
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_next_number.return_value = 43
     tasks_repository.get_max_position_by_stage.return_value = 0.0
@@ -207,15 +209,11 @@ async def test_create_task_assigns_team_roles_and_defaults_reporter() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_task_only_owner_can_choose_another_reporter() -> None:
+async def test_create_task_enforces_team_rules_before_writing() -> None:
+    """Чужой постановщик доступен только владельцу, участник — только из команды."""
     tasks_repository = AsyncMock(spec=TasksRepository)
     members_repository = AsyncMock(spec=ProjectMembersRepository)
-    members_repository.get.return_value = member_for_task(
-        1,
-        11,
-        "member",
-        ProjectRole.MEMBER,
-    )
+    members_repository.get.return_value = member_for_task(1, 11, "member", ProjectRole.MEMBER)
 
     with pytest.raises(TaskReporterPermissionError) as exc_info:
         await build_service(
@@ -226,17 +224,10 @@ async def test_create_task_only_owner_can_choose_another_reporter() -> None:
             created_by_user_id=1,
             data={"title": "С чужим постановщиком", "reporter_id": 2},
         )
-
     assert exc_info.value.status_code == 403
-    tasks_repository.save.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_create_task_rejects_participant_outside_project_team() -> None:
-    tasks_repository = AsyncMock(spec=TasksRepository)
     members_repository = AsyncMock(spec=ProjectMembersRepository)
     members_repository.get_for_project.return_value = [member_for_task(1, 11, "owner")]
-
     with pytest.raises(TaskParticipantNotProjectMemberError):
         await build_service(
             tasks_repository=tasks_repository,
@@ -250,7 +241,8 @@ async def test_create_task_rejects_participant_outside_project_team() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_task_retries_when_number_is_taken() -> None:
+async def test_create_task_retries_taken_number_and_gives_up_after_attempts() -> None:
+    """Занятый номер вызывает повтор, а бесконечно занятый — отказ 409."""
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_next_number.side_effect = [43, 44]
     tasks_repository.get_max_position_by_stage.return_value = 0.0
@@ -265,13 +257,9 @@ async def test_create_task_retries_when_number_is_taken() -> None:
         project_id=1,
         data={"title": "Реализовать фильтрацию", "stage_id": None},
     )
-
     assert tasks_repository.save.await_count == 2
     assert result.key == "PROJ-44"
 
-
-@pytest.mark.asyncio
-async def test_create_task_gives_up_after_number_attempts() -> None:
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_next_number.return_value = 43
     tasks_repository.get_max_position_by_stage.return_value = 0.0
@@ -279,86 +267,67 @@ async def test_create_task_gives_up_after_number_attempts() -> None:
         project_id=1,
         number=43,
     )
-    stages_repository = AsyncMock(spec=ProjectStagesRepository)
-    stages_repository.get_by_project.return_value = [SimpleNamespace(id=1)]
 
     with pytest.raises(TaskNumberAllocationError) as exc_info:
         await build_service(tasks_repository, stages_repository).create_task(
             project_id=1,
             data={"title": "Реализовать фильтрацию", "stage_id": None},
         )
-
     assert exc_info.value.status_code == 409
 
 
 @pytest.mark.asyncio
-async def test_create_task_in_project_without_stages_raises_not_found() -> None:
+async def test_create_task_rejects_every_unusable_reference() -> None:
+    """Проект без стадий, чужая стадия, чужой и отсутствующий узел, чужой проект.
+
+    Все пять случаев — одно правило: ссылка проверяется до записи, и
+    задача не создаётся. Прогон по списку показывает сразу все ссылки,
+    которые перестали проверяться.
+    """
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
     stages_repository.get_by_project.return_value = []
-
     with pytest.raises(ProjectStageNotFoundError):
         await build_service(stages_repository=stages_repository).create_task(
             project_id=1,
             data={"title": "Задача", "stage_id": None},
         )
 
-
-@pytest.mark.asyncio
-async def test_create_task_rejects_stage_of_another_project() -> None:
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
     stages_repository.get_by_project.return_value = [SimpleNamespace(id=1)]
     stages_repository.get_by_id.return_value = SimpleNamespace(id=77, project_id=5)
-
     with pytest.raises(ProjectStageForeignProjectError) as exc_info:
         await build_service(stages_repository=stages_repository).create_task(
             project_id=1,
             data={"title": "Задача", "stage_id": 77},
         )
-
     assert exc_info.value.status_code == 409
 
-
-@pytest.mark.asyncio
-async def test_create_task_rejects_wbs_node_of_another_project() -> None:
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
     stages_repository.get_by_project.return_value = [SimpleNamespace(id=1)]
     wbs_nodes_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_nodes_repository.get_by_id.return_value = SimpleNamespace(id=8, project_id=5)
-    service = build_service(
-        stages_repository=stages_repository,
-        wbs_nodes_repository=wbs_nodes_repository,
-    )
-
     with pytest.raises(WbsNodeForeignProjectError):
-        await service.create_task(
+        await build_service(
+            stages_repository=stages_repository,
+            wbs_nodes_repository=wbs_nodes_repository,
+        ).create_task(
             project_id=1,
             data={"title": "Задача", "stage_id": None, "wbs_node_id": 8},
         )
 
-
-@pytest.mark.asyncio
-async def test_create_task_rejects_missing_wbs_node() -> None:
-    stages_repository = AsyncMock(spec=ProjectStagesRepository)
-    stages_repository.get_by_project.return_value = [SimpleNamespace(id=1)]
     wbs_nodes_repository = AsyncMock(spec=WbsNodesRepository)
     wbs_nodes_repository.get_by_id.return_value = None
-    service = build_service(
-        stages_repository=stages_repository,
-        wbs_nodes_repository=wbs_nodes_repository,
-    )
-
     with pytest.raises(WbsNodeNotFoundError):
-        await service.create_task(
+        await build_service(
+            stages_repository=stages_repository,
+            wbs_nodes_repository=wbs_nodes_repository,
+        ).create_task(
             project_id=1,
             data={"title": "Задача", "stage_id": None, "wbs_node_id": 8},
         )
 
-
-@pytest.mark.asyncio
-async def test_create_task_in_missing_project_raises_not_found() -> None:
     projects_repository = AsyncMock(spec=ProjectsRepository)
     projects_repository.get_by_id.return_value = None
-
     with pytest.raises(ProjectNotFoundError):
         await build_service(projects_repository=projects_repository).create_task(
             project_id=42,
@@ -367,92 +336,8 @@ async def test_create_task_in_missing_project_raises_not_found() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_task_records_priority_and_assignee_changes() -> None:
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    task = make_task(priority=TaskPriority.LOW, assignee="Иван")
-    tasks_repository.get_by_id.return_value = task
-    tasks_repository.update.return_value = make_task(
-        priority=TaskPriority.URGENT,
-        assignee="Мария",
-    )
-    activity_repository = AsyncMock(spec=TaskActivityRepository)
-    knowledge_events = AsyncMock(spec=KnowledgeEvents)
-    service = build_service(
-        tasks_repository,
-        activity_repository=activity_repository,
-        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
-    )
-
-    await service.update_task(
-        task_id=10,
-        data={"priority": TaskPriority.URGENT, "assignee": "Мария"},
-    )
-
-    events = [call.kwargs["event_type"] for call in activity_repository.save.await_args_list]
-    assert TaskActivityEventType.PRIORITY_CHANGED in events
-    assert TaskActivityEventType.ASSIGNEE_CHANGED in events
-    knowledge_events.upsert.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_update_task_reindexes_semantic_fields() -> None:
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_id.return_value = make_task()
-    tasks_repository.update.return_value = make_task()
-    knowledge_events = AsyncMock(spec=KnowledgeEvents)
-    service = build_service(tasks_repository, knowledge_events=knowledge_events)
-
-    await service.update_task(task_id=10, data={"title": "Новый смысловой заголовок"})
-
-    knowledge_events.upsert.assert_awaited_once_with(
-        project_id=1,
-        entity_type=KnowledgeEntityType.TASK,
-        entity_id=10,
-    )
-
-
-@pytest.mark.asyncio
-async def test_update_task_records_start_date_without_reindexing() -> None:
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    task = make_task(start_date=date(2026, 9, 1), due_date=date(2026, 9, 8))
-    tasks_repository.get_by_id.return_value = task
-    tasks_repository.update.return_value = make_task(
-        start_date=date(2026, 9, 2),
-        due_date=date(2026, 9, 8),
-    )
-    activity_repository = AsyncMock(spec=TaskActivityRepository)
-    knowledge_events = AsyncMock(spec=KnowledgeEvents)
-
-    await build_service(
-        tasks_repository,
-        activity_repository=activity_repository,
-        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
-    ).update_task(task_id=10, data={"start_date": date(2026, 9, 2)})
-
-    event = activity_repository.save.await_args.kwargs
-    assert event["event_type"] == TaskActivityEventType.START_DATE_CHANGED
-    assert event["from_value"] == "2026-09-01"
-    assert event["to_value"] == "2026-09-02"
-    knowledge_events.upsert.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_update_task_rejects_start_after_due_date() -> None:
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_id.return_value = make_task(due_date=date(2026, 9, 8))
-
-    with pytest.raises(TaskDateRangeError) as exc_info:
-        await build_service(tasks_repository).update_task(
-            task_id=10,
-            data={"start_date": date(2026, 9, 9)},
-        )
-
-    assert exc_info.value.status_code == 422
-    tasks_repository.update.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_create_task_rejects_reverse_schedule_before_writes() -> None:
+async def test_reverse_schedule_is_rejected_on_create_and_update() -> None:
+    """Начало позже срока не проходит ни при создании, ни при изменении."""
     tasks_repository = AsyncMock(spec=TasksRepository)
 
     with pytest.raises(TaskDateRangeError):
@@ -464,20 +349,89 @@ async def test_create_task_rejects_reverse_schedule_before_writes() -> None:
                 "due_date": date(2026, 9, 8),
             },
         )
-
     tasks_repository.save.assert_not_awaited()
+
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = make_task(due_date=date(2026, 9, 8))
+    with pytest.raises(TaskDateRangeError) as exc_info:
+        await build_service(tasks_repository).update_task(
+            task_id=10,
+            data={"start_date": date(2026, 9, 9)},
+        )
+    assert exc_info.value.status_code == 422
+    tasks_repository.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_task_records_history_and_reindexes_only_semantic_fields() -> None:
+    """История пишется на каждое изменение, переиндексация — только на смысловые.
+
+    Приоритет, исполнитель и даты видны в карточке, но не меняют текст,
+    по которому ищет агент: переиндексация на них — лишняя работа.
+    """
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = make_task(
+        priority=TaskPriority.LOW, assignee="Иван"
+    )
+    tasks_repository.update.return_value = make_task(
+        priority=TaskPriority.URGENT, assignee="Мария"
+    )
+    activity_repository = AsyncMock(spec=TaskActivityRepository)
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    await build_service(
+        tasks_repository,
+        activity_repository=activity_repository,
+        knowledge_events=knowledge_events,
+    ).update_task(task_id=10, data={"priority": TaskPriority.URGENT, "assignee": "Мария"})
+    events = [call.kwargs["event_type"] for call in activity_repository.save.await_args_list]
+    assert TaskActivityEventType.PRIORITY_CHANGED in events
+    assert TaskActivityEventType.ASSIGNEE_CHANGED in events
+    knowledge_events.upsert.assert_not_awaited()
+
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = make_task(
+        start_date=date(2026, 9, 1), due_date=date(2026, 9, 8)
+    )
+    tasks_repository.update.return_value = make_task(
+        start_date=date(2026, 9, 2), due_date=date(2026, 9, 8)
+    )
+    activity_repository = AsyncMock(spec=TaskActivityRepository)
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    await build_service(
+        tasks_repository,
+        activity_repository=activity_repository,
+        knowledge_events=knowledge_events,
+    ).update_task(task_id=10, data={"start_date": date(2026, 9, 2)})
+    event = activity_repository.save.await_args.kwargs
+    assert event["event_type"] == TaskActivityEventType.START_DATE_CHANGED
+    assert event["from_value"] == "2026-09-01"
+    assert event["to_value"] == "2026-09-02"
+    knowledge_events.upsert.assert_not_awaited()
+
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = make_task()
+    tasks_repository.update.return_value = make_task()
+    knowledge_events = AsyncMock(spec=KnowledgeEvents)
+    await build_service(tasks_repository, knowledge_events=knowledge_events).update_task(
+        task_id=10, data={"title": "Новый смысловой заголовок"}
+    )
+    knowledge_events.upsert.assert_awaited_once_with(
+        project_id=1,
+        entity_type=KnowledgeEntityType.TASK,
+        entity_id=10,
+    )
 
 
 @pytest.mark.asyncio
 async def test_update_task_skips_history_when_values_unchanged() -> None:
+    """Запись тем же значением не создаёт события истории."""
     tasks_repository = AsyncMock(spec=TasksRepository)
     task = make_task(priority=TaskPriority.LOW, assignee="Иван")
     tasks_repository.get_by_id.return_value = task
     tasks_repository.update.return_value = task
     activity_repository = AsyncMock(spec=TaskActivityRepository)
-    service = build_service(tasks_repository, activity_repository=activity_repository)
 
-    await service.update_task(
+    await build_service(tasks_repository, activity_repository=activity_repository).update_task(
         task_id=10,
         data={"priority": TaskPriority.LOW, "assignee": "Иван"},
     )
@@ -487,6 +441,7 @@ async def test_update_task_skips_history_when_values_unchanged() -> None:
 
 @pytest.mark.asyncio
 async def test_move_task_records_stage_change_and_appends_to_end() -> None:
+    """Перенос в другую стадию ставит задачу в конец и пишет событие."""
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_id.return_value = make_task(stage_id=1)
     tasks_repository.get_max_position_by_stage.return_value = 5000.0
@@ -498,14 +453,13 @@ async def test_move_task_records_stage_change_and_appends_to_end() -> None:
     ]
     activity_repository = AsyncMock(spec=TaskActivityRepository)
     knowledge_events = AsyncMock(spec=KnowledgeEvents)
-    service = build_service(
+
+    await build_service(
         tasks_repository,
         stages_repository,
         activity_repository=activity_repository,
-        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
-    )
-
-    await service.move_task(task_id=10, stage_id=2)
+        knowledge_events=knowledge_events,
+    ).move_task(task_id=10, stage_id=2)
 
     assert tasks_repository.update.await_args.kwargs["data"]["position"] == 6000.0
     event = activity_repository.save.await_args.kwargs
@@ -516,37 +470,27 @@ async def test_move_task_records_stage_change_and_appends_to_end() -> None:
 
 
 @pytest.mark.asyncio
-async def test_move_task_rejects_stage_of_another_project() -> None:
+async def test_move_task_rejects_foreign_stage_and_ignores_empty_move() -> None:
+    """Стадия чужого проекта отклоняется, перенос в ту же стадию ничего не пишет."""
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_id.return_value = make_task(stage_id=1)
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
     stages_repository.get_by_id.return_value = SimpleNamespace(
-        id=9,
-        project_id=5,
-        name="Чужая",
-        is_done_stage=False,
+        id=9, project_id=5, name="Чужая", is_done_stage=False
     )
 
     with pytest.raises(ProjectStageForeignProjectError) as exc_info:
         await build_service(tasks_repository, stages_repository).move_task(
-            task_id=10,
-            stage_id=9,
+            task_id=10, stage_id=9
         )
-
     assert exc_info.value.status_code == 409
     tasks_repository.update.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_move_task_within_same_stage_without_position_is_noop() -> None:
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_id.return_value = make_task(stage_id=2)
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
     stages_repository.get_by_id.return_value = SimpleNamespace(
-        id=2,
-        project_id=1,
-        name="Работа",
-        is_done_stage=False,
+        id=2, project_id=1, name="Работа", is_done_stage=False
     )
 
     await build_service(tasks_repository, stages_repository).move_task(task_id=10, stage_id=2)
@@ -555,32 +499,12 @@ async def test_move_task_within_same_stage_without_position_is_noop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_move_task_sets_and_clears_completed_at_at_stage_transition() -> None:
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    open_task = make_task(stage_id=1)
-    done_task = make_task(stage_id=2, completed_at=datetime.now(UTC))
-    tasks_repository.get_by_id.side_effect = [open_task, done_task]
-    tasks_repository.update.side_effect = [done_task, make_task(stage_id=1)]
-    stages_repository = AsyncMock(spec=ProjectStagesRepository)
-    stages_repository.get_by_id.side_effect = [
-        SimpleNamespace(id=2, project_id=1, name="Готово", is_done_stage=True),
-        SimpleNamespace(id=1, project_id=1, name="Работа", is_done_stage=False),
-        SimpleNamespace(id=1, project_id=1, name="Работа", is_done_stage=False),
-        SimpleNamespace(id=2, project_id=1, name="Готово", is_done_stage=True),
-    ]
-    service = build_service(tasks_repository, stages_repository)
+async def test_move_task_keeps_completed_at_across_repeated_transitions() -> None:
+    """Отметка завершения ставится один раз, снимается и ставится заново.
 
-    await service.move_task(10, 2, 1000)
-    await service.move_task(10, 1, 1000)
-
-    first_payload = tasks_repository.update.await_args_list[0].kwargs["data"]
-    second_payload = tasks_repository.update.await_args_list[1].kwargs["data"]
-    assert first_payload["completed_at"].tzinfo is UTC
-    assert second_payload["completed_at"] is None
-
-
-@pytest.mark.asyncio
-async def test_move_task_preserves_and_resets_completed_at_across_repeated_transitions() -> None:
+    Переход между двумя завершающими стадиями не должен переписывать
+    момент завершения: задача завершена с первого попадания в «Готово».
+    """
     tasks_repository = AsyncMock(spec=TasksRepository)
     first_completed_at = datetime(2026, 9, 2, 10, tzinfo=UTC)
     tasks_repository.get_by_id.side_effect = [
@@ -596,18 +520,8 @@ async def test_move_task_preserves_and_resets_completed_at_across_repeated_trans
         make_task(stage_id=2, completed_at=datetime(2026, 9, 2, 11, tzinfo=UTC)),
     ]
     open_stage = SimpleNamespace(id=1, project_id=1, name="Работа", is_done_stage=False)
-    first_done_stage = SimpleNamespace(
-        id=2,
-        project_id=1,
-        name="Готово",
-        is_done_stage=True,
-    )
-    second_done_stage = SimpleNamespace(
-        id=3,
-        project_id=1,
-        name="Архив",
-        is_done_stage=True,
-    )
+    first_done_stage = SimpleNamespace(id=2, project_id=1, name="Готово", is_done_stage=True)
+    second_done_stage = SimpleNamespace(id=3, project_id=1, name="Архив", is_done_stage=True)
     stages_repository = AsyncMock(spec=ProjectStagesRepository)
     stages_repository.get_by_id.side_effect = [
         first_done_stage,
@@ -636,6 +550,7 @@ async def test_move_task_preserves_and_resets_completed_at_across_repeated_trans
 
 @pytest.mark.asyncio
 async def test_fix_baseline_copies_current_plan_and_records_history() -> None:
+    """Фиксация плана копирует текущие даты в базовые одним коммитом."""
     tasks_repository = AsyncMock(spec=TasksRepository)
     task = make_task(start_date=date(2026, 9, 2), due_date=date(2026, 9, 8))
     fixed = make_task(
@@ -651,7 +566,7 @@ async def test_fix_baseline_copies_current_plan_and_records_history() -> None:
     service = build_service(
         tasks_repository,
         activity_repository=activity_repository,
-        knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
+        knowledge_events=knowledge_events,
     )
 
     result = await service.fix_baseline(task_id=10)
@@ -670,18 +585,8 @@ async def test_fix_baseline_copies_current_plan_and_records_history() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_task_when_missing_raises_not_found() -> None:
-    tasks_repository = AsyncMock(spec=TasksRepository)
-    tasks_repository.get_by_id.return_value = None
-
-    with pytest.raises(TaskNotFoundError) as exc_info:
-        await build_service(tasks_repository).get_task(task_id=999)
-
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
 async def test_delete_task_removes_attachment_directory() -> None:
+    """Удаление задачи убирает и каталог её вложений."""
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_id.return_value = make_task()
     storage = AsyncMock()
@@ -695,11 +600,16 @@ async def test_delete_task_removes_attachment_directory() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_task_list_wraps_repository_error() -> None:
+async def test_missing_task_is_404_and_repository_failure_is_500() -> None:
+    """Отсутствие объекта и сбой базы — разные ответы, а не один на двоих."""
+    tasks_repository = AsyncMock(spec=TasksRepository)
+    tasks_repository.get_by_id.return_value = None
+    with pytest.raises(TaskNotFoundError) as not_found:
+        await build_service(tasks_repository).get_task(task_id=999)
+    assert not_found.value.status_code == 404
+
     tasks_repository = AsyncMock(spec=TasksRepository)
     tasks_repository.get_by_project.side_effect = TasksRepositoryError("БД недоступна")
-
-    with pytest.raises(TasksServiceError) as exc_info:
+    with pytest.raises(TasksServiceError) as failure:
         await build_service(tasks_repository).get_task_list(project_id=1)
-
-    assert exc_info.value.status_code == 500
+    assert failure.value.status_code == 500

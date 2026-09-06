@@ -48,15 +48,13 @@ async def _ask(client: LlmClient) -> AnswerSchema:
     )
 
 
-async def test_returns_validated_structured_answer() -> None:
-    """Корректный JSON разбирается схемой."""
+async def test_answer_is_validated_and_unwrapped() -> None:
+    """Ответ проходит валидацию схемой, обёртка из тройных кавычек снимается."""
+    # Корректный JSON разбирается схемой.
     client = build_client(lambda request: build_response(json.dumps({"answer": "готово"})))
 
     assert (await _ask(client)).answer == "готово"
-
-
-async def test_strips_code_fence_around_json() -> None:
-    """Модель нередко оборачивает JSON в ```json — обёртка снимается."""
+    # Модель нередко оборачивает JSON в ```json — обёртка снимается.
     payload = "```json\n" + json.dumps({"answer": "готово"}) + "\n```"
     client = build_client(lambda request: build_response(payload))
 
@@ -120,13 +118,19 @@ async def test_schema_violation_is_retried_as_content_failure() -> None:
     assert attempts["count"] == 2
 
 
-async def test_worst_case_is_computed_from_timeout_and_attempts() -> None:
-    """Бюджет вызова доступен как свойство клиента."""
+async def test_worst_case_budget_is_derived_from_timeout_and_attempts() -> None:
+    """Бюджет худшего случая считается из timeout и попыток, ноль попыток недопустим, продовые значения дают известное число."""
+    # Бюджет вызова доступен как свойство клиента.
     client = build_client(lambda request: build_response("{}"), retries=3)
 
     assert client.worst_case_seconds == pytest.approx(
         worst_case_seconds(timeout=5, attempts=3)
     )
+    # Ноль попыток — некорректный бюджет, а не мгновенный вызов.
+    with pytest.raises(ValueError):
+        worst_case_seconds(timeout=5, attempts=0)
+    # Продовые значения дают известный worst case не менее 900 секунд. Это число зафиксировано в docs/AI_TIMEOUT_BUDGET_DECISION.md и служит основанием follow-up по асинхронному контракту.
+    assert worst_case_seconds(timeout=300, attempts=3) >= 900
 
 
 @pytest.mark.parametrize(
@@ -157,18 +161,3 @@ def test_status_classification(status_code: int, expected: RetryDecision) -> Non
 def test_non_http_error_is_content_failure() -> None:
     """Ошибка разбора относится к содержимому, а не к транспорту."""
     assert classify(ValueError("плохой JSON")) is RetryDecision.RETRY_CONTENT
-
-
-def test_worst_case_requires_at_least_one_attempt() -> None:
-    """Ноль попыток — некорректный бюджет, а не мгновенный вызов."""
-    with pytest.raises(ValueError):
-        worst_case_seconds(timeout=5, attempts=0)
-
-
-def test_worst_case_matches_documented_production_budget() -> None:
-    """Продовые значения дают известный worst case не менее 900 секунд.
-
-    Это число зафиксировано в docs/AI_TIMEOUT_BUDGET_DECISION.md и служит
-    основанием follow-up по асинхронному контракту.
-    """
-    assert worst_case_seconds(timeout=300, attempts=3) >= 900

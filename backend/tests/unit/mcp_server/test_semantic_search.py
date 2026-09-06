@@ -150,8 +150,9 @@ async def test_disabled_knowledge_does_not_reach_external_clients(search) -> Non
     assert runtime.scope_active_during_call == []
 
 
-async def test_entity_type_filter_is_applied_to_hits(search) -> None:
-    """Фильтр по типу сущности отсеивает лишние фрагменты."""
+async def test_semantic_search_presents_hits_and_filters_them(search) -> None:
+    """Фильтр по типу сущности и представление попадания с ключом и округлённой оценкой."""
+    # Фильтр по типу сущности отсеивает лишние фрагменты.
     context, _, _, _ = search([hit("task"), hit("document")])
 
     result = await srv.search_project_knowledge(
@@ -162,10 +163,7 @@ async def test_entity_type_filter_is_applied_to_hits(search) -> None:
     )
 
     assert [item["entity_type"] for item in result] == ["document"]
-
-
-async def test_hit_is_presented_with_display_key_and_rounded_score(search) -> None:
-    """Фрагмент отдаётся ключом задачи и округлённой оценкой."""
+    # Фрагмент отдаётся ключом задачи и округлённой оценкой.
     context, _, _, _ = search([hit()])
 
     result = await srv.search_project_knowledge(context, project_key="PROJ", query="отчёт")

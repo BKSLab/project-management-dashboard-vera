@@ -90,8 +90,12 @@ def build_service(
     return service, users, tokens
 
 
-async def test_valid_token_authenticates_and_keeps_scope() -> None:
-    """Действующий токен пускает пользователя и сохраняет свои права."""
+async def test_token_authenticates_and_carries_its_scope() -> None:
+    """Действующий токен пускает пользователя и приносит свои права.
+
+    Право записи — часть принципала, а не отдельная проверка: скоуп
+    токена и производный от него `can_write` обязаны совпадать.
+    """
     service, _, tokens = build_service(user=make_user(), token=make_token())
 
     principal = await service.resolve_principal(session_token=None, bearer_secret=SECRET)
@@ -103,72 +107,60 @@ async def test_valid_token_authenticates_and_keeps_scope() -> None:
     assert principal.can_write is False
     tokens.touch_last_used.assert_awaited_once()
 
-
-async def test_write_token_may_write() -> None:
-    """Токен с правом записи разрешает изменяющие операции."""
     service, _, _ = build_service(
         user=make_user(),
         token=make_token(scope=ApiTokenScope.WRITE),
     )
+    write_principal = await service.resolve_principal(
+        session_token=None,
+        bearer_secret=SECRET,
+    )
+    assert write_principal.can_write is True
 
-    principal = await service.resolve_principal(session_token=None, bearer_secret=SECRET)
 
-    assert principal.can_write is True
+async def test_unusable_token_or_user_is_rejected_indistinguishably() -> None:
+    """Выдуманный, истёкший и отозванный токен неотличимы друг от друга.
 
-
-async def test_unknown_token_is_rejected() -> None:
-    """Выдуманный токен не пускает."""
+    Репозиторий не отдаёт недействующий токен, поэтому все три случая
+    приходят в сервис одинаково — как отсутствие токена. Отключённый
+    пользователь отличается: он существует, и ему отвечают своим кодом.
+    """
     service, _, _ = build_service(user=make_user(), token=None)
-
     with pytest.raises(NotAuthenticatedError):
         await service.resolve_principal(session_token=None, bearer_secret="tt_unknown")
 
+    service, _, _ = build_service(user=None, token=make_token())
+    with pytest.raises(NotAuthenticatedError):
+        await service.resolve_principal(session_token=None, bearer_secret=SECRET)
 
-async def test_token_of_disabled_user_is_rejected() -> None:
-    """Отключённый пользователь не проходит даже с действующим токеном."""
     service, _, _ = build_service(user=make_user(is_active=False), token=make_token())
-
     with pytest.raises(InactiveUserError):
         await service.resolve_principal(session_token=None, bearer_secret=SECRET)
 
 
-async def test_token_of_deleted_user_is_rejected() -> None:
-    """Токен пережившего удаление пользователя не пускает."""
-    service, _, _ = build_service(user=None, token=make_token())
-
-    with pytest.raises(NotAuthenticatedError):
-        await service.resolve_principal(session_token=None, bearer_secret=SECRET)
-
-
-async def test_token_repository_failure_is_not_an_access_denial() -> None:
+async def test_repository_failure_is_not_an_access_denial() -> None:
     """Сбой базы отличается от отказа в доступе.
 
     Иначе временная недоступность PostgreSQL молча выглядела бы как
-    неверный токен, и причину искали бы не там.
+    неверный токен, и причину искали бы не там. Правило одинаково для
+    чтения токена и для чтения пользователя.
     """
     service, _, _ = build_service(
         user=make_user(),
         tokens_error=ApiTokensRepositoryError("сбой БД"),
     )
-
     with pytest.raises(AuthServiceError) as error:
         await service.resolve_principal(session_token=None, bearer_secret=SECRET)
-
     assert not isinstance(error.value, NotAuthenticatedError)
     assert error.value.status_code == 500
 
-
-async def test_users_repository_failure_is_not_an_access_denial() -> None:
-    """Сбой чтения пользователя тоже не превращается в 401."""
     service, _, _ = build_service(
         token=make_token(),
         users_error=UsersRepositoryError("сбой БД"),
     )
-
-    with pytest.raises(AuthServiceError) as error:
+    with pytest.raises(AuthServiceError) as users_error:
         await service.resolve_principal(session_token=None, bearer_secret=SECRET)
-
-    assert not isinstance(error.value, NotAuthenticatedError)
+    assert not isinstance(users_error.value, NotAuthenticatedError)
 
 
 async def test_failed_touch_does_not_block_access() -> None:
@@ -181,54 +173,41 @@ async def test_failed_touch_does_not_block_access() -> None:
     assert principal.user_id == 1
 
 
-async def test_cookie_session_has_full_rights() -> None:
-    """Вход по cookie имеет полные права: скоуп введён для внешних клиентов."""
+async def test_cookie_gives_full_rights_and_bearer_wins_over_it() -> None:
+    """Cookie даёт полные права, но токен в заголовке важнее.
+
+    Скоуп введён для внешних клиентов: если бы cookie перебивала токен,
+    ограничение на чтение обходилось бы одним лишним заголовком.
+    Подделанная cookie и полное отсутствие учётных данных не пускают.
+    """
     user = make_user()
     service, _, _ = build_service(user=user)
-
     principal = await service.resolve_principal(
         session_token=create_access_token(user.id),
         bearer_secret=None,
     )
-
     assert principal.scope is ApiTokenScope.WRITE
     assert principal.via_api_token is False
     assert principal.can_write is True
 
-
-async def test_bearer_takes_precedence_over_cookie() -> None:
-    """При обоих способах побеждает токен: иначе скоуп можно было бы обойти."""
-    user = make_user()
     service, _, _ = build_service(user=user, token=make_token())
-
-    principal = await service.resolve_principal(
+    both = await service.resolve_principal(
         session_token=create_access_token(user.id),
         bearer_secret=SECRET,
     )
+    assert both.scope is ApiTokenScope.READ
+    assert both.via_api_token is True
 
-    assert principal.scope is ApiTokenScope.READ
-    assert principal.via_api_token is True
-
-
-async def test_no_credentials_at_all_is_rejected() -> None:
-    """Без cookie и без заголовка доступа нет."""
     service, _, _ = build_service(user=make_user())
-
     with pytest.raises(NotAuthenticatedError):
         await service.resolve_principal(session_token=None, bearer_secret=None)
-
-
-async def test_forged_cookie_is_rejected() -> None:
-    """Подделанная cookie не проходит проверку подписи."""
-    service, _, _ = build_service(user=make_user())
-
     with pytest.raises(NotAuthenticatedError):
         await service.resolve_principal(session_token="не.настоящий.токен", bearer_secret=None)
 
 
-def test_principal_composes_names_for_each_consumer() -> None:
-    """Полное и короткое имя различаются отчеством и берутся из принципала."""
-    principal = Principal(
+def test_principal_composes_display_names() -> None:
+    """Полное и короткое имя различаются отчеством, без имени остаётся логин."""
+    named = Principal(
         user_id=1,
         username="tester",
         last_name="Тестов",
@@ -237,14 +216,10 @@ def test_principal_composes_names_for_each_consumer() -> None:
         scope=ApiTokenScope.WRITE,
         via_api_token=False,
     )
+    assert named.full_name == "Тестов Тест Тестович"
+    assert named.short_name == "Тестов Тест"
 
-    assert principal.full_name == "Тестов Тест Тестович"
-    assert principal.short_name == "Тестов Тест"
-
-
-def test_principal_falls_back_to_username_without_name() -> None:
-    """Без фамилии и имени подписью остаётся логин."""
-    principal = Principal(
+    nameless = Principal(
         user_id=1,
         username="tester",
         last_name="",
@@ -253,23 +228,5 @@ def test_principal_falls_back_to_username_without_name() -> None:
         scope=ApiTokenScope.READ,
         via_api_token=True,
     )
-
-    assert principal.full_name == "tester"
-    assert principal.short_name == "tester"
-
-
-@pytest.mark.parametrize(
-    "case",
-    ["expired", "revoked"],
-    ids=["истёкший", "отозванный"],
-)
-async def test_unusable_tokens_look_like_unknown(case: str) -> None:
-    """Истёкший и отозванный токен неотличимы от выдуманного.
-
-    Репозиторий не отдаёт недействующий токен, и сервис не должен пытаться
-    объяснить клиенту, чем именно он плох.
-    """
-    service, _, _ = build_service(user=make_user(), token=None)
-
-    with pytest.raises(NotAuthenticatedError):
-        await service.resolve_principal(session_token=None, bearer_secret=SECRET)
+    assert nameless.full_name == "tester"
+    assert nameless.short_name == "tester"

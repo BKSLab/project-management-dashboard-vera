@@ -81,150 +81,116 @@ def build_service(
     )
 
 
-async def test_member_gets_project_access() -> None:
-    """Участник проекта получает разрешение без роли владельца."""
-    service = build_service(member_role=ProjectRole.MEMBER)
-
-    grant = await service.ensure_project_access(project_id=PROJECT_ID, user_id=USER_ID)
-
-    assert grant.project_id == PROJECT_ID
-    assert grant.resource_id == PROJECT_ID
-    assert grant.is_owner is False
-
-
-async def test_owner_is_marked_as_owner() -> None:
-    """Владелец проекта помечается в разрешении."""
-    service = build_service(member_role=ProjectRole.OWNER)
-
-    grant = await service.ensure_project_access(project_id=PROJECT_ID, user_id=USER_ID)
-
-    assert grant.is_owner is True
+# Вложенные объекты: метод доступа, его аргумент, ожидаемый resource_id
+# и то, как в дублёре задаётся отсутствие объекта.
+NESTED_RESOURCES = (
+    ("ensure_task_access", {"task_id": 7}, 7, {"task": None}),
+    ("ensure_stage_access", {"stage_id": 8}, 8, {"stage": None}),
+    ("ensure_document_access", {"document_id": 9}, 9, {"document": None}),
+    ("ensure_comment_access", {"comment_id": 10}, 10, {"comment": None}),
+    ("ensure_link_access", {"link_id": 11}, 11, {"link": None}),
+)
 
 
-async def test_non_member_cannot_reach_the_project() -> None:
-    """Чужой проект недоступен и неотличим от несуществующего."""
-    service = build_service(member_role=None)
+async def test_project_access_reflects_membership_and_ownership() -> None:
+    """Участник получает разрешение, владелец помечается, чужой не проходит.
 
-    with pytest.raises(ResourceNotAvailableError) as error:
-        await service.ensure_project_access(project_id=PROJECT_ID, user_id=USER_ID)
-
-    assert error.value.status_code == 404
-
-
-async def test_member_is_not_an_owner() -> None:
-    """Обычный участник не выполняет действия владельца."""
-    service = build_service(member_role=ProjectRole.MEMBER)
-
-    with pytest.raises(ProjectOwnerRequiredError) as error:
-        await service.ensure_project_ownership(project_id=PROJECT_ID, user_id=USER_ID)
-
-    assert error.value.status_code == 403
-
-
-async def test_owner_passes_ownership_check() -> None:
-    """Владелец проходит проверку владения."""
-    service = build_service(member_role=ProjectRole.OWNER)
-
-    grant = await service.ensure_project_ownership(project_id=PROJECT_ID, user_id=USER_ID)
-
-    assert grant.is_owner is True
-
-
-async def test_non_member_gets_not_found_before_ownership_check() -> None:
-    """Для чужого проекта отвечает 404, а не 403.
-
-    Иначе по коду ответа выяснялось бы, что проект существует.
+    Три состояния одного use case проверяются вместе: разрешение — это
+    один объект, и смысл имеет вся его форма, а не отдельные поля.
     """
-    service = build_service(member_role=None)
+    member_grant = await build_service(
+        member_role=ProjectRole.MEMBER
+    ).ensure_project_access(project_id=PROJECT_ID, user_id=USER_ID)
+    assert (member_grant.project_id, member_grant.resource_id, member_grant.is_owner) == (
+        PROJECT_ID,
+        PROJECT_ID,
+        False,
+    )
 
-    with pytest.raises(ResourceNotAvailableError):
-        await service.ensure_project_ownership(project_id=PROJECT_ID, user_id=USER_ID)
-
-
-@pytest.mark.parametrize(
-    ("method", "kwargs", "resource_id"),
-    [
-        ("ensure_task_access", {"task_id": 7}, 7),
-        ("ensure_stage_access", {"stage_id": 8}, 8),
-        ("ensure_document_access", {"document_id": 9}, 9),
-        ("ensure_comment_access", {"comment_id": 10}, 10),
-        ("ensure_link_access", {"link_id": 11}, 11),
-    ],
-)
-async def test_nested_resource_resolves_to_its_project(
-    method: str,
-    kwargs: dict,
-    resource_id: int,
-) -> None:
-    """Доступ к вложенному объекту сводится к доступу к его проекту."""
-    service = build_service(member_role=ProjectRole.MEMBER)
-
-    grant = await getattr(service, method)(user_id=USER_ID, **kwargs)
-
-    assert grant.project_id == PROJECT_ID
-    assert grant.resource_id == resource_id
-
-
-@pytest.mark.parametrize(
-    ("method", "kwargs", "missing"),
-    [
-        ("ensure_task_access", {"task_id": 7}, {"task": None}),
-        ("ensure_stage_access", {"stage_id": 8}, {"stage": None}),
-        ("ensure_document_access", {"document_id": 9}, {"document": None}),
-        ("ensure_comment_access", {"comment_id": 10}, {"comment": None}),
-        ("ensure_link_access", {"link_id": 11}, {"link": None}),
-    ],
-)
-async def test_missing_resource_is_not_found(
-    method: str,
-    kwargs: dict,
-    missing: dict,
-) -> None:
-    """Несуществующий объект отвечает 404 до проверки членства."""
-    service = build_service(member_role=ProjectRole.MEMBER, **missing)
-
-    with pytest.raises(ResourceNotAvailableError):
-        await getattr(service, method)(user_id=USER_ID, **kwargs)
-
-
-@pytest.mark.parametrize(
-    ("method", "kwargs"),
-    [
-        ("ensure_task_access", {"task_id": 7}),
-        ("ensure_stage_access", {"stage_id": 8}),
-        ("ensure_document_access", {"document_id": 9}),
-        ("ensure_comment_access", {"comment_id": 10}),
-        ("ensure_link_access", {"link_id": 11}),
-    ],
-)
-async def test_foreign_resource_is_indistinguishable_from_missing(
-    method: str,
-    kwargs: dict,
-) -> None:
-    """Существующий чужой объект отвечает тем же 404, что и отсутствующий."""
-    service = build_service(member_role=None)
+    owner_grant = await build_service(member_role=ProjectRole.OWNER).ensure_project_access(
+        project_id=PROJECT_ID, user_id=USER_ID
+    )
+    assert owner_grant.is_owner is True
 
     with pytest.raises(ResourceNotAvailableError) as error:
-        await getattr(service, method)(user_id=USER_ID, **kwargs)
-
+        await build_service(member_role=None).ensure_project_access(
+            project_id=PROJECT_ID, user_id=USER_ID
+        )
     assert error.value.status_code == 404
-    assert error.value.detail == "Объект не найден."
 
 
-async def test_orphan_comment_is_not_found() -> None:
-    """Комментарий без задачи недоступен, а не приводит к ошибке."""
-    service = build_service(member_role=ProjectRole.MEMBER, task=None)
+async def test_ownership_check_separates_absence_from_insufficient_role() -> None:
+    """Владелец проходит, участник получает 403, чужой — 404.
+
+    Порядок важен: для чужого проекта ответ обязан быть 404, иначе по
+    коду ответа выяснялось бы, что проект существует.
+    """
+    owner_grant = await build_service(member_role=ProjectRole.OWNER).ensure_project_ownership(
+        project_id=PROJECT_ID, user_id=USER_ID
+    )
+    assert owner_grant.is_owner is True
+
+    with pytest.raises(ProjectOwnerRequiredError) as forbidden:
+        await build_service(member_role=ProjectRole.MEMBER).ensure_project_ownership(
+            project_id=PROJECT_ID, user_id=USER_ID
+        )
+    assert forbidden.value.status_code == 403
 
     with pytest.raises(ResourceNotAvailableError):
-        await service.ensure_comment_access(comment_id=10, user_id=USER_ID)
+        await build_service(member_role=None).ensure_project_ownership(
+            project_id=PROJECT_ID, user_id=USER_ID
+        )
 
 
-async def test_orphan_link_is_not_found() -> None:
-    """Связь без документа недоступна, а не приводит к ошибке."""
-    service = build_service(member_role=ProjectRole.MEMBER, document=None)
+async def test_nested_resource_access_follows_one_rule_for_every_resource() -> None:
+    """Доступ к вложенному объекту сводится к доступу к его проекту.
+
+    Правило одно на все ресурсы, поэтому и тест один: доступный объект
+    отдаёт разрешение своего проекта, а отсутствующий и чужой отвечают
+    одинаковым 404 с одинаковой формулировкой. Прогон по всему списку
+    показывает сразу все ресурсы, где правило нарушено.
+    """
+    problems: list[str] = []
+    for method, kwargs, resource_id, missing in NESTED_RESOURCES:
+        grant = await getattr(build_service(member_role=ProjectRole.MEMBER), method)(
+            user_id=USER_ID, **kwargs
+        )
+        if (grant.project_id, grant.resource_id) != (PROJECT_ID, resource_id):
+            problems.append(f"{method}: разрешение {grant} вместо проекта {PROJECT_ID}")
+
+        absent = build_service(member_role=ProjectRole.MEMBER, **missing)
+        try:
+            await getattr(absent, method)(user_id=USER_ID, **kwargs)
+        except ResourceNotAvailableError:
+            pass
+        else:
+            problems.append(f"{method}: отсутствующий объект доступен")
+
+        foreign = build_service(member_role=None)
+        try:
+            await getattr(foreign, method)(user_id=USER_ID, **kwargs)
+        except ResourceNotAvailableError as error:
+            if (error.status_code, error.detail) != (404, "Объект не найден."):
+                problems.append(f"{method}: чужой объект отличим — {error.status_code} {error.detail}")
+        else:
+            problems.append(f"{method}: чужой объект доступен")
+
+    assert not problems, (
+        "Правило доступа к вложенным объектам нарушено: " + "; ".join(problems)
+    )
+
+
+async def test_orphan_resource_is_not_found_instead_of_failing() -> None:
+    """Объект без родителя недоступен, а не приводит к ошибке."""
+    with pytest.raises(ResourceNotAvailableError):
+        await build_service(member_role=ProjectRole.MEMBER, task=None).ensure_comment_access(
+            comment_id=10, user_id=USER_ID
+        )
 
     with pytest.raises(ResourceNotAvailableError):
-        await service.ensure_link_access(link_id=11, user_id=USER_ID)
+        await build_service(member_role=ProjectRole.MEMBER, document=None).ensure_link_access(
+            link_id=11, user_id=USER_ID
+        )
 
 
 async def test_repository_failure_is_not_an_access_denial() -> None:
