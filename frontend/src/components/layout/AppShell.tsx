@@ -6,7 +6,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { ToastViewport } from "@/components/ui/Toast";
 
 const MOBILE_ITEMS = [
-    { to: "/", label: "Дашборд", icon: LayoutDashboard, end: true },
+    { to: "/", label: "Портфель", icon: LayoutDashboard, end: true },
     { to: "/projects", label: "Проекты", icon: FolderKanban, end: false },
 ];
 
@@ -16,7 +16,7 @@ const MOBILE_ITEMS = [
  */
 export function AppShell({ children }: { children: ReactNode }) {
     return (
-        <div className="flex h-screen min-w-0 overflow-hidden bg-app">
+        <div className="flex h-full min-w-0 overflow-hidden bg-app">
             <a
                 href="#main-content"
                 className={cn(
@@ -30,7 +30,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
             <Sidebar />
 
-            <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <nav
                     aria-label="Разделы"
                     className="material-metal flex h-12 shrink-0 items-center gap-1 border-b border-line-subtle px-3 md:hidden"

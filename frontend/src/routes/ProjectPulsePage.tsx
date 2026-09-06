@@ -11,6 +11,7 @@ import { Section } from "@/components/ui/Card";
 import { StatStrip, StatTile } from "@/components/ui/Progress";
 import { DueDate } from "@/components/ui/DueDate";
 import { ErrorMessage, Skeleton } from "@/components/ui/States";
+import { TaskLine } from "@/components/tasks/TaskLine";
 import { PulseBoard } from "@/components/pulse/PulseBoard";
 import { StageBreakdown } from "@/components/pulse/PulseBreakdown";
 
@@ -50,6 +51,9 @@ export function ProjectPulsePage() {
     });
 
     const stats = statsQuery.data;
+    const stageNames = new Map(
+        (stats?.stage_breakdown ?? []).map((item) => [item.stage_id, item.stage_name]),
+    );
     const doneStageIds = new Set(
         (stats?.stage_breakdown ?? [])
             .filter((item) => item.is_done_stage)
@@ -118,28 +122,30 @@ export function ProjectPulsePage() {
                 />
 
                 <div className="grid gap-6 lg:grid-cols-2">
-                    <Section title="Ближайшие сроки">
-                        <div className="rounded-[var(--radius-card)] bg-surface/45 p-1.5">
+                    <Section
+                        title="Ближайшие сроки"
+                        action={
+                            <span className="font-mono text-[12px] text-muted">
+                                {upcoming.length}
+                            </span>
+                        }
+                    >
+                        <div className="overflow-hidden rounded-[var(--radius-card)] bg-surface/55 p-1.5">
                             {upcoming.length === 0 ? (
                                 <p className="px-2.5 py-6 text-center text-[13px] text-muted">
                                     Задач со сроками нет.
                                 </p>
                             ) : (
                                 upcoming.map((task) => (
-                                    <button
+                                    <TaskLine
                                         key={task.id}
-                                        type="button"
-                                        onClick={() => setSelectedTaskId(task.id)}
-                                        className="flex w-full min-w-0 items-center gap-3 rounded-md px-2.5 py-2 text-left hover:bg-hover"
-                                    >
-                                        <span className="w-20 shrink-0 truncate font-mono text-[11px] text-muted">
-                                            {task.key}
-                                        </span>
-                                        <span className="min-w-0 flex-1 truncate text-[13px] text-secondary">
-                                            {task.title}
-                                        </span>
-                                        <DueDate value={task.due_date} />
-                                    </button>
+                                        taskKey={task.key}
+                                        title={task.title}
+                                        stage={stageNames.get(task.stage_id)}
+                                        priority={task.priority}
+                                        meta={<DueDate value={task.due_date} />}
+                                        onOpen={() => setSelectedTaskId(task.id)}
+                                    />
                                 ))
                             )}
                         </div>

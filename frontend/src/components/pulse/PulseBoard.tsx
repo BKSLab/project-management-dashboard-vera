@@ -437,7 +437,12 @@ function PulseColumn({ title, icon, count, empty, children }: PulseColumnProps) 
                     {empty}
                 </p>
             ) : (
-                <div className="flex flex-col gap-2">{children}</div>
+                // Высота колонки ограничена: разбор из десятка карточек иначе
+                // уводит проекты и списки задач за пределы экрана, и страница
+                // перестаёт читаться целиком.
+                <div className="scrollbar-thin flex max-h-96 flex-col gap-2 overflow-y-auto pr-0.5">
+                    {children}
+                </div>
             )}
         </div>
     );

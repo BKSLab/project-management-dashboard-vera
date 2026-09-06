@@ -22,7 +22,7 @@ function DashboardSkeleton() {
         <div role="status" aria-label="Загрузка сводки" className="flex flex-col gap-6">
             <Skeleton className="h-[88px] w-full" />
             <Skeleton className="h-56 w-full" />
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(17.5rem,1fr))]">
                 {[0, 1, 2].map((index) => (
                     <Skeleton key={index} className="h-40" />
                 ))}
@@ -49,7 +49,7 @@ export function DashboardPage() {
             <header className="flex flex-wrap items-end justify-between gap-3">
                 <div className="flex flex-col gap-0.5">
                     <h1 className="text-[22px] font-semibold tracking-[-0.03em] text-primary">
-                        Дашборд
+                        Портфель проектов
                     </h1>
                     <p className="text-[13px] text-muted">
                         Что происходит со всеми проектами сейчас ·{" "}
@@ -146,7 +146,7 @@ export function DashboardPage() {
                                 }
                             />
                         ) : (
-                            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                            <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(17.5rem,1fr))]">
                                 {dashboardQuery.data.projects.map((project) => (
                                     <ProjectCard key={project.id} project={project} />
                                 ))}

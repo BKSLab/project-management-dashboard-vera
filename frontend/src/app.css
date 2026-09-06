@@ -154,14 +154,19 @@
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 }
 
+/* Ровно высота окна и никакой прокрутки страницы: иначе весь интерфейс
+   уезжает вверх вместе с телом документа, а внизу открывается полоса фона,
+   в которую содержимое будто проваливается. Прокручиваются только
+   внутренние области. */
 html,
 body,
 #root {
-  min-height: 100%;
+  height: 100%;
 }
 
 body {
   margin: 0;
+  overflow: hidden;
   background:
     radial-gradient(circle at 48% -20%, rgba(87, 111, 139, 0.055), transparent 42%),
     var(--surface-void);
