@@ -6,7 +6,6 @@ import { ProjectLayout } from "@/components/projects/ProjectLayout";
 import { DashboardPage } from "@/routes/DashboardPage";
 import { ProjectsPage } from "@/routes/ProjectsPage";
 import { NewProjectPage } from "@/routes/NewProjectPage";
-import { ProjectOverviewPage } from "@/routes/ProjectOverviewPage";
 import { ProjectTeamPage } from "@/routes/ProjectTeamPage";
 import { BoardPage } from "@/routes/BoardPage";
 import { TasksListPage } from "@/routes/TasksListPage";
@@ -83,7 +82,7 @@ function ProtectedApp() {
                     <Route path="/profile" element={<ProfilePage />} />
                     <Route path="/mcp" element={<McpPage />} />
                     <Route path="/projects/:projectKey" element={<ProjectLayout />}>
-                        <Route index element={<ProjectOverviewPage />} />
+                        <Route index element={<ProjectPulsePage />} />
                         <Route path="team" element={<ProjectTeamPage />} />
                         <Route path="board" element={<BoardPage />} />
                         <Route path="tasks" element={<TasksListPage />} />
@@ -113,7 +112,6 @@ function ProtectedApp() {
                         />
                         <Route path="docs" element={<ProjectDocumentsPage />} />
                         <Route path="docs/:slug" element={<DocumentDetailPage />} />
-                        <Route path="pulse" element={<ProjectPulsePage />} />
                         <Route path="knowledge" element={<ProjectKnowledgePage />} />
                         <Route path="settings" element={<ProjectSettingsPage />} />
                     </Route>

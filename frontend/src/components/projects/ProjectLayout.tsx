@@ -12,7 +12,7 @@ import { EmptyState, ErrorMessage, Skeleton } from "@/components/ui/States";
 import { TaskDrawer } from "@/components/tasks/TaskDrawer";
 
 const TABS = [
-    { path: "", label: "Обзор", end: true },
+    { path: "", label: "Пульс", end: true },
     { path: "team", label: "Команда", end: false },
     { path: "board", label: "Канбан", end: false },
     { path: "tasks", label: "Задачи", end: false },
@@ -20,7 +20,6 @@ const TABS = [
     { path: "structure", label: "Структура", end: false },
     { path: "whiteboard", label: "Доска", end: false },
     { path: "docs", label: "Документы", end: false },
-    { path: "pulse", label: "Пульс", end: false },
     { path: "knowledge", label: "AI-вики", end: false },
 ];
 
