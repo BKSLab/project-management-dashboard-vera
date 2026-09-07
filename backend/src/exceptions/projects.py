@@ -50,6 +50,26 @@ class ProjectNotFoundError(ProjectsServiceError):
         return f"Проект с id={self.project_id} не найден."
 
 
+class ProjectValidationError(ProjectsServiceError):
+    """Паспорт или изменение срока нарушает правила проекта."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    def __init__(self, detail: str):
+        self.detail = detail
+        super().__init__(error_details=detail)
+
+
+class ProjectDeadlineConflictError(ProjectsServiceError):
+    """Срок успел измениться после открытия формы."""
+
+    status_code = status.HTTP_409_CONFLICT
+    detail = "Срок проекта уже изменён. Обновите данные и повторите изменение."
+
+    def __init__(self):
+        super().__init__(error_details=self.detail)
+
+
 class ProjectKeyConflictError(ProjectsServiceError):
     """Код проекта уже используется другим проектом."""
 

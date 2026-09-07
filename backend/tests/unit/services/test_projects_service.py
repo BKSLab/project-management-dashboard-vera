@@ -7,17 +7,23 @@ import pytest
 from src.db.models.knowledge_index_jobs import KnowledgeEntityType
 from src.db.models.project_members import ProjectRole
 from src.exceptions.projects import (
+    ProjectDeadlineConflictError,
     ProjectKeyAlreadyExistsRepositoryError,
     ProjectKeyConflictError,
+    ProjectMemberUserNotFoundError,
     ProjectNotFoundError,
     ProjectsRepositoryError,
     ProjectsServiceError,
+    ProjectValidationError,
 )
+from src.repositories.project_deadline_changes import ProjectDeadlineChangesRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
+from src.repositories.users import UsersRepository
+from src.schemas.projects import ProjectCreateSchema
 from src.services.knowledge_events import KnowledgeEvents
 from src.services.projects import DEFAULT_STAGES, ProjectsService, build_project_stats
 from src.storage.task_attachments import TaskAttachmentStorage
@@ -91,6 +97,8 @@ def build_service(
         unit_of_work=unit_of_work or AsyncMock(spec=UnitOfWork),
         knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
         attachment_storage=AsyncMock(spec=TaskAttachmentStorage),
+        users_repository=AsyncMock(spec=UsersRepository),
+        deadline_changes_repository=AsyncMock(spec=ProjectDeadlineChangesRepository),
     )
 
 
@@ -133,6 +141,8 @@ async def test_delete_project_removes_attachment_directories() -> None:
         stages_repository=AsyncMock(spec=ProjectStagesRepository),
         tasks_repository=tasks_repository,
         attachment_storage=storage,
+        users_repository=AsyncMock(spec=UsersRepository),
+        deadline_changes_repository=AsyncMock(spec=ProjectDeadlineChangesRepository),
         unit_of_work=AsyncMock(spec=UnitOfWork),
         knowledge_events=AsyncMock(spec=KnowledgeEvents),
     )
@@ -188,7 +198,7 @@ def test_build_project_stats_summarises_progress_and_deadlines() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('field,value', [('name', 'Новое имя'), ('description_md', 'Описание')])
+@pytest.mark.parametrize("field,value", [("name", "Новое имя"), ("description_md", "Описание")])
 async def test_project_changes_enqueue_the_right_knowledge_job(field: str, value: str) -> None:
     """Точечные поля ставят upsert проекта, смена ключа — полную переиндексацию."""
 
@@ -200,7 +210,7 @@ async def test_project_changes_enqueue_the_right_knowledge_job(field: str, value
     await build_service(
         projects_repository=projects_repository,
         knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
-    ).update_project(project_id=7, data={field: value})
+    ).update_project(project_id=7, data={field: value}, updated_by_user_id=OWNER_ID)
 
     knowledge_events.upsert.assert_awaited_once_with(
         project_id=7,
@@ -217,7 +227,9 @@ async def test_project_changes_enqueue_the_right_knowledge_job(field: str, value
     await build_service(
         projects_repository=projects_repository,
         knowledge_events=knowledge_events or AsyncMock(spec=KnowledgeEvents),
-    ).update_project(project_id=7, data={"key": "NEW", "name": "Новое имя"})
+    ).update_project(
+        project_id=7, data={"key": "NEW", "name": "Новое имя"}, updated_by_user_id=OWNER_ID
+    )
 
     knowledge_events.reindex_project.assert_awaited_once_with(7)
     knowledge_events.upsert.assert_not_awaited()
@@ -257,3 +269,179 @@ async def test_project_creation_and_reads_report_their_failures() -> None:
         await build_service(projects_repository).get_project_list(user_id=OWNER_ID)
 
     assert exc_info.value.status_code == 500
+
+
+def deadline_service(previous: date | None, has_been_set: bool = False) -> ProjectsService:
+    """Сервис с сохранённым сроком и реальным снимком имени автора."""
+    service = build_service()
+    project = make_project()
+    project.due_date = previous
+    project.due_date_has_been_set = has_been_set
+    service.projects_repository.get_by_id.return_value = project
+
+    async def update(*, project, data):
+        for key, value in data.items():
+            setattr(project, key, value)
+        return project
+
+    service.projects_repository.update.side_effect = update
+    service.users_repository.get_by_id.return_value = SimpleNamespace(
+        id=OWNER_ID,
+        username="owner",
+        last_name="Тестов",
+        first_name="Иван",
+        middle_name=None,
+    )
+    return service
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "previous,new_date,ever_set",
+    [
+        (TODAY, TODAY + timedelta(days=1), True),
+        (TODAY, None, True),
+        (None, TODAY, True),
+        (TODAY, TODAY + timedelta(days=1), False),
+    ],
+)
+@pytest.mark.parametrize("comment", [None, " \n "])
+async def test_deadline_revision_requires_reason(previous, new_date, ever_set, comment):
+    service = deadline_service(previous, ever_set)
+    with pytest.raises(ProjectValidationError):
+        await service.update_project(
+            7, {"due_date": new_date, "due_date_comment": comment}, OWNER_ID
+        )
+    service.deadline_changes_repository.save.assert_not_awaited()
+    service.projects_repository.update.assert_not_awaited()
+    service.unit_of_work.commit.assert_not_awaited()
+    service.unit_of_work.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "previous,new_date,comment",
+    [
+        (None, TODAY, None),
+        (TODAY, TODAY + timedelta(days=5), "Сдвиг поставки"),
+        (TODAY, None, "Перепланирование"),
+    ],
+)
+async def test_deadline_change_records_dates_actor_and_reason(previous, new_date, comment):
+    service = deadline_service(previous)
+    result = await service.update_project(
+        7, {"due_date": new_date, "due_date_comment": comment}, OWNER_ID
+    )
+    assert result.due_date == new_date
+    assert result.due_date_has_been_set is True
+    service.deadline_changes_repository.save.assert_awaited_once_with(
+        data={
+            "project_id": 7,
+            "previous_due_date": previous,
+            "new_due_date": new_date,
+            "changed_by_user_id": OWNER_ID,
+            "changed_by_name": "Тестов Иван",
+            "comment": comment,
+        }
+    )
+    service.projects_repository.get_by_id.assert_awaited_once_with(project_id=7, for_update=True)
+    service.unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_unchanged_date_creates_no_history_and_stale_date_is_rejected():
+    service = deadline_service(TODAY)
+    await service.update_project(
+        7, {"due_date": TODAY, "due_date_comment": "Лишний комментарий"}, OWNER_ID
+    )
+    service.deadline_changes_repository.save.assert_not_awaited()
+    with pytest.raises(ProjectDeadlineConflictError):
+        await service.update_project(
+            7,
+            {
+                "due_date": TODAY + timedelta(days=2),
+                "expected_due_date": None,
+                "due_date_comment": "Работа с устаревшей формой",
+            },
+            OWNER_ID,
+        )
+    service.deadline_changes_repository.save.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_updated_start_date_cannot_cross_existing_due_date():
+    service = deadline_service(TODAY)
+    with pytest.raises(ProjectValidationError):
+        await service.update_project(7, {"start_date": TODAY + timedelta(days=1)}, OWNER_ID)
+    service.projects_repository.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_structured_description_is_in_search_text_and_enqueues_indexing():
+    service = deadline_service(None)
+    result = await service.update_project(
+        7,
+        {
+            "description_sections": {
+                "problem": "  Потери заявок  ",
+                "goal": "Учёт заявок",
+                "additional": "Старые **сведения**",
+            }
+        },
+        OWNER_ID,
+    )
+    assert result.description_sections.problem == "Потери заявок"
+    assert (
+        result.description_md
+        == "## Проблема\n\nПотери заявок\n\n## Цель\n\nУчёт заявок\n\n## Дополнительно\n\nСтарые **сведения**"
+    )
+    service.knowledge_events.upsert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_creation_accepts_custom_stages_and_validated_team_atomically():
+    service = deadline_service(None)
+    service.projects_repository.get_max_order_index.return_value = 0
+    service.projects_repository.save.return_value = make_project()
+    service.users_repository.get_by_username.return_value = SimpleNamespace(id=2, is_active=True)
+    data = ProjectCreateSchema.model_validate(
+        {
+            "key": "PROJ",
+            "name": "Проект",
+            "member_usernames": [" Anna ", "anna"],
+            "stages": [{"name": "Заявки"}, {"name": "Выполнено", "is_done_stage": True}],
+        }
+    ).model_dump()
+    await service.create_project(data, OWNER_ID)
+    assert [
+        item["name"] for item in service.stages_repository.save_many.await_args.kwargs["items"]
+    ] == ["Заявки", "Выполнено"]
+    assert [
+        call.kwargs["data"]["user_id"] for call in service.members_repository.save.await_args_list
+    ] == [1, 2]
+    service.users_repository.get_by_username.assert_awaited_once_with(username="anna")
+    service.unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_unknown_team_member_prevents_project_creation():
+    service = deadline_service(None)
+    service.users_repository.get_by_username.return_value = None
+    with pytest.raises(ProjectMemberUserNotFoundError):
+        await service.create_project(
+            {"key": "PROJ", "name": "Проект", "member_usernames": ["missing"]}, OWNER_ID
+        )
+    service.projects_repository.save.assert_not_awaited()
+    service.unit_of_work.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_history_write_rolls_back_project_change():
+    service = deadline_service(TODAY)
+    service.deadline_changes_repository.save.side_effect = ProjectsRepositoryError(
+        "Сбой записи истории"
+    )
+    with pytest.raises(ProjectsServiceError):
+        await service.update_project(7, {"due_date": None, "due_date_comment": "Причина"}, OWNER_ID)
+    service.projects_repository.update.assert_not_awaited()
+    service.unit_of_work.rollback.assert_awaited_once()

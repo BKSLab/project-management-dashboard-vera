@@ -10,9 +10,11 @@ interface ProjectFormProps {
     onChange: (values: ProjectFormValues) => void;
     /** Код проекта участвует в номерах задач, поэтому у существующего проекта его не меняем. */
     lockKey?: boolean;
+    requireDeadlineComment?: boolean;
+    disabled?: boolean;
 }
 
-export function ProjectForm({ values, onChange, lockKey = false }: ProjectFormProps) {
+export function ProjectForm({ values, onChange, lockKey = false, requireDeadlineComment = false, disabled = false }: ProjectFormProps) {
     const [keyTouched, setKeyTouched] = useState(false);
     const keyError =
         keyTouched && values.key !== "" && !PROJECT_KEY_PATTERN.test(values.key)
@@ -24,7 +26,7 @@ export function ProjectForm({ values, onChange, lockKey = false }: ProjectFormPr
     }
 
     return (
-        <div className="flex flex-col gap-4">
+        <fieldset disabled={disabled} className="flex min-w-0 flex-col gap-4">
             <div className="grid gap-4 sm:grid-cols-[140px_1fr]">
                 <Field
                     label="Код"
@@ -59,16 +61,21 @@ export function ProjectForm({ values, onChange, lockKey = false }: ProjectFormPr
                 </Field>
             </div>
 
-            <Field label="Описание" hint="Markdown поддерживается">
-                {(id) => (
-                    <Textarea
-                        id={id}
-                        rows={4}
-                        value={values.description_md}
-                        onChange={(event) => update({ description_md: event.target.value })}
-                    />
-                )}
-            </Field>
+            {([
+                ["problem", "Проблема", "Что сейчас не устраивает и почему появился этот проект?"],
+                ["goal", "Цель", "Что должно измениться благодаря проекту?"],
+                ["expected_result", "Ожидаемый результат", "Что будет готово и как мы поймём, что проект завершён?"],
+                ["additional", "Дополнительно", "Ограничения, ссылки и договорённости — по желанию."],
+            ] as const).map(([field, label, hint]) => (
+                <Field key={field} label={label} hint={hint}>
+                    {(id) => (
+                        <Textarea id={id} rows={2} value={values.description_sections[field]}
+                            onChange={(event) => update({ description_sections: {
+                                ...values.description_sections, [field]: event.target.value,
+                            } })} />
+                    )}
+                </Field>
+            ))}
 
             <div className="grid gap-4 sm:grid-cols-3">
                 <Field label="Статус">
@@ -100,17 +107,29 @@ export function ProjectForm({ values, onChange, lockKey = false }: ProjectFormPr
                     )}
                 </Field>
 
-                <Field label="Плановое завершение">
+                <Field label="Плановое завершение" hint="Можно оставить без даты">
                     {(id) => (
                         <Input
                             id={id}
                             type="date"
                             value={values.due_date}
+                            min={values.start_date || undefined}
                             onChange={(event) => update({ due_date: event.target.value })}
                         />
                     )}
                 </Field>
             </div>
+
+            {values.start_date && values.due_date && values.due_date < values.start_date && (
+                <p role="alert" className="text-[12px] text-danger">Окончание проекта не может быть раньше начала.</p>
+            )}
+            {requireDeadlineComment && (
+                <Field label="Причина изменения срока" hint="Обязательно. Сохраним причину и обе даты в истории проекта.">
+                    {(id) => <Textarea id={id} required rows={2} maxLength={5000}
+                        value={values.due_date_comment}
+                        onChange={(event) => update({ due_date_comment: event.target.value })} />}
+                </Field>
+            )}
 
             <div className="grid gap-4 sm:grid-cols-[120px_1fr]">
                 <Field label="Иконка" hint="Эмодзи">
@@ -147,6 +166,6 @@ export function ProjectForm({ values, onChange, lockKey = false }: ProjectFormPr
                     </div>
                 </fieldset>
             </div>
-        </div>
+        </fieldset>
     );
 }

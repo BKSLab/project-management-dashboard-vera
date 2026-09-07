@@ -39,6 +39,7 @@ class ProjectStagesRepository:
                 select(ProjectStage)
                 .where(ProjectStage.project_id == project_id)
                 .order_by(ProjectStage.order_index, ProjectStage.id)
+                .execution_options(populate_existing=True)
             )
             return list(result.scalars().all())
         except (SQLAlchemyError, Exception) as error:

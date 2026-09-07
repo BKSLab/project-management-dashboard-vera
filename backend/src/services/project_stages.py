@@ -81,7 +81,7 @@ class ProjectStagesService:
             ProjectStagesServiceError: Если создать стадию не удалось.
         """
         try:
-            await self._ensure_project_exists(project_id=project_id)
+            await self._ensure_project_exists(project_id=project_id, for_update=True)
             order_index = await self.stages_repository.get_max_order_index(project_id=project_id)
             stage = await self.stages_repository.save(
                 data={**data, "project_id": project_id, "order_index": order_index + 1}
@@ -114,7 +114,23 @@ class ProjectStagesService:
             stage = await self.stages_repository.get_by_id(stage_id=stage_id)
             if stage is None:
                 raise ProjectStageNotFoundError(stage_id=stage_id)
-            updated = await self.stages_repository.update(stage=stage, data=data)
+            payload = dict(data)
+            target_index = payload.pop("order_index", None)
+            if target_index is not None:
+                # Перестановка меняет порядок всех затронутых колонок одной транзакцией.
+                await self.projects_repository.get_by_id(stage.project_id, for_update=True)
+                stages = await self.stages_repository.get_by_project(stage.project_id)
+                stage = next((item for item in stages if item.id == stage_id), None)
+                if stage is None:
+                    raise ProjectStageNotFoundError(stage_id=stage_id)
+                ordered = [item for item in stages if item.id != stage_id]
+                ordered.insert(min(target_index, len(ordered)), stage)
+                for index, item in enumerate(ordered):
+                    if item.order_index != index:
+                        await self.stages_repository.update(stage=item, data={"order_index": index})
+            updated = (
+                await self.stages_repository.update(stage=stage, data=payload) if payload else stage
+            )
             await self.unit_of_work.commit()
             return StageSchema.model_validate(updated)
         except ProjectStageNameAlreadyExistsRepositoryError as error:
@@ -122,7 +138,11 @@ class ProjectStagesService:
             raise ProjectStageNameConflictError(name=error.name) from error
         except RepositoryErrors as error:
             logger.error("❌ Ошибка обновления стадии id=%s.", stage_id, exc_info=True)
+            await self.unit_of_work.rollback()
             raise ProjectStagesServiceError(str(error)) from error
+        except ProjectStagesServiceError:
+            await self.unit_of_work.rollback()
+            raise
 
     async def delete_stage(self, stage_id: int) -> None:
         """Удаляет пустую стадию проекта.
@@ -143,6 +163,7 @@ class ProjectStagesService:
             stage = await self.stages_repository.get_by_id(stage_id=stage_id)
             if stage is None:
                 raise ProjectStageNotFoundError(stage_id=stage_id)
+            await self._ensure_project_exists(project_id=stage.project_id, for_update=True)
             if await self.tasks_repository.get_count_by_stage(stage_id=stage_id) > 0:
                 raise ProjectStageHasTasksError(stage_id=stage_id)
             stages = await self.stages_repository.get_by_project(project_id=stage.project_id)
@@ -180,7 +201,10 @@ class ProjectStagesService:
             logger.error("❌ Ошибка получения стадии id=%s.", stage_id, exc_info=True)
             raise ProjectStagesServiceError(str(error)) from error
 
-    async def _ensure_project_exists(self, project_id: int) -> None:
+    async def _ensure_project_exists(self, project_id: int, *, for_update: bool = False) -> None:
         """Проверяет существование проекта перед операцией со стадиями."""
-        if await self.projects_repository.get_by_id(project_id=project_id) is None:
+        if (
+            await self.projects_repository.get_by_id(project_id=project_id, for_update=for_update)
+            is None
+        ):
             raise ProjectNotFoundError(project_id=project_id)

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GripVertical, Plus, Trash2 } from "lucide-react";
-import { api, endpoints, queryKeys } from "@/lib/api";
+import { api, ApiError, endpoints, queryKeys } from "@/lib/api";
 import type { Project, ProjectStage } from "@/lib/types";
 import { PROJECT_COLORS } from "@/lib/types";
 import { useProjectOutlet } from "@/lib/useProjectOutlet";
@@ -14,8 +14,12 @@ import { StatusDot } from "@/components/ui/Badge";
 import { ErrorMessage, Skeleton } from "@/components/ui/States";
 import { useToast } from "@/lib/toast";
 import { ProjectForm } from "@/components/projects/ProjectForm";
+import { ProjectPeopleSummary } from "@/components/projects/ProjectPeopleSummary";
+import { ProjectDeadlineHistory } from "@/components/projects/ProjectDeadlineHistory";
+import { ProjectTeamPage } from "@/routes/ProjectTeamPage";
 import {
     isProjectFormValid,
+    requiresDeadlineComment,
     toProjectFormValues,
     toProjectUpdatePayload,
     type ProjectFormValues,
@@ -27,9 +31,11 @@ export function ProjectSettingsPage() {
     const queryClient = useQueryClient();
     const toast = useToast();
     const [values, setValues] = useState<ProjectFormValues>(() => toProjectFormValues(project));
+    const [formProject, setFormProject] = useState(project);
     const [newStageName, setNewStageName] = useState("");
     const [isDeleteOpen, setDeleteOpen] = useState(false);
     const [deleteConfirmation, setDeleteConfirmation] = useState("");
+    const commentRequired = requiresDeadlineComment(formProject, values);
 
     const stagesQuery = useQuery({
         queryKey: queryKeys.stages(project.id),
@@ -44,10 +50,23 @@ export function ProjectSettingsPage() {
 
     const saveMutation = useMutation({
         mutationFn: () =>
-            api.patch<Project>(endpoints.project(project.id), toProjectUpdatePayload(values)),
-        onSuccess: () => {
+            api.patch<Project>(endpoints.project(project.id), toProjectUpdatePayload(values, formProject)),
+        onSuccess: (saved) => {
+            setValues(toProjectFormValues(saved));
+            setFormProject(saved);
             invalidateProject();
             toast.success("Настройки проекта сохранены");
+        },
+        onError: async (error) => {
+            if (error instanceof ApiError && error.status === 409) {
+                setValues((current) => ({ ...current, due_date_comment: "" }));
+                try {
+                    setFormProject(await api.get<Project>(endpoints.project(project.id)));
+                } catch {
+                    toast.error("Не удалось загрузить актуальный срок. Обновите страницу перед повторным сохранением.");
+                }
+                invalidateProject();
+            }
         },
     });
 
@@ -60,6 +79,7 @@ export function ProjectSettingsPage() {
         onSuccess: () => {
             setNewStageName("");
             queryClient.invalidateQueries({ queryKey: queryKeys.stages(project.id) });
+            invalidateProject();
         },
         onError: (error) => toast.error((error as Error).message),
     });
@@ -70,6 +90,7 @@ export function ProjectSettingsPage() {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: queryKeys.stages(project.id) });
             queryClient.invalidateQueries({ queryKey: ["projects", project.id] });
+            invalidateProject();
         },
         onError: (error) => toast.error((error as Error).message),
     });
@@ -78,6 +99,7 @@ export function ProjectSettingsPage() {
         mutationFn: (stageId: number) => api.delete(endpoints.stage(stageId)),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: queryKeys.stages(project.id) });
+            invalidateProject();
         },
         onError: (error) => toast.error((error as Error).message),
     });
@@ -93,16 +115,18 @@ export function ProjectSettingsPage() {
     return (
         <div className="scrollbar-thin h-full overflow-y-auto">
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-5 py-5">
-                <Section title="Проект">
+                <Section title="О проекте">
                     <div className="flex flex-col gap-5 rounded-[var(--radius-card)] bg-surface/40 p-5">
+                        <ProjectPeopleSummary project={project} />
                         {saveMutation.error && (
                             <ErrorMessage message={(saveMutation.error as Error).message} />
                         )}
-                        <ProjectForm values={values} onChange={setValues} lockKey />
+                        <ProjectForm values={values} onChange={setValues} lockKey requireDeadlineComment={commentRequired} disabled={saveMutation.isPending} />
+                        {commentRequired && <p className="text-[12px] text-muted">Предыдущий срок: {formProject.due_date ?? "без даты"}.</p>}
                         <div className="flex justify-end pt-1">
                             <Button
                                 variant="primary"
-                                disabled={!isProjectFormValid(values) || saveMutation.isPending}
+                                disabled={!isProjectFormValid(values) || (commentRequired && !values.due_date_comment.trim()) || saveMutation.isPending}
                                 onClick={() => saveMutation.mutate()}
                             >
                                 Сохранить
@@ -111,9 +135,13 @@ export function ProjectSettingsPage() {
                     </div>
                 </Section>
 
+                <ProjectDeadlineHistory projectId={project.id} />
+                <ProjectTeamPage embedded />
+
                 <Section title="Стадии канбана">
                     <Card className="flex flex-col gap-3 p-4">
                         {stagesQuery.isPending && <Skeleton className="h-24 w-full" />}
+                        {stagesQuery.error && <ErrorMessage message={(stagesQuery.error as Error).message} action={<Button onClick={() => stagesQuery.refetch()}>Повторить</Button>} />}
                         {stagesQuery.data?.map((stage, index) => (
                             <div
                                 key={stage.id}
@@ -171,7 +199,7 @@ export function ProjectSettingsPage() {
                                     <IconButton
                                         label={`Поднять стадию ${stage.name}`}
                                         size="sm"
-                                        disabled={index === 0}
+                                        disabled={index === 0 || updateStageMutation.isPending}
                                         onClick={() =>
                                             updateStageMutation.mutate({
                                                 stageId: stage.id,
@@ -184,7 +212,7 @@ export function ProjectSettingsPage() {
                                     <IconButton
                                         label={`Опустить стадию ${stage.name}`}
                                         size="sm"
-                                        disabled={index === (stagesQuery.data?.length ?? 1) - 1}
+                                        disabled={index === (stagesQuery.data?.length ?? 1) - 1 || updateStageMutation.isPending}
                                         onClick={() =>
                                             updateStageMutation.mutate({
                                                 stageId: stage.id,

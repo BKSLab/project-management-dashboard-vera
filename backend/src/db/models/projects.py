@@ -4,8 +4,19 @@ import enum
 from datetime import date
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Computed, Date, Enum, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy import (
+    Boolean,
+    Computed,
+    Date,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    false,
+)
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin
@@ -109,6 +120,11 @@ class Project(Base, TimestampMixin):
         doc="Порядок проекта в списке.",
         comment="Порядок отображения проекта в списке и переключателе.",
     )
+    description_sections: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    due_date_has_been_set: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+
     search_vector: Mapped[object] = mapped_column(
         TSVECTOR,
         Computed(

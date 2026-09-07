@@ -9,6 +9,7 @@ from .knowledge_index_jobs import (
     KnowledgeIndexOperation,
     KnowledgeIndexStatus,
 )
+from .project_deadline_changes import ProjectDeadlineChange
 from .project_members import ProjectMember, ProjectRole
 from .project_milestones import ProjectMilestone, ProjectMilestoneStatus
 from .project_risks import ProjectRisk
@@ -36,6 +37,7 @@ __all__ = [
     "KnowledgeIndexOperation",
     "KnowledgeIndexStatus",
     "Project",
+    "ProjectDeadlineChange",
     "ProjectMember",
     "ProjectMilestone",
     "ProjectMilestoneStatus",

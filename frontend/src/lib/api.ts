@@ -91,6 +91,8 @@ export const endpoints = {
     dashboardAnalytics: (projectId?: number | null) =>
         `${V1}/dashboard/analytics${projectId ? `?project_id=${projectId}` : ""}`,
     projects: () => `${V1}/projects`,
+    projectDefaults: () => `${V1}/projects/defaults`,
+    projectDeadlineHistory: (projectId: number) => `${V1}/projects/${projectId}/deadline-history`,
     project: (projectId: number) => `${V1}/projects/${projectId}`,
     projectStats: (projectId: number) => `${V1}/projects/${projectId}/stats`,
     projectRisks: (projectId: number) => `${V1}/projects/${projectId}/risks`,
@@ -173,6 +175,8 @@ export const queryKeys = {
     projects: ["projects"] as const,
     project: (projectId: number) => ["projects", projectId] as const,
     projectStats: (projectId: number) => ["projects", projectId, "stats"] as const,
+    projectDefaults: ["project-defaults"] as const,
+    projectDeadlineHistory: (projectId: number) => ["projects", projectId, "deadline-history"] as const,
     projectRisks: (projectId: number) => ["projects", projectId, "risks"] as const,
     projectRiskList: (projectId: number, query: string) => ["projects", projectId, "risks", "list", query] as const,
     projectRisk: (projectId: number, riskId: number) => ["projects", projectId, "risks", "detail", riskId] as const,

@@ -8,24 +8,38 @@ from src.db.models.tasks import Task
 from src.exceptions.knowledge import KnowledgeEventsServiceError
 from src.exceptions.project_stages import ProjectStagesRepositoryError
 from src.exceptions.projects import (
+    ProjectDeadlineConflictError,
     ProjectKeyAlreadyExistsRepositoryError,
     ProjectKeyConflictError,
+    ProjectMemberUserNotFoundError,
     ProjectNotFoundError,
     ProjectsRepositoryError,
     ProjectsServiceError,
+    ProjectValidationError,
 )
 from src.exceptions.storage import TaskAttachmentStorageError
 from src.exceptions.tasks import TasksRepositoryError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
+from src.exceptions.users import UsersRepositoryError
+from src.repositories.project_deadline_changes import ProjectDeadlineChangesRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
-from src.schemas.projects import ProjectSchema, ProjectStatsSchema, StageBreakdownSchema
+from src.repositories.users import UsersRepository
+from src.schemas.projects import (
+    ProjectDeadlineChangeSchema,
+    ProjectDefaultsSchema,
+    ProjectDescriptionSchema,
+    ProjectSchema,
+    ProjectStatsSchema,
+    StageBreakdownSchema,
+)
 from src.services.knowledge_events import KnowledgeEvents
 from src.storage.task_attachments import TaskAttachmentStorage
 from src.utils.deadlines import DUE_SOON_DAYS, is_task_due_soon, is_task_overdue
+from src.utils.project_description import compose_project_description
 
 logger = logging.getLogger(__name__)
 PROJECT_POINT_FIELDS = frozenset({"name", "description_md"})
@@ -39,6 +53,7 @@ DEFAULT_STAGES: tuple[dict, ...] = (
 )
 
 RepositoryErrors = (
+    UsersRepositoryError,
     ProjectsRepositoryError,
     ProjectStagesRepositoryError,
     TasksRepositoryError,
@@ -59,6 +74,8 @@ class ProjectsService:
         unit_of_work: UnitOfWork,
         attachment_storage: TaskAttachmentStorage,
         knowledge_events: KnowledgeEvents,
+        users_repository: UsersRepository,
+        deadline_changes_repository: ProjectDeadlineChangesRepository,
     ):
         self.projects_repository = projects_repository
         self.members_repository = members_repository
@@ -67,6 +84,12 @@ class ProjectsService:
         self.unit_of_work = unit_of_work
         self.attachment_storage = attachment_storage
         self.knowledge_events = knowledge_events
+        self.users_repository = users_repository
+        self.deadline_changes_repository = deadline_changes_repository
+
+    def get_defaults(self) -> ProjectDefaultsSchema:
+        """Возвращает стандартные стадии из того же источника, что использует создание."""
+        return ProjectDefaultsSchema(stages=list(DEFAULT_STAGES))
 
     async def get_project_list(self, user_id: int) -> list[ProjectSchema]:
         """Возвращает проекты, доступные пользователю.
@@ -132,9 +155,22 @@ class ProjectsService:
             ProjectsServiceError: Если создать проект не удалось.
         """
         try:
+            payload = self._description_payload(data)
+            usernames = payload.pop("member_usernames", [])
+            stages = payload.pop("stages", None)
+            selected_users = {}
+            for username in dict.fromkeys(name.strip().lower() for name in usernames):
+                user = await self.users_repository.get_by_username(username=username)
+                if user is None or not user.is_active:
+                    raise ProjectMemberUserNotFoundError(username)
+                if user.id != owner_id:
+                    selected_users[user.id] = user
+            payload["start_date"] = payload.get("start_date") or date.today()
+            self._validate_period(payload["start_date"], payload.get("due_date"))
+            payload["due_date_has_been_set"] = payload.get("due_date") is not None
             order_index = await self.projects_repository.get_max_order_index() + 1
             project = await self.projects_repository.save(
-                data={**data, "owner_id": owner_id, "order_index": order_index}
+                data={**payload, "owner_id": owner_id, "order_index": order_index}
             )
             await self.members_repository.save(
                 data={
@@ -145,27 +181,51 @@ class ProjectsService:
             )
             await self.stages_repository.save_many(
                 items=[
-                    {**stage, "project_id": project.id, "order_index": index}
-                    for index, stage in enumerate(DEFAULT_STAGES)
+                    {
+                        **stage,
+                        "name": stage["name"].strip(),
+                        "project_id": project.id,
+                        "order_index": index,
+                    }
+                    for index, stage in enumerate(stages if stages is not None else DEFAULT_STAGES)
                 ]
             )
+            for user_id in selected_users:
+                await self.members_repository.save(
+                    data={
+                        "project_id": project.id,
+                        "user_id": user_id,
+                        "role": ProjectRole.MEMBER,
+                    }
+                )
+            if payload.get("due_date") is not None:
+                await self._record_deadline(project.id, None, payload["due_date"], owner_id, None)
             await self.knowledge_events.reindex_project(project.id)
             await self.unit_of_work.commit()
-            logger.info("✅ Проект %s создан со стадиями по умолчанию.", project.key)
+            logger.info("✅ Проект %s создан с командой и стадиями.", project.key)
             return ProjectSchema.model_validate(project)
         except ProjectKeyAlreadyExistsRepositoryError as error:
             logger.warning("⚠️ Конфликт кода проекта %s.", error.key)
+            await self.unit_of_work.rollback()
             raise ProjectKeyConflictError(key=error.key) from error
         except RepositoryErrors as error:
             logger.error("❌ Ошибка создания проекта.", exc_info=True)
+            await self.unit_of_work.rollback()
             raise ProjectsServiceError(str(error)) from error
 
-    async def update_project(self, project_id: int, data: dict) -> ProjectSchema:
+        except ProjectsServiceError:
+            await self.unit_of_work.rollback()
+            raise
+
+    async def update_project(
+        self, project_id: int, data: dict, updated_by_user_id: int
+    ) -> ProjectSchema:
         """Обновляет поля проекта.
 
         Args:
             project_id: Идентификатор проекта.
             data: Изменяемые поля проекта.
+            updated_by_user_id: Автор изменения из авторизованного запроса.
 
         Returns:
             Обновлённый проект.
@@ -176,13 +236,34 @@ class ProjectsService:
             ProjectsServiceError: Если обновить проект не удалось.
         """
         try:
-            project = await self.projects_repository.get_by_id(project_id=project_id)
+            project = await self.projects_repository.get_by_id(
+                project_id=project_id, for_update=True
+            )
             if project is None:
                 raise ProjectNotFoundError(project_id=project_id)
-            updated = await self.projects_repository.update(project=project, data=data)
-            if "key" in data:
+            payload = self._description_payload(data)
+            comment = (payload.pop("due_date_comment", None) or "").strip() or None
+            has_expected_date = "expected_due_date" in payload
+            expected_date = payload.pop("expected_due_date", None)
+            new_due_date = payload.get("due_date", project.due_date)
+            self._validate_period(payload.get("start_date", project.start_date), new_due_date)
+            if new_due_date != project.due_date:
+                if has_expected_date and expected_date != project.due_date:
+                    raise ProjectDeadlineConflictError()
+                if (
+                    project.due_date is not None or getattr(project, "due_date_has_been_set", False)
+                ) and not comment:
+                    raise ProjectValidationError(
+                        "Укажите причину изменения срока окончания проекта."
+                    )
+                await self._record_deadline(
+                    project_id, project.due_date, new_due_date, updated_by_user_id, comment
+                )
+                payload["due_date_has_been_set"] = True
+            updated = await self.projects_repository.update(project=project, data=payload)
+            if "key" in payload:
                 await self.knowledge_events.reindex_project(project_id)
-            elif PROJECT_POINT_FIELDS.intersection(data):
+            elif PROJECT_POINT_FIELDS.intersection(payload):
                 await self.knowledge_events.upsert(
                     project_id=project_id,
                     entity_type=KnowledgeEntityType.PROJECT,
@@ -195,7 +276,66 @@ class ProjectsService:
             raise ProjectKeyConflictError(key=error.key) from error
         except RepositoryErrors as error:
             logger.error("❌ Ошибка обновления проекта id=%s.", project_id, exc_info=True)
+            await self.unit_of_work.rollback()
             raise ProjectsServiceError(str(error)) from error
+        except ProjectsServiceError:
+            await self.unit_of_work.rollback()
+            raise
+
+    async def get_deadline_history(self, project_id: int) -> list[ProjectDeadlineChangeSchema]:
+        """Читает историю сроков доступного проекта."""
+        try:
+            if await self.projects_repository.get_by_id(project_id) is None:
+                raise ProjectNotFoundError(project_id)
+            changes = await self.deadline_changes_repository.get_by_project(project_id)
+            return [ProjectDeadlineChangeSchema.model_validate(change) for change in changes]
+        except RepositoryErrors as error:
+            logger.exception("❌ Не удалось получить историю срока проекта id=%s.", project_id)
+            raise ProjectsServiceError(str(error)) from error
+
+    async def _record_deadline(
+        self,
+        project_id: int,
+        previous: date | None,
+        current: date | None,
+        user_id: int,
+        comment: str | None,
+    ) -> None:
+        """Сохраняет снимок автора и дат в общей транзакции изменения."""
+        user = await self.users_repository.get_by_id(user_id)
+        if user is None:
+            raise ProjectValidationError("Не удалось определить автора изменения срока.")
+        name = (
+            " ".join(part for part in (user.last_name, user.first_name, user.middle_name) if part)
+            or user.username
+        )
+        await self.deadline_changes_repository.save(
+            data={
+                "project_id": project_id,
+                "previous_due_date": previous,
+                "new_due_date": current,
+                "changed_by_user_id": user.id,
+                "changed_by_name": name,
+                "comment": comment,
+            }
+        )
+
+    @staticmethod
+    def _validate_period(start_date: date | None, due_date: date | None) -> None:
+        if start_date and due_date and due_date < start_date:
+            raise ProjectValidationError("Окончание проекта не может быть раньше начала.")
+
+    @staticmethod
+    def _description_payload(data: dict) -> dict:
+        """Поддерживает структурированную форму и старый контракт description_md."""
+        payload = dict(data)
+        if payload.get("description_sections") is not None:
+            sections = ProjectDescriptionSchema.model_validate(payload["description_sections"])
+            payload["description_sections"] = sections.model_dump()
+            payload["description_md"] = compose_project_description(sections)
+        elif "description_md" in payload:
+            payload["description_sections"] = None
+        return payload
 
     async def delete_project(self, project_id: int) -> None:
         """Удаляет проект вместе с задачами, стадиями, структурой и документами.

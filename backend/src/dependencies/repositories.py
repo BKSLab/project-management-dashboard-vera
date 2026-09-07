@@ -9,6 +9,7 @@ from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.milestones import MilestonesRepository
+from src.repositories.project_deadline_changes import ProjectDeadlineChangesRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.project_stages import ProjectStagesRepository
@@ -53,6 +54,16 @@ def get_project_stickers_repository(session: DbSessionDep) -> ProjectStickersRep
 def get_projects_repository(session: DbSessionDep) -> ProjectsRepository:
     """Создаёт репозиторий проектов в рамках сессии запроса."""
     return ProjectsRepository(session)
+
+
+def get_project_deadline_changes_repository(session: DbSessionDep) -> ProjectDeadlineChangesRepository:
+    """Создаёт репозиторий истории сроков в общей транзакции."""
+    return ProjectDeadlineChangesRepository(session)
+
+
+ProjectDeadlineChangesRepositoryDep = Annotated[
+    ProjectDeadlineChangesRepository, Depends(get_project_deadline_changes_repository)
+]
 
 
 def get_project_stages_repository(session: DbSessionDep) -> ProjectStagesRepository:

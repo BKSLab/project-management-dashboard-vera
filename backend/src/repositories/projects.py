@@ -62,7 +62,7 @@ class ProjectsRepository:
             logger.error("❌ Не удалось получить проекты.", exc_info=True)
             raise ProjectsRepositoryError("Ошибка получения списка проектов.") from error
 
-    async def get_by_id(self, project_id: int) -> Project | None:
+    async def get_by_id(self, project_id: int, *, for_update: bool = False) -> Project | None:
         """Возвращает проект по идентификатору.
 
         Args:
@@ -75,9 +75,10 @@ class ProjectsRepository:
             ProjectsRepositoryError: Если запрос к БД завершился ошибкой.
         """
         try:
-            result: Result = await self.db_session.execute(
-                select(Project).where(Project.id == project_id)
-            )
+            statement = select(Project).where(Project.id == project_id)
+            if for_update:
+                statement = statement.with_for_update().execution_options(populate_existing=True)
+            result: Result = await self.db_session.execute(statement)
             return result.scalar_one_or_none()
         except (SQLAlchemyError, Exception) as error:
             await self.db_session.rollback()

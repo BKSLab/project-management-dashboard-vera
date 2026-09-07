@@ -19,7 +19,10 @@ class StageSchema(BaseModel):
 class StageCreateSchema(BaseModel):
     """Тело запроса для создания стадии проекта."""
 
-    model_config = ConfigDict(json_schema_extra={"example": {"name": "Ревью", "color": "#a371f7"}})
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        json_schema_extra={"example": {"name": "Ревью", "color": "#a371f7"}},
+    )
 
     name: str = Field(
         ...,
@@ -44,7 +47,9 @@ class StageCreateSchema(BaseModel):
 class StageUpdateSchema(BaseModel):
     """Тело запроса для частичного обновления стадии."""
 
-    model_config = ConfigDict(json_schema_extra={"example": {"name": "Проверка"}})
+    model_config = ConfigDict(
+        str_strip_whitespace=True, json_schema_extra={"example": {"name": "Проверка"}}
+    )
 
     name: str | None = Field(
         None,

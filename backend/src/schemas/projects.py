@@ -1,11 +1,45 @@
+import re
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.db.models.projects import ProjectStatus
+from src.schemas.project_stages import StageCreateSchema
+from src.schemas.users import USERNAME_PATTERN
 
 KEY_PATTERN = r"^[A-Za-z][A-Za-z0-9]{1,9}$"
 COLOR_PATTERN = r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+
+
+class ProjectDescriptionSchema(BaseModel):
+    """Логические блоки единого описания проекта."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    problem: str = Field("", description="Какую проблему решает проект.")
+    goal: str = Field("", description="Что должно измениться благодаря проекту.")
+    expected_result: str = Field("", description="Что будет готово и как проверить завершение.")
+    additional: str = Field("", description="Дополнительные сведения и договорённости.")
+
+
+class ProjectDeadlineChangeSchema(BaseModel):
+    """Запись истории назначения и изменения срока окончания."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    previous_due_date: date | None
+    new_due_date: date | None
+    changed_by_user_id: int | None
+    changed_by_name: str
+    comment: str | None
+    created_at: datetime
+
+
+class ProjectDefaultsSchema(BaseModel):
+    """Начальный набор стадий для формы создания проекта."""
+
+    stages: list[StageCreateSchema]
 
 
 class ProjectSchema(BaseModel):
@@ -14,6 +48,13 @@ class ProjectSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int = Field(..., description="Уникальный идентификатор проекта.", examples=[1])
+    owner_id: int | None = Field(None, description="Руководитель проекта — его создатель.")
+    description_sections: ProjectDescriptionSchema | None = Field(
+        None, description="Блоки паспорта проекта."
+    )
+    due_date_has_been_set: bool = Field(
+        False, description="Срок окончания уже назначался; пересмотр требует причины."
+    )
     key: str = Field(..., description="Короткий код проекта.", examples=["PROJ"])
     name: str = Field(..., description="Название проекта.", examples=["Агент Вера"])
     description_md: str | None = Field(
@@ -61,6 +102,45 @@ class ProjectCreateSchema(BaseModel):
             }
         }
     )
+
+    description_sections: ProjectDescriptionSchema | None = None
+    member_usernames: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+        description="Точные логины участников; руководитель включается автоматически.",
+    )
+    stages: list[StageCreateSchema] | None = Field(
+        None,
+        min_length=1,
+        max_length=30,
+        description="Стадии в порядке колонок. При отсутствии используется стандартный набор.",
+    )
+
+    @field_validator("member_usernames")
+    @classmethod
+    def normalize_members(cls, values: list[str]) -> list[str]:
+        """Нормализует и проверяет логины без дублирования участников."""
+        result = list(dict.fromkeys(value.strip().lower() for value in values))
+        if any(not re.fullmatch(USERNAME_PATTERN, value) for value in result):
+            raise ValueError("Укажите корректные логины участников.")
+        return result
+
+    @field_validator("stages")
+    @classmethod
+    def validate_stages(cls, stages: list[StageCreateSchema] | None):
+        """Имена стадий одного проекта должны различаться."""
+        if stages is not None:
+            names = [stage.name.strip().casefold() for stage in stages]
+            if any(not name for name in names) or len(names) != len(set(names)):
+                raise ValueError("Названия стадий должны быть непустыми и уникальными.")
+        return stages
+
+    @model_validator(mode="after")
+    def validate_period(self):
+        """Проверяет заданный период проекта."""
+        if self.start_date and self.due_date and self.due_date < self.start_date:
+            raise ValueError("Окончание проекта не может быть раньше начала.")
+        return self
 
     key: str = Field(
         ...,
@@ -119,6 +199,15 @@ class ProjectUpdateSchema(BaseModel):
     """Тело запроса для частичного обновления проекта."""
 
     model_config = ConfigDict(json_schema_extra={"example": {"status": "ACTIVE"}})
+
+    description_sections: ProjectDescriptionSchema | None = None
+    due_date_comment: str | None = Field(
+        None, max_length=5000, description="Причина пересмотра уже назначенного срока окончания."
+    )
+    expected_due_date: date | None = Field(
+        None,
+        description="Предыдущий срок из открытой формы, для защиты от одновременного изменения.",
+    )
 
     key: str | None = Field(
         None,

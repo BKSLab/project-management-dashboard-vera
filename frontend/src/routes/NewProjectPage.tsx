@@ -1,12 +1,17 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, endpoints, queryKeys } from "@/lib/api";
-import type { Project } from "@/lib/types";
+import { fullName, type Project, type ProjectStage } from "@/lib/types";
+import { useCurrentUser } from "@/lib/useAuth";
+import { formatDateOnly } from "@/lib/dates";
 import { Page } from "@/components/layout/AppShell";
 import { Button, LinkButton } from "@/components/ui/Button";
 import { ErrorMessage } from "@/components/ui/States";
 import { ProjectForm } from "@/components/projects/ProjectForm";
+import { Field, Input } from "@/components/ui/Field";
+import { ProjectStagesDraft } from "@/components/projects/ProjectStagesDraft";
+import { validStageDrafts, type StageDraft } from "@/lib/projectStages";
 import {
     EMPTY_PROJECT_FORM,
     isProjectFormValid,
@@ -17,10 +22,23 @@ import {
 export function NewProjectPage() {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    const [values, setValues] = useState<ProjectFormValues>(EMPTY_PROJECT_FORM);
+    const [values, setValues] = useState<ProjectFormValues>(() => ({ ...EMPTY_PROJECT_FORM, start_date: formatDateOnly(new Date()) }));
+    const currentUser = useCurrentUser();
+    const [memberNames, setMemberNames] = useState("");
+    const [stageDrafts, setStageDrafts] = useState<StageDraft[] | null>(null);
+    const defaults = useQuery({
+        queryKey: queryKeys.projectDefaults,
+        queryFn: () => api.get<{ stages: Pick<ProjectStage, "name" | "color" | "is_done_stage">[] }>(endpoints.projectDefaults()),
+    });
+    const stages = stageDrafts ?? (defaults.data?.stages ?? []).map((stage, index) => ({ ...stage, draftId: `default-${index}` }));
+    const usernames = [...new Set(memberNames.split(/[\s,;]+/).map((name) => name.trim().toLowerCase()).filter(Boolean))];
+    const validMembers = usernames.length <= 100 && usernames.every((name) => /^[a-z0-9_.-]{3,50}$/.test(name));
 
     const createMutation = useMutation({
-        mutationFn: () => api.post<Project>(endpoints.projects(), toProjectPayload(values)),
+        mutationFn: () => api.post<Project>(endpoints.projects(), {
+            ...toProjectPayload(values), member_usernames: usernames,
+            stages: stages.map(({ name, color, is_done_stage }) => ({ name, color, is_done_stage })),
+        }),
         onSuccess: (project) => {
             queryClient.invalidateQueries({ queryKey: queryKeys.projects });
             queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
@@ -35,7 +53,7 @@ export function NewProjectPage() {
                     Новый проект
                 </h1>
                 <p className="text-[13px] text-muted">
-                    Доска канбана со стандартными стадиями создаётся автоматически.
+                    Опишите проект, добавьте команду и настройте стадии канбана.
                 </p>
             </header>
 
@@ -47,13 +65,27 @@ export function NewProjectPage() {
                     />
                 )}
 
-                <ProjectForm values={values} onChange={setValues} />
+                <p className="text-[13px] text-secondary">
+                    <span className="text-muted">Руководитель: </span>
+                    {currentUser.data ? fullName(currentUser.data) : "Загрузка…"}
+                </p>
+                <ProjectForm values={values} onChange={setValues} disabled={createMutation.isPending} />
+                <Field label="Команда" hint="Логины участников через запятую. Руководитель добавляется автоматически; состав можно изменить позже."
+                    error={!validMembers ? "Проверьте логины участников: 3–50 символов, латиница, цифры, точка, дефис или подчёркивание." : undefined}>
+                    {(id) => <Input id={id} value={memberNames} autoComplete="off" spellCheck={false}
+                        placeholder="anna, ivan" onChange={(event) => setMemberNames(event.target.value)} />}
+                </Field>
+                <div className="border-t border-line-subtle pt-5">
+                    {defaults.error ? <ErrorMessage message="Не удалось загрузить стадии канбана." action={<Button onClick={() => defaults.refetch()}>Повторить</Button>} />
+                        : defaults.isPending ? <p role="status" className="text-[13px] text-muted">Загрузка стадий…</p>
+                        : <ProjectStagesDraft stages={stages} onChange={setStageDrafts} />}
+                </div>
 
                 <div className="flex justify-end gap-2 pt-1">
                     <LinkButton to="/projects">Отмена</LinkButton>
                     <Button
                         variant="primary"
-                        disabled={!isProjectFormValid(values) || createMutation.isPending}
+                        disabled={!isProjectFormValid(values) || !values.start_date || !validMembers || !validStageDrafts(stages) || createMutation.isPending || defaults.isPending || defaults.isError}
                         onClick={() => createMutation.mutate()}
                     >
                         Создать проект

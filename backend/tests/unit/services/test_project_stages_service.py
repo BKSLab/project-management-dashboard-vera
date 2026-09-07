@@ -21,6 +21,40 @@ from src.repositories.unit_of_work import UnitOfWork
 from src.services.project_stages import ProjectStagesService
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage_id,target,expected", [(3, 0, [3, 1, 2]), (1, 2, [2, 3, 1])])
+async def test_stage_move_reorders_neighbors_without_changing_identity(stage_id, target, expected):
+    stages = [
+        SimpleNamespace(
+            id=index + 1,
+            project_id=7,
+            name=f"Стадия {index}",
+            order_index=index,
+            color="#58a6ff",
+            is_done_stage=index == 2,
+        )
+        for index in range(3)
+    ]
+    repository = AsyncMock(spec=ProjectStagesRepository)
+    repository.get_by_id.return_value = stages[stage_id - 1]
+    repository.get_by_project.return_value = stages
+
+    async def update(*, stage, data):
+        for key, value in data.items():
+            setattr(stage, key, value)
+        return stage
+
+    repository.update.side_effect = update
+    service = build_service(repository)
+    await service.update_stage(stage_id, {"order_index": target})
+    ordered = sorted(stages, key=lambda stage: stage.order_index)
+    assert [stage.id for stage in ordered] == expected
+    assert [stage.order_index for stage in ordered] == [0, 1, 2]
+    assert next(stage for stage in stages if stage.is_done_stage).id == 3
+    service.projects_repository.get_by_id.assert_awaited_once_with(7, for_update=True)
+    service.unit_of_work.commit.assert_awaited_once()
+
+
 def build_service(
     stages_repository: AsyncMock | None = None,
     projects_repository: AsyncMock | None = None,

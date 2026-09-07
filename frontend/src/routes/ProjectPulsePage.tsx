@@ -22,6 +22,7 @@ import { PulseBoard } from "@/components/pulse/PulseBoard";
 import { PulseFacts, StageBreakdown } from "@/components/pulse/PulseBreakdown";
 import { RiskSummaryPanel } from "@/components/risks/RiskSummaryPanel";
 import { useRiskSummary } from "@/lib/useRisks";
+import { ProjectPeopleSummary } from "@/components/projects/ProjectPeopleSummary";
 
 const UPCOMING_LIMIT = 8;
 
@@ -159,6 +160,7 @@ export function ProjectPulsePage() {
 
         <Section title="О проекте">
           <div className="flex flex-col gap-3 px-1 py-1.5">
+            <ProjectPeopleSummary project={project} />
             {project.description_md ? (
               <Description markdown={project.description_md} />
             ) : (

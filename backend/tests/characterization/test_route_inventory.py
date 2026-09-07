@@ -13,6 +13,9 @@ from fastapi.routing import APIRoute
 from main import app
 
 FROZEN_ROUTES: set[tuple[str, str]] = {
+    ("GET", "/api/v1/projects/defaults"),
+    ("GET", "/api/v1/projects/{project_id}/deadline-history"),
+    ("POST", "/api/v1/projects/{project_id}/risks/field-suggestion"),
     ("POST", "/api/v1/projects/{project_id}/tasks/checklist-suggestion"),
     ("GET", "/api/v1/projects/{project_id}/risks"),
     ("POST", "/api/v1/projects/{project_id}/risks"),
@@ -123,6 +126,7 @@ SESSION_ONLY_ROUTES: set[tuple[str, str]] = {
 
 # POST, которые ничего не меняют: расчёт, предпросмотр и поиск.
 READ_ONLY_POST_ROUTES: set[tuple[str, str]] = {
+    ("POST", "/api/v1/projects/{project_id}/risks/field-suggestion"),
     ("POST", "/api/v1/projects/{project_id}/tasks/checklist-suggestion"),
     ("POST", "/api/v1/projects/{project_id}/risks/suggestions"),
     ("POST", "/api/v1/projects/{project_id}/calendar/scenarios/preview"),
@@ -177,7 +181,7 @@ def test_non_get_routes_are_fully_classified() -> None:
     )
 
     mutations = non_get - explicit
-    assert len(non_get) == 61, f"Изменилось число изменяющих маршрутов: {len(non_get)}"
+    assert len(non_get) == 62, f"Изменилось число изменяющих маршрутов: {len(non_get)}"
     assert len(mutations) == 50, f"Изменилось число доменных мутаций: {len(mutations)}"
 
 

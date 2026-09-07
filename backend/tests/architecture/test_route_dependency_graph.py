@@ -29,6 +29,7 @@ SESSION_ONLY_ROUTES = {
 
 # POST, которые ничего не меняют: расчёт, предпросмотр и поиск.
 READ_ONLY_POST_ROUTES = {
+    ("POST", "/api/v1/projects/{project_id}/risks/field-suggestion"),
     ("POST", "/api/v1/projects/{project_id}/tasks/checklist-suggestion"),
     ("POST", "/api/v1/projects/{project_id}/risks/suggestions"),
     ("POST", "/api/v1/projects/{project_id}/calendar/scenarios/preview"),
@@ -47,11 +48,12 @@ STREAMING_ROUTES = {
 # Авторизация этого AI-сценария, как и выдачи файла, целиком выполняется
 # в короткой DB-фазе сервиса и проверяется его контрактными тестами.
 DETACHED_AUTH_ROUTES = STREAMING_ROUTES | {
+    ("POST", "/api/v1/projects/{project_id}/risks/field-suggestion"),
     ("POST", "/api/v1/projects/{project_id}/tasks/checklist-suggestion"),
     ("POST", "/api/v1/projects/{project_id}/risks/suggestions"),
 }
 
-EXPECTED_NON_GET_TOTAL = 61
+EXPECTED_NON_GET_TOTAL = 62
 EXPECTED_MUTATION_TOTAL = 50
 
 

@@ -26,6 +26,7 @@ from src.dependencies.repositories import (
     DocumentsRepositoryDep,
     KnowledgeIndexJobsRepositoryDep,
     MilestonesRepositoryDep,
+    ProjectDeadlineChangesRepositoryDep,
     ProjectMembersRepositoryDep,
     ProjectRiskRepositoryDep,
     ProjectsRepositoryDep,
@@ -213,6 +214,8 @@ def get_projects_service(
     storage: TaskAttachmentStorageDep,
     knowledge_events: KnowledgeEventsDep,
     unit_of_work: UnitOfWorkDep,
+    users_repository: UsersRepositoryDep,
+    deadline_changes_repository: ProjectDeadlineChangesRepositoryDep,
 ) -> ProjectsService:
     """Создаёт сервис проектов."""
     return ProjectsService(
@@ -223,6 +226,8 @@ def get_projects_service(
         attachment_storage=storage,
         knowledge_events=knowledge_events,
         unit_of_work=unit_of_work,
+        users_repository=users_repository,
+        deadline_changes_repository=deadline_changes_repository,
     )
 
 

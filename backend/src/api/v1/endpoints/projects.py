@@ -18,6 +18,8 @@ from src.dependencies.services import ProjectsServiceDep
 from src.exceptions.projects import ProjectsServiceError
 from src.schemas.projects import (
     ProjectCreateSchema,
+    ProjectDeadlineChangeSchema,
+    ProjectDefaultsSchema,
     ProjectSchema,
     ProjectStatsSchema,
     ProjectUpdateSchema,
@@ -59,15 +61,40 @@ async def get_projects(principal: PrincipalDep, service: ProjectsServiceDep) -> 
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
+@router.get(
+    path="/defaults",
+    response_model=ProjectDefaultsSchema,
+    summary="Получить начальные настройки проекта",
+    description="Возвращает стандартные стадии для редактирования до создания проекта.",
+    operation_id="getProjectDefaults",
+    response_description="Начальные стадии канбана.",
+    responses={401: {"description": "Требуется авторизация."}},
+)
+async def get_project_defaults(
+    principal: PrincipalDep, service: ProjectsServiceDep
+) -> ProjectDefaultsSchema:
+    """Возвращает настройки формы.
+
+    Args:
+        principal: Авторизованный пользователь.
+        service: Сервис проектов.
+
+    Returns:
+        Набор стадий по умолчанию.
+    """
+    return service.get_defaults()
+
+
 @router.post(
     path="",
     dependencies=[Depends(require_write_scope)],
     status_code=status.HTTP_201_CREATED,
     summary="Создать проект",
-    description="Создаёт проект и наполняет его стадиями канбана по умолчанию.",
+    description="Создаёт паспорт, команду и стадии канбана одной транзакцией. Создатель становится руководителем.",
     operation_id="createProject",
     response_description="Созданный проект.",
     responses={
+        404: NOT_FOUND_RESPONSE,
         409: CONFLICT_RESPONSE,
         422: VALIDATION_RESPONSE,
         500: SERVER_ERROR_RESPONSE,
@@ -180,7 +207,7 @@ async def get_project_stats(
     dependencies=[Depends(require_project_access), Depends(require_write_scope)],
     status_code=status.HTTP_200_OK,
     summary="Изменить проект",
-    description="Частично обновляет поля проекта.",
+    description="Обновляет паспорт проекта. После первого назначения срока любое изменение окончания требует due_date_comment и записывается в историю.",
     operation_id="updateProject",
     response_description="Обновлённый проект.",
     responses={
@@ -194,6 +221,7 @@ async def get_project_stats(
 async def update_project(
     project_id: ProjectIdPath,
     data: ProjectUpdateSchema,
+    principal: PrincipalDep,
     service: ProjectsServiceDep,
 ) -> ProjectSchema:
     """Обновляет проект.
@@ -214,11 +242,45 @@ async def update_project(
         result = await service.update_project(
             project_id=project_id,
             data=data.model_dump(exclude_unset=True),
+            updated_by_user_id=principal.user_id,
         )
         logger.info("✅ Проект id=%s обновлён.", project_id)
         return result
     except ProjectsServiceError as error:
         logger.exception("❌ Ошибка PATCH /projects/%s. Детали: %s", project_id, error)
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+@router.get(
+    path="/{project_id}/deadline-history",
+    dependencies=[Depends(require_project_access)],
+    response_model=list[ProjectDeadlineChangeSchema],
+    summary="Получить историю срока проекта",
+    description="Возвращает назначения и пересмотры даты окончания с причиной и автором, от новых к старым.",
+    operation_id="getProjectDeadlineHistory",
+    response_description="История сроков проекта.",
+    responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
+)
+async def get_project_deadline_history(
+    project_id: ProjectIdPath,
+    service: ProjectsServiceDep,
+) -> list[ProjectDeadlineChangeSchema]:
+    """Читает историю сроков проекта.
+
+    Args:
+        project_id: Идентификатор доступного проекта.
+        service: Сервис проектов.
+
+    Returns:
+        Назначения и изменения даты окончания.
+
+    Raises:
+        HTTPException: Ошибка чтения или отсутствие проекта.
+    """
+    try:
+        return await service.get_deadline_history(project_id)
+    except ProjectsServiceError as error:
+        logger.exception("❌ Не удалось прочитать историю срока проекта id=%s.", project_id)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 

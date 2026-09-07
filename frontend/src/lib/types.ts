@@ -71,8 +71,28 @@ export interface TaskParticipant {
     user: UserSummary;
 }
 
+export interface ProjectDescription {
+    problem: string;
+    goal: string;
+    expected_result: string;
+    additional: string;
+}
+
+export interface ProjectDeadlineChange {
+    id: number;
+    previous_due_date: string | null;
+    new_due_date: string | null;
+    changed_by_user_id: number | null;
+    changed_by_name: string;
+    comment: string | null;
+    created_at: string;
+}
+
 export interface Project {
     id: number;
+    owner_id?: number | null;
+    description_sections?: ProjectDescription | null;
+    due_date_has_been_set?: boolean;
     key: string;
     name: string;
     description_md: string | null;
@@ -90,6 +110,9 @@ export interface ProjectCreate {
     key: string;
     name: string;
     description_md?: string | null;
+    description_sections?: ProjectDescription | null;
+    member_usernames?: string[];
+    stages?: Pick<ProjectStage, "name" | "color" | "is_done_stage">[];
     status?: ProjectStatus;
     color?: string;
     icon?: string | null;
@@ -97,7 +120,11 @@ export interface ProjectCreate {
     due_date?: string | null;
 }
 
-export type ProjectUpdate = Partial<ProjectCreate> & { order_index?: number };
+export type ProjectUpdate = Partial<ProjectCreate> & {
+    order_index?: number;
+    due_date_comment?: string;
+    expected_due_date?: string | null;
+};
 
 export interface StageBreakdown {
     stage_id: number;

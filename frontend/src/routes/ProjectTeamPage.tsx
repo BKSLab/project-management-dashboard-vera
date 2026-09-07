@@ -12,7 +12,7 @@ import { Field, Input } from "@/components/ui/Field";
 import { Modal } from "@/components/ui/Modal";
 import { EmptyState, ErrorMessage, Skeleton } from "@/components/ui/States";
 
-export function ProjectTeamPage() {
+export function ProjectTeamPage({ embedded = false }: { embedded?: boolean }) {
     const project = useProjectOutlet();
     const queryClient = useQueryClient();
     const currentUserQuery = useCurrentUser();
@@ -62,7 +62,7 @@ export function ProjectTeamPage() {
     }
 
     return (
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-7 px-5 py-6">
+        <div className={embedded ? "flex w-full flex-col gap-4" : "mx-auto flex w-full max-w-4xl flex-col gap-7 px-5 py-6"}>
             <header className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                     <div className="flex items-center gap-2">
