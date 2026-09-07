@@ -12,6 +12,7 @@ export const READ_TOOLS = [
     "list_comments",
     "search_tasks",
     "search_project_knowledge",
+    "read_project_knowledge",
 ] as const;
 
 /** Инструменты, доступные дополнительно токену с правом записи. */

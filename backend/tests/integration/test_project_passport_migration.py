@@ -38,6 +38,18 @@ async def test_passport_migration_preserves_existing_projects(postgres_container
         connection.commit()
         command.upgrade(config, "head")
         connection.commit()
+        from src.knowledge.catalog import POLICIES
+
+        triggers = (
+            connection.execute(
+                text(
+                    "SELECT DISTINCT event_object_table FROM information_schema.triggers WHERE trigger_name='knowledge_changed'"
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert set(triggers) == {rule.table for rule in POLICIES if rule.scope != "attachment"}
         assert connection.execute(
             text(
                 "SELECT description_md, description_sections, due_date_has_been_set FROM projects ORDER BY id"

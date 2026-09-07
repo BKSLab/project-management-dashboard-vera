@@ -20,13 +20,11 @@ from datetime import timedelta
 
 from src.core.settings import Settings
 from src.db.models.knowledge_index_jobs import (
-    KnowledgeEntityType,
     KnowledgeIndexJob,
-    KnowledgeIndexOperation,
 )
 from src.exceptions.clients import VectorStoreClientError
 from src.knowledge.runtime import KnowledgeRuntime
-from src.services.knowledge_index import KnowledgeIndexService, PreparedIndexAction
+from src.services.knowledge_index import KnowledgeIndexService
 from src.services.knowledge_queue import JobOutcome, KnowledgeQueueService
 
 logger = logging.getLogger(__name__)
@@ -134,108 +132,40 @@ class KnowledgeWorker:
         logger.info("✅ Отложенный backfill payload-индексов выполнен.")
 
     async def _process_next(self) -> bool:
-        """Обрабатывает следующую job или совместимую TASK-пачку.
-
-        Returns:
-            Была ли обработана хотя бы одна job.
-        """
+        """Все источники проекта проходят одну последовательную синхронизацию."""
         jobs = await self.queue.claim_next_batch(limit=self.config.batch_size)
         if not jobs:
             return False
-
-        first = jobs[0]
-        if (
-            first.entity_type is KnowledgeEntityType.TASK
-            and first.operation is KnowledgeIndexOperation.UPSERT
-        ):
-            results = await self._prepare_and_execute_task_jobs(jobs)
-        else:
-            results = [await self._prepare_and_execute_job(first)]
-        await self._persist_results(results)
+        result = await self._prepare_and_execute_job(jobs[0])
+        await self._persist_results(
+            [
+                JobExecutionResult(job=job, chunks_count=result.chunks_count, error=result.error)
+                for job in jobs
+            ]
+        )
         return True
 
     async def _prepare_and_execute_job(self, job: KnowledgeIndexJob) -> JobExecutionResult:
-        """Готовит job в DB-области, затем выполняет её после её закрытия."""
+        """DB-снимок → извлечение без сессии → сохранение FTS → embeddings."""
         try:
             async with self.index_service() as service:
                 action = await service.prepare(job)
+            await service.extract(action)
+            async with self.index_service() as persistence:
+                await persistence.persist_extractions(action)
             chunks_count = await service.execute_prepared(action)
             return JobExecutionResult(job=job, chunks_count=chunks_count)
         except asyncio.CancelledError:
-            # Остановка приложения — не отказ задания: иначе каждый рестарт
-            # тратил бы попытку и в итоге переводил job в FAILED.
             raise
         except Exception as error:
             return JobExecutionResult(job=job, error=error)
-
-    async def _prepare_and_execute_task_jobs(
-        self,
-        jobs: list[KnowledgeIndexJob],
-    ) -> list[JobExecutionResult]:
-        """Готовит TASK-пачку одним DB-срезом и выполняет её без открытой области."""
-        try:
-            async with self.index_service() as service:
-                actions = await service.prepare_task_upserts(
-                    project_id=jobs[0].project_id,
-                    entity_ids=[int(job.entity_id) for job in jobs if job.entity_id is not None],
-                )
-            if len(actions) != len(jobs):
-                raise ValueError("Число подготовленных TASK-действий не совпало с jobs.")
-            return await self._execute_task_jobs(service=service, jobs=jobs, actions=actions)
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            return [JobExecutionResult(job=job, error=error) for job in jobs]
-
-    async def _execute_task_jobs(
-        self,
-        *,
-        service: KnowledgeIndexService,
-        jobs: list[KnowledgeIndexJob],
-        actions: list[PreparedIndexAction],
-    ) -> list[JobExecutionResult]:
-        """Выполняет TASK-пачку и делит её до одной job при ошибке.
-
-        Одна плохая задача не должна лишать индексации остальные: пачка
-        делится пополам, пока виновник не останется в одиночестве.
-        """
-        try:
-            chunks_by_entity = await service.execute_task_upserts(actions)
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            if len(jobs) == 1:
-                return [JobExecutionResult(job=jobs[0], error=error)]
-            middle = len(jobs) // 2
-            first_half = await self._execute_task_jobs(
-                service=service,
-                jobs=jobs[:middle],
-                actions=actions[:middle],
-            )
-            second_half = await self._execute_task_jobs(
-                service=service,
-                jobs=jobs[middle:],
-                actions=actions[middle:],
-            )
-            return first_half + second_half
-
-        return [
-            JobExecutionResult(
-                job=job,
-                chunks_count=chunks_by_entity.get(int(job.entity_id), 0),
-            )
-            for job in jobs
-            if job.entity_id is not None
-        ]
 
     async def _persist_results(self, results: list[JobExecutionResult]) -> None:
         """Сохраняет статусы и диагностику выполненных jobs через очередь."""
         outcomes: list[JobOutcome] = []
         for result in results:
             if result.error is None:
-                outcomes.append(
-                    JobOutcome(job_id=result.job.id, chunks_count=result.chunks_count)
-                )
+                outcomes.append(JobOutcome(job_id=result.job.id, chunks_count=result.chunks_count))
                 continue
             logger.warning(
                 "⚠️ AI-задание id=%s завершилось ошибкой (попытка %s): %s",

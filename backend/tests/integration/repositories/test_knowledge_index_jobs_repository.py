@@ -1,3 +1,5 @@
+"""Проектная очередь: транзакционная дедупликация, объединение и исключение гонок."""
+
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -14,102 +16,69 @@ from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.services.knowledge_events import KnowledgeEvents
 
 
-async def enqueue(
-    repository: KnowledgeIndexJobsRepository,
-    *,
-    project_id: int,
-    entity_type: KnowledgeEntityType,
-    operation: KnowledgeIndexOperation,
-    entity_id: int | str | None = None,
-) -> KnowledgeIndexJob:
-    """Ставит одно задание тем же путём, что и продовый publisher.
-
-    Дедупликация принадлежит `KnowledgeEvents`, поэтому тест очереди
-    пользуется им, а не собирает логику заново.
-    """
-    events = KnowledgeEvents(repository=repository)
-    normalized = str(entity_id) if entity_id is not None else None
-    await events._enqueue_missing(
-        project_id=project_id,
-        entity_type=entity_type,
-        operation=operation,
-        entity_ids=[normalized],
-    )
-    pending = await repository.get_pending(
-        project_id=project_id,
-        entity_type=entity_type,
-        operation=operation,
-        entity_ids=[normalized],
-    )
-    return pending[0]
-
-
-
-
-@pytest.mark.asyncio
-async def test_queue_deduplicates_and_claims_pending_job(db_session, project: Project) -> None:
+async def test_queue_deduplicates_with_automatic_outbox_and_records_success(db_session, project):
     repository = KnowledgeIndexJobsRepository(db_session)
-
-    first = await enqueue(
-        repository,
-        project_id=project.id,
-        entity_type=KnowledgeEntityType.TASK,
-        entity_id=42,
-        operation=KnowledgeIndexOperation.UPSERT,
+    events = KnowledgeEvents(repository=repository)
+    await events.upsert(project_id=project.id, entity_type=KnowledgeEntityType.TASK, entity_id=7)
+    await events.delete(
+        project_id=project.id, entity_type=KnowledgeEntityType.DOCUMENT, entity_id=9
     )
-    duplicate = await enqueue(
-        repository,
-        project_id=project.id,
-        entity_type=KnowledgeEntityType.TASK,
-        entity_id=42,
-        operation=KnowledgeIndexOperation.UPSERT,
-    )
-
-    assert duplicate.id == first.id
+    await events.reindex_project(project.id)
     assert (await repository.get_status_counts(project.id))[KnowledgeIndexStatus.PENDING] == 1
-
-    claimed = next(iter(await repository.claim_next_batch(limit=1)), None)
-
-    assert claimed is not None
-    assert claimed.id == first.id
-    assert claimed.status is KnowledgeIndexStatus.PROCESSING
-    assert claimed.attempts == 1
-    assert claimed.started_at is not None
-    assert claimed.finished_at is None
-    assert claimed.chunks_count is None
-
+    (claimed,) = await repository.claim_next_batch(limit=10)
+    assert claimed.entity_type == KnowledgeEntityType.PROJECT
+    assert claimed.operation == KnowledgeIndexOperation.REINDEX_PROJECT
+    assert claimed.transaction_id is not None and claimed.attempts == 1
+    assert claimed.started_at and claimed.finished_at is None
     await repository.mark_succeeded(claimed.id, chunks_count=7)
     await db_session.refresh(claimed)
-
-    assert claimed.finished_at is not None
+    assert claimed.status == KnowledgeIndexStatus.SUCCEEDED and claimed.chunks_count == 7
     assert claimed.finished_at >= claimed.started_at
-    assert claimed.chunks_count == 7
-    assert (await repository.get_status_counts(project.id))[KnowledgeIndexStatus.SUCCEEDED] == 1
 
 
-@pytest.mark.asyncio
-async def test_failed_job_records_finish_time_and_zero_chunks(
-    db_session,
-    project: Project,
-) -> None:
+async def test_failed_job_records_finish_time_and_zero_chunks(db_session, project):
     repository = KnowledgeIndexJobsRepository(db_session)
-    queued = await enqueue(
-        repository,
+    (claimed,) = await repository.claim_next_batch(limit=10)
+    await repository.mark_failed(claimed.id, "embedding unavailable", max_attempts=1)
+    await db_session.refresh(claimed)
+    assert claimed.status == KnowledgeIndexStatus.FAILED
+    assert claimed.finished_at and claimed.chunks_count == 0
+
+
+async def test_batch_coalesces_one_project_and_processing_blocks_older_ids(db_session, project):
+    repository = KnowledgeIndexJobsRepository(db_session)
+    first = (
+        await db_session.execute(
+            select(KnowledgeIndexJob).where(KnowledgeIndexJob.project_id == project.id)
+        )
+    ).scalar_one()
+    newer = KnowledgeIndexJob(
         project_id=project.id,
         entity_type=KnowledgeEntityType.PROJECT,
-        entity_id=project.id,
-        operation=KnowledgeIndexOperation.UPSERT,
+        operation=KnowledgeIndexOperation.REINDEX_PROJECT,
+        status=KnowledgeIndexStatus.PROCESSING,
     )
-    claimed = next(iter(await repository.claim_next_batch(limit=1)), None)
-    assert claimed is not None
-
-    await repository.mark_failed(claimed.id, "embedding unavailable", max_attempts=1)
-    await db_session.refresh(queued)
-
-    assert queued.status is KnowledgeIndexStatus.FAILED
-    assert queued.started_at is not None
-    assert queued.finished_at is not None
-    assert queued.chunks_count == 0
+    other = KnowledgeIndexJob(
+        project_id=project.id + 100,
+        entity_type=KnowledgeEntityType.PROJECT,
+        operation=KnowledgeIndexOperation.REINDEX_PROJECT,
+        status=KnowledgeIndexStatus.PENDING,
+    )
+    db_session.add_all([newer, other])
+    await db_session.flush()
+    assert [job.id for job in await repository.claim_next_batch(limit=10)] == [other.id]
+    await repository.mark_succeeded(newer.id)
+    await repository.mark_succeeded(other.id)
+    extra = KnowledgeIndexJob(
+        project_id=project.id,
+        entity_type=KnowledgeEntityType.PROJECT,
+        operation=KnowledgeIndexOperation.REINDEX_PROJECT,
+        status=KnowledgeIndexStatus.PENDING,
+    )
+    db_session.add(extra)
+    await db_session.flush()
+    assert [job.id for job in await repository.claim_next_batch(limit=10)] == [first.id, extra.id]
+    assert await repository.claim_next_batch(limit=10) == []
 
 
 @pytest.mark.asyncio
@@ -166,80 +135,3 @@ async def test_retention_deletes_only_old_succeeded_jobs(
 
     assert deleted == 1
     assert {job.id for job in remaining} == {recent_succeeded.id, old_failed.id}
-
-
-@pytest.mark.asyncio
-async def test_claim_batch_contains_only_task_upserts_from_same_project(
-    db_session,
-    project: Project,
-) -> None:
-    repository = KnowledgeIndexJobsRepository(db_session)
-    for entity_id in (1, 2):
-        await enqueue(
-            repository,
-            project_id=project.id,
-            entity_type=KnowledgeEntityType.TASK,
-            entity_id=entity_id,
-            operation=KnowledgeIndexOperation.UPSERT,
-        )
-    await enqueue(
-        repository,
-        project_id=project.id,
-        entity_type=KnowledgeEntityType.DOCUMENT,
-        entity_id=3,
-        operation=KnowledgeIndexOperation.UPSERT,
-    )
-    await enqueue(
-        repository,
-        project_id=project.id + 1,
-        entity_type=KnowledgeEntityType.TASK,
-        entity_id=4,
-        operation=KnowledgeIndexOperation.UPSERT,
-    )
-
-    claimed = await repository.claim_next_batch(limit=10)
-
-    assert [job.entity_id for job in claimed] == ["1", "2"]
-    assert {job.project_id for job in claimed} == {project.id}
-    assert {job.entity_type for job in claimed} == {KnowledgeEntityType.TASK}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "barrier",
-    [KnowledgeIndexOperation.REINDEX_PROJECT, KnowledgeIndexOperation.DELETE_COLLECTION],
-)
-async def test_claim_batch_stops_before_project_barrier(
-    db_session,
-    project: Project,
-    barrier: KnowledgeIndexOperation,
-) -> None:
-    repository = KnowledgeIndexJobsRepository(db_session)
-    first = await enqueue(
-        repository,
-        project_id=project.id,
-        entity_type=KnowledgeEntityType.TASK,
-        entity_id=1,
-        operation=KnowledgeIndexOperation.UPSERT,
-    )
-    barrier_job = await enqueue(
-        repository,
-        project_id=project.id,
-        entity_type=KnowledgeEntityType.PROJECT,
-        operation=barrier,
-    )
-    last = await enqueue(
-        repository,
-        project_id=project.id,
-        entity_type=KnowledgeEntityType.TASK,
-        entity_id=2,
-        operation=KnowledgeIndexOperation.UPSERT,
-    )
-
-    claimed = await repository.claim_next_batch(limit=10)
-
-    assert [job.id for job in claimed] == [first.id]
-    await repository.mark_succeeded(first.id)
-    assert (await repository.claim_next_batch(limit=1))[0].id == barrier_job.id
-    await repository.mark_succeeded(barrier_job.id)
-    assert (await repository.claim_next_batch(limit=1))[0].id == last.id

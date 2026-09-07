@@ -3,6 +3,7 @@ from .api_tokens import ApiToken, ApiTokenScope
 from .base import Base
 from .document_links import DocumentLink
 from .documents import Document
+from .knowledge_attachment_texts import KnowledgeAttachmentText
 from .knowledge_index_jobs import (
     KnowledgeEntityType,
     KnowledgeIndexJob,
@@ -33,6 +34,7 @@ __all__ = [
     "Document",
     "DocumentLink",
     "KnowledgeEntityType",
+    "KnowledgeAttachmentText",
     "KnowledgeIndexJob",
     "KnowledgeIndexOperation",
     "KnowledgeIndexStatus",
@@ -62,3 +64,7 @@ __all__ = [
     "User",
     "WbsNode",
 ]
+
+from src.db.knowledge_outbox import register_outbox_ddl
+
+register_outbox_ddl(Base.metadata)

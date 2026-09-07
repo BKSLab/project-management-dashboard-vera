@@ -22,6 +22,7 @@ import type {
     Project,
     KnowledgeSource,
     KnowledgeStatus,
+    KnowledgeEntityType,
 } from "@/lib/types";
 import { useProjectOutlet } from "@/lib/useProjectOutlet";
 import { useRenderedMarkdown } from "@/lib/useRenderedMarkdown";
@@ -36,6 +37,17 @@ const STARTERS = [
     "Что уже сделано, а что сейчас в работе?",
     "Какие решения и требования зафиксированы в документах?",
 ];
+
+const SOURCE_LABELS: Record<KnowledgeEntityType, string> = {
+    project: "Паспорт", task: "Задачи и чек-листы", document: "Документы", comment: "Комментарии",
+    attachment: "Файлы", milestone: "Вехи", risk: "Риски", wbs_node: "Разделы ИСР",
+    stage: "Стадии", sticker: "Стикеры", member: "Команда", activity: "История задач",
+    deadline_change: "История сроков", analytics_report: "Сохранённые отчёты",
+};
+
+const SOURCE_ROUTES: Partial<Record<KnowledgeEntityType, string>> = {
+    wbs_node: "structure", stage: "board", sticker: "whiteboard", member: "team", deadline_change: "settings",
+};
 
 interface UiMessage extends KnowledgeChatMessage {
     id: string;
@@ -80,7 +92,7 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
         queryKey: queryKeys.projectKnowledgeStatus(project.id),
         queryFn: () =>
             api.get<KnowledgeStatus>(endpoints.projectKnowledgeStatus(project.id)),
-        refetchInterval: 3000,
+        refetchInterval: (query) => query.state.data?.ready ? 30000 : 10000,
     });
 
     const askMutation = useMutation({
@@ -143,7 +155,7 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
             useUiStore.getState().setSelectedRisk({ projectId: project.id, riskId: source.entity_id });
             return;
         }
-        if (source.task_id !== null) {
+        if (source.task_id != null) {
             setSelectedTaskId(source.task_id);
             return;
         }
@@ -153,6 +165,11 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
         }
         if (source.entity_type === "milestone") {
             navigate(`/projects/${project.key}/calendar`);
+            return;
+        }
+        const route = SOURCE_ROUTES[source.entity_type];
+        if (route) {
+            navigate(`/projects/${project.key}/${route}`);
             return;
         }
         navigate(`/projects/${project.key}`);
@@ -173,7 +190,7 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
                             <div className="min-w-0">
                                 <h2 className="text-[13px] font-semibold text-primary">Project Agent</h2>
                                 <p className="truncate text-[11px] text-muted">
-                                    Отвечает по задачам, документам и файлам проекта
+                                    Отвечает по данным проекта и связям между ними
                                 </p>
                             </div>
                         </div>
@@ -185,7 +202,7 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
                                     : "border-warning/30 bg-warning/10 text-warning",
                             )}
                         >
-                            {status?.ready ? "Вики готова" : indexing ? "Индексация" : "SQL-режим"}
+                            {status?.ready ? "Вики готова" : indexing ? "Обновление знаний" : status?.enabled ? "Контекст неполный" : "Поиск по данным проекта"}
                         </span>
                     </div>
 
@@ -356,13 +373,36 @@ function ProjectKnowledgeWorkspace({ project }: { project: Project }) {
                             Переиндексировать
                         </Button>
                     </section>
+                    {Boolean(status?.coverage?.length) && (
+                        <section className="rounded-[var(--radius-card)] bg-surface/55 p-4 text-[12px]">
+                            <p className="mb-2 font-medium text-secondary">Доступно для поиска</p>
+                            <dl className="flex flex-col gap-1.5">
+                                {status?.coverage.map((row) => (
+                                    <div key={row.entity_type} className="flex justify-between gap-2">
+                                        <dt className="text-muted">{SOURCE_LABELS[row.entity_type]}</dt>
+                                        <dd className={cn("font-mono", row.missing || row.stale ? "text-warning" : "text-secondary")}>
+                                            {row.indexed} / {row.total}
+                                        </dd>
+                                    </div>
+                                ))}
+                            </dl>
+                            {Boolean(status?.file_issues?.length) && (
+                                <div className="mt-3 space-y-2 text-warning">
+                                    <p>Не весь текст файлов доступен:</p>
+                                    {status?.file_issues.map((issue) => (
+                                        <p key={issue.source_id}><span className="font-medium">{issue.title}</span>: {issue.detail || "Ожидает обработки"}</p>
+                                    ))}
+                                </div>
+                            )}
+                        </section>
+                    )}
                     <section className="border-t border-line-subtle px-1 pt-4 text-[12px] leading-relaxed text-muted">
                         <p className="mb-2 font-medium text-secondary">Что знает агент</p>
                         <ul className="flex list-disc flex-col gap-1 pl-4">
-                            <li>описание и структура проекта;</li>
-                            <li>задачи, сроки, стадии и исполнители;</li>
-                            <li>вики-документы и комментарии;</li>
-                            <li>текст PDF, DOCX, Markdown и TXT-вложений.</li>
+                            <li>паспорт, команда, стадии и структура проекта;</li>
+                            <li>задачи, чек-листы, риски, вехи и стикеры;</li>
+                            <li>документы, комментарии и извлечённый текст файлов;</li>
+                            <li>связи объектов, история изменений и сохранённые отчёты.</li>
                         </ul>
                     </section>
                 </aside>

@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.knowledge.catalog import SourceType
+
 
 class KnowledgeChatMessageSchema(BaseModel):
     """Одна предыдущая реплика для уточняющего вопроса."""
@@ -39,15 +41,41 @@ class KnowledgeSourceSchema(BaseModel):
     """Проверяемый источник ответа и данные для навигации в UI."""
 
     source_id: str
-    entity_type: Literal[
-        "project", "task", "document", "comment", "attachment", "milestone", "risk"
-    ]
+    entity_type: SourceType
     entity_id: int
     title: str
     excerpt: str | None = None
     score: float | None = None
     task_id: int | None = None
     document_slug: str | None = None
+    related_source_ids: list[str] = Field(default_factory=list)
+
+
+class KnowledgeReadRequest(BaseModel):
+    """Одинаковое постраничное чтение знаний для чата и MCP."""
+
+    name: Literal["list_sources", "read_source", "related_sources", "search_sources"]
+    entity_type: SourceType | None = None
+    source_id: str | None = Field(default=None, max_length=64)
+    query: str | None = Field(default=None, max_length=2000)
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=20, ge=1, le=30)
+    max_chars: int = Field(default=4000, ge=500, le=8000)
+
+
+class KnowledgeCoverageSchema(BaseModel):
+    entity_type: SourceType
+    total: int
+    indexed: int
+    missing: int
+    stale: int
+
+
+class KnowledgeFileIssueSchema(BaseModel):
+    source_id: str
+    title: str
+    status: str
+    detail: str | None = None
 
 
 class KnowledgeAnswerSchema(BaseModel):
@@ -67,6 +95,9 @@ class KnowledgeStatusSchema(BaseModel):
     processing_jobs: int
     failed_jobs: int
     last_error: str | None
+    coverage: list[KnowledgeCoverageSchema] = Field(default_factory=list)
+    file_issues: list[KnowledgeFileIssueSchema] = Field(default_factory=list)
+    obsolete_points: int = 0
 
 
 class KnowledgeReindexSchema(BaseModel):

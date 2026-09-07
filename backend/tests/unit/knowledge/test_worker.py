@@ -10,7 +10,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -47,13 +47,9 @@ def job(
 
 
 def action(entity_id: int) -> PreparedIndexAction:
-    """Подготовленное действие индексации без документов."""
-    return PreparedIndexAction(
-        project_id=1,
-        entity_type=KnowledgeEntityType.TASK,
-        operation=KnowledgeIndexOperation.UPSERT,
-        entity_id=entity_id,
-    )
+    from src.knowledge.catalog import build_catalog
+
+    return PreparedIndexAction(project_id=1, catalog=build_catalog(1, {}))
 
 
 class ScopeTracker:
@@ -115,38 +111,6 @@ def test_worker_config_is_taken_from_settings_once() -> None:
         config.batch_size = 1
 
 
-async def test_failed_task_batch_is_split_and_good_jobs_succeed() -> None:
-    """Одна плохая задача не лишает индексации остальные из пачки."""
-    service = AsyncMock(spec=KnowledgeIndexService)
-
-    async def fail_batch_with_bad_task(actions) -> dict[int, int]:
-        entity_ids = [item.entity_id for item in actions]
-        if 2 in entity_ids:
-            raise RuntimeError("bad task")
-        return {entity_id: 1 for entity_id in entity_ids}
-
-    service.execute_task_upserts.side_effect = fail_batch_with_bad_task
-    worker, _ = make_worker(service=service)
-
-    results = await worker._execute_task_jobs(
-        service=service,
-        jobs=[job(1), job(2), job(3)],
-        actions=[action(1), action(2), action(3)],
-    )
-
-    assert service.execute_task_upserts.await_args_list == [
-        call([action(1), action(2), action(3)]),
-        call([action(1)]),
-        call([action(2), action(3)]),
-        call([action(2)]),
-        call([action(3)]),
-    ]
-    assert [result.job.id for result in results if result.error is None] == [1, 3]
-    failed = [result for result in results if result.error is not None]
-    assert len(failed) == 1
-    assert failed[0].job.id == 2
-
-
 async def test_startup_returns_interrupted_jobs_and_purges_old_ones() -> None:
     """При старте прерванные задания возвращаются, старые успешные удаляются."""
     stop_event = asyncio.Event()
@@ -181,34 +145,17 @@ async def test_external_calls_run_after_the_database_scope_is_closed() -> None:
 
     assert result.error is None
     assert result.chunks_count == 4
-    assert tracker.opened == 1
-    # Внешний вызов TASK-пачки тоже идёт без открытой DB-области.
-    service = AsyncMock(spec=KnowledgeIndexService)
-    worker, tracker = make_worker(service=service)
-
-    async def prepare_task_upserts(*_args, **_kwargs) -> list[PreparedIndexAction]:
-        assert tracker.active is True
-        return [action(1), action(2)]
-
-    async def execute_task_upserts(_actions) -> dict[int, int]:
-        assert tracker.active is False
-        return {1: 1, 2: 1}
-
-    service.prepare_task_upserts.side_effect = prepare_task_upserts
-    service.execute_task_upserts.side_effect = execute_task_upserts
-
-    results = await worker._prepare_and_execute_task_jobs([job(1), job(2)])
-
-    assert [result.chunks_count for result in results] == [1, 1]
-    assert all(result.error is None for result in results)
+    assert tracker.opened == 2
+    service.extract.assert_awaited_once()
+    service.persist_extractions.assert_awaited_once()
 
 
 async def test_worker_persists_outcomes_and_survives_failures() -> None:
     """Итоги уходят через сервис очереди, ошибка сохраняется с текстом, отмена не считается провалом, пустая очередь не считается работой, сбой итерации не останавливает цикл."""
     # Статусы пачки сохраняет сервис очереди, а не сам цикл.
     service = AsyncMock(spec=KnowledgeIndexService)
-    service.prepare_task_upserts.return_value = [action(1), action(2)]
-    service.execute_task_upserts.return_value = {1: 3, 2: 5}
+    service.prepare.return_value = action(1)
+    service.execute_prepared.return_value = 5
     queue = AsyncMock(spec=KnowledgeQueueService)
     queue.claim_next_batch.return_value = [job(1), job(2)]
     worker, _ = make_worker(service=service, queue=queue)
@@ -218,7 +165,7 @@ async def test_worker_persists_outcomes_and_survives_failures() -> None:
     queue.claim_next_batch.assert_awaited_once_with(limit=CONFIG.batch_size)
     outcomes, kwargs = queue.finish.await_args.args[0], queue.finish.await_args.kwargs
     assert outcomes == [
-        JobOutcome(job_id=1, chunks_count=3),
+        JobOutcome(job_id=1, chunks_count=5),
         JobOutcome(job_id=2, chunks_count=5),
     ]
     assert kwargs == {"max_attempts": CONFIG.max_attempts}
@@ -226,9 +173,7 @@ async def test_worker_persists_outcomes_and_survives_failures() -> None:
     service = AsyncMock(spec=KnowledgeIndexService)
     service.prepare.side_effect = RuntimeError("документ недоступен")
     queue = AsyncMock(spec=KnowledgeQueueService)
-    queue.claim_next_batch.return_value = [
-        job(1, entity_type=KnowledgeEntityType.DOCUMENT)
-    ]
+    queue.claim_next_batch.return_value = [job(1, entity_type=KnowledgeEntityType.DOCUMENT)]
     worker, _ = make_worker(service=service, queue=queue)
 
     assert await worker._process_next() is True

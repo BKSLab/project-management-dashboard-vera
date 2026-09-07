@@ -131,7 +131,6 @@ class KnowledgeSettings(SettingsBase):
     knowledge_chunk_overlap_chars: int = 300
     knowledge_agent_semantic_limit: int = 10
     knowledge_vision_enabled: bool = True
-    knowledge_extract_max_chars: int = 350_000
 
 
 class DBSettings(SettingsBase):

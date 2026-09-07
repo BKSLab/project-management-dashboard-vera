@@ -8,7 +8,17 @@ from src.exceptions.clients import VectorStoreClientError
 
 logger = logging.getLogger(__name__)
 
-PAYLOAD_INDEX_FIELDS = ("entity_type", "entity_id", "task_id")
+PAYLOAD_INDEX_FIELDS = (
+    "project_id",
+    "entity_type",
+    "entity_id",
+    "source_id",
+    "parent_source_id",
+    "related_source_ids",
+    "task_ids",
+    "owner_task_id",
+    "task_id",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +48,7 @@ class ProjectQdrantClient:
         self.collection_prefix = collection_prefix.strip().lower().replace("-", "_")
         self.vector_dim = vector_dim
         self._indexed_collections: set[str] = set()
+        self._dimensions: dict[str, int] = {}
 
     def collection_name(self, project_id: int) -> str:
         """Возвращает серверное имя collection, недоступное для выбора клиентом."""
@@ -56,6 +67,12 @@ class ProjectQdrantClient:
                     ),
                 )
                 logger.info("✅ Создана Qdrant collection %s.", name)
+            elif self._dimensions.get(name) != self.vector_dim:
+                info = await self.client.get_collection(name)
+                vectors = info.config.params.vectors
+                if isinstance(vectors, models.VectorParams) and vectors.size != self.vector_dim:
+                    await self.recreate_collection(project_id)
+            self._dimensions[name] = self.vector_dim
             await self._ensure_payload_indexes(name)
         except Exception as error:
             raise VectorStoreClientError(str(error)) from error
@@ -188,7 +205,7 @@ class ProjectQdrantClient:
         score_threshold: float,
         entity_type: str | None = None,
     ) -> list[KnowledgeSearchHit]:
-        """Ищет по одному лучшему chunk каждого source_id внутри проекта."""
+        """Ищет источники проекта, сохраняя до трёх подходящих chunks каждого."""
         name = self.collection_name(project_id)
         try:
             if not await self.client.collection_exists(name):
@@ -209,7 +226,7 @@ class ProjectQdrantClient:
                 collection_name=name,
                 query=vector,
                 group_by="source_id",
-                group_size=1,
+                group_size=3,
                 limit=limit,
                 score_threshold=score_threshold,
                 with_payload=True,
@@ -218,7 +235,7 @@ class ProjectQdrantClient:
             return [
                 KnowledgeSearchHit(score=float(point.score), payload=dict(point.payload or {}))
                 for group in groups.groups
-                for point in group.hits[:1]
+                for point in group.hits[:3]
             ]
         except Exception as error:
             raise VectorStoreClientError(str(error)) from error
@@ -237,6 +254,53 @@ class ProjectQdrantClient:
     async def close(self) -> None:
         """Закрывает сетевой клиент Qdrant."""
         await self.client.close()
+
+    async def manifest(self, project_id: int) -> dict[str, dict]:
+        """Читает все страницы payload без векторов для сверки производного индекса."""
+        try:
+            name = self.collection_name(project_id)
+            if not await self.client.collection_exists(name):
+                return {}
+            result = {}
+            offset = None
+            while True:
+                points, offset = await self.client.scroll(
+                    collection_name=name,
+                    limit=256,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                result.update({str(point.id): dict(point.payload or {}) for point in points})
+                if offset is None:
+                    return result
+        except Exception as error:
+            raise VectorStoreClientError(str(error)) from error
+
+    async def update_payloads(self, project_id: int, documents: list[Any]) -> None:
+        """Обновляет связи и текущие поля, сохраняя embedding неизменившегося текста."""
+        try:
+            for document in documents:
+                await self.client.overwrite_payload(
+                    collection_name=self.collection_name(project_id),
+                    points=[document.point_id],
+                    payload=document.payload,
+                    wait=True,
+                )
+        except Exception as error:
+            raise VectorStoreClientError(str(error)) from error
+
+    async def delete_points(self, project_id: int, point_ids: list[str]) -> None:
+        """Удаляет подтверждённые лишние chunks после записи актуальных."""
+        try:
+            for start in range(0, len(point_ids), 256):
+                await self.client.delete(
+                    collection_name=self.collection_name(project_id),
+                    points_selector=models.PointIdsList(points=point_ids[start : start + 256]),
+                    wait=True,
+                )
+        except Exception as error:
+            raise VectorStoreClientError(str(error)) from error
 
     async def _ensure_payload_indexes(self, collection_name: str) -> None:
         """Создаёт keyword-индексы полей, используемых в Qdrant-фильтрах."""

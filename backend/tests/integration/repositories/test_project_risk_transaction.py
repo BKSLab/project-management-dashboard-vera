@@ -34,9 +34,10 @@ async def test_risk_and_outbox_are_committed_together_in_postgres(db_session, pr
             select(KnowledgeIndexJob).where(KnowledgeIndexJob.project_id == project.id)
         )
     ).scalar_one()
-    assert job.entity_type == KnowledgeEntityType.RISK
-    assert job.entity_id == str(saved.id)
-    assert job.operation == KnowledgeIndexOperation.UPSERT
+    assert job.entity_type == KnowledgeEntityType.PROJECT
+    assert job.entity_id is None
+    assert job.operation == KnowledgeIndexOperation.REINDEX_PROJECT
+    assert job.transaction_id is not None
 
 
 async def test_outbox_failure_rolls_back_flushed_risk_in_postgres(db_session, project, user):

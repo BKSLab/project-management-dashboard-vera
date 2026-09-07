@@ -117,7 +117,7 @@ async def test_search_uses_query_api_with_optional_entity_filter() -> None:
     qdrant.query_points_groups.assert_awaited_once()
     call = qdrant.query_points_groups.await_args
     assert call.kwargs["group_by"] == "source_id"
-    assert call.kwargs["group_size"] == 1
+    assert call.kwargs["group_size"] == 3
     assert call.kwargs["query"] == [1.0, 0.0, 0.0]
     qdrant.search.assert_not_awaited()
 

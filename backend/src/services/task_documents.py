@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from src.exceptions.base import ServiceError
 from src.exceptions.clients import ClientError
 from src.exceptions.document_links import DocumentLinksServiceError
 from src.exceptions.documents import DocumentsServiceError
-from src.exceptions.knowledge import KnowledgeProviderError
+from src.exceptions.knowledge import KnowledgeIndexJobsRepositoryError, KnowledgeProviderError
 from src.exceptions.storage import StorageError
 from src.exceptions.task_attachments import TaskAttachmentsServiceError
 from src.exceptions.task_documents import (
@@ -58,7 +59,6 @@ class TaskDocumentImportService:
         scope: TaskDocumentImportScopeFactory,
         attachment_storage: TaskAttachmentStorage,
         vision: VisionCapability,
-        extract_max_chars: int,
         max_file_size: int,
     ) -> None:
         """Создаёт сервис импорта документа в задачу.
@@ -69,13 +69,11 @@ class TaskDocumentImportService:
                 поэтому соединение на это время удерживаться не должно.
             attachment_storage: Хранилище файлов задач для компенсации.
             vision: Способность распознавать изображения.
-            extract_max_chars: Предел длины извлекаемого текста.
             max_file_size: Предел размера исходного файла.
         """
         self.scope = scope
         self.attachment_storage = attachment_storage
         self.vision = vision
-        self.extract_max_chars = extract_max_chars
         self.max_file_size = max_file_size
 
     async def import_file(
@@ -119,8 +117,8 @@ class TaskDocumentImportService:
         # Вторая короткая DB-фаза: три записи одной транзакцией.
         async with self.scope() as db:
             try:
-            # Три записи — один бизнес-факт, поэтому и транзакция одна:
-            # вложенные сервисы не фиксируют свою часть сами.
+                # Три записи — один бизнес-факт, поэтому и транзакция одна:
+                # вложенные сервисы не фиксируют свою часть сами.
                 stored = await db.attachments.save_in_transaction(
                     task_id=task_id,
                     file_name=safe_name,
@@ -129,12 +127,23 @@ class TaskDocumentImportService:
                     index_for_knowledge=False,
                 )
                 storage_key = stored.storage_key
+                await db.knowledge_sources.save_extraction(
+                    {
+                        "attachment_id": stored.attachment.id,
+                        "text": extracted,
+                        "status": "ready",
+                        "detail": None,
+                        "original_chars": len(extracted),
+                        "content_hash": hashlib.sha256(content).hexdigest(),
+                    }
+                )
                 title = safe_name[:255]
                 document = await db.documents.create_document(
                     project_id=project_id,
                     title=title,
                     slug=None,
                     content_md=_document_markdown(title=title, content=extracted),
+                    origin_attachment_id=stored.attachment.id,
                     commit=False,
                 )
                 link = await db.links.create_link(
@@ -154,6 +163,8 @@ class TaskDocumentImportService:
                 # только то, что база откатить не может, — файл на диске.
                 await self._rollback(db)
                 await self._remove_stored_file(storage_key)
+                if isinstance(error, KnowledgeIndexJobsRepositoryError):
+                    raise TaskDocumentStepFailedError(_as_service_error(error)) from error
                 if isinstance(error, NESTED_SERVICE_ERRORS):
                     raise TaskDocumentStepFailedError(error) from error
                 raise
@@ -190,7 +201,6 @@ class TaskDocumentImportService:
                 safe_name,
                 content,
                 vision=self.vision,
-                max_chars=self.extract_max_chars,
             )
         except ValueError as error:
             raise TaskDocumentUnsupportedFormatError(

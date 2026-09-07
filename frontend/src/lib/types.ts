@@ -585,7 +585,14 @@ export type KnowledgeEntityType =
     | "comment"
     | "attachment"
     | "milestone"
-    | "risk";
+    | "risk"
+    | "wbs_node"
+    | "stage"
+    | "sticker"
+    | "member"
+    | "activity"
+    | "deadline_change"
+    | "analytics_report";
 
 export interface KnowledgeSource {
     source_id: string;
@@ -596,6 +603,7 @@ export interface KnowledgeSource {
     score: number | null;
     task_id: number | null;
     document_slug: string | null;
+    related_source_ids?: string[];
 }
 
 export interface KnowledgeAnswer {
@@ -611,6 +619,9 @@ export interface KnowledgeStatus {
     processing_jobs: number;
     failed_jobs: number;
     last_error: string | null;
+    coverage: { entity_type: KnowledgeEntityType; total: number; indexed: number; missing: number; stale: number }[];
+    file_issues: { source_id: string; title: string; status: string; detail: string | null }[];
+    obsolete_points: number;
 }
 
 export interface KnowledgeChatMessage {

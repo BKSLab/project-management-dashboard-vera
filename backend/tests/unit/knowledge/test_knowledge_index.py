@@ -1,316 +1,289 @@
-from datetime import UTC, datetime
+"""Синхронизация всего проекта с настоящим локальным Qdrant и подменой embeddings."""
+
+from copy import deepcopy
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from qdrant_client import AsyncQdrantClient
 
-from src.db.models.documents import Document
-from src.db.models.knowledge_index_jobs import KnowledgeEntityType, KnowledgeIndexOperation
-from src.db.models.project_milestones import ProjectMilestone, ProjectMilestoneStatus
-from src.db.models.projects import Project
-from src.db.models.task_attachments import TaskAttachment
-from src.db.models.task_comments import TaskComment
-from src.db.models.tasks import Task
-from src.exceptions.clients import VisionClientError
+from src.clients.qdrant import ProjectQdrantClient
+from src.clients.vision import DisabledVisionCapability
 from src.exceptions.knowledge import KnowledgeProviderError
-from src.knowledge.documents import build_attachment_chunks, build_comment_document
-from src.repositories.documents import DocumentsRepository
-from src.repositories.milestones import MilestonesRepository
-from src.repositories.project_risks import ProjectRiskRepository
-from src.repositories.projects import ProjectsRepository
-from src.repositories.task_attachments import TaskAttachmentsRepository
-from src.repositories.task_comments import TaskCommentsRepository
-from src.repositories.tasks import TasksRepository
-from src.repositories.wbs_nodes import WbsNodesRepository
+from src.knowledge.context import coverage, file_issues
+from src.repositories.knowledge_sources import KnowledgeSourcesRepository
 from src.services.knowledge_index import KnowledgeIndexService
 
 
-def build_service(tmp_path):
-    now = datetime.now(UTC)
-    project = Project(id=1, owner_id=1, key="PROJ", name="Вера", updated_at=now)
-    task = Task(
-        id=7,
-        project_id=project.id,
-        stage_id=1,
-        number=12,
-        title="Изменяемый заголовок",
-        description_md="Описание",
-        position=1000,
-        created_at=now,
-        updated_at=now,
-    )
-
-    projects = AsyncMock(spec=ProjectsRepository)
-    projects.get_by_id.return_value = project
-    tasks = AsyncMock(spec=TasksRepository)
-    tasks.get_by_id.return_value = task
-    nodes = AsyncMock(spec=WbsNodesRepository)
-    nodes.get_by_project.return_value = []
-    documents = AsyncMock(spec=DocumentsRepository)
-    comments = AsyncMock(spec=TaskCommentsRepository)
-    attachments = AsyncMock(spec=TaskAttachmentsRepository)
-    milestones = AsyncMock(spec=MilestonesRepository)
-    milestones.get_by_project.return_value = []
-    storage = Mock()
-    storage.resolve.return_value = tmp_path / "attachment.txt"
-
-    embedding = SimpleNamespace(get_embeddings=AsyncMock(return_value=[[1.0, 0.0]]))
-    qdrant = SimpleNamespace(
-        vector_dim=2,
-        delete_task_context=AsyncMock(),
-        delete_entity=AsyncMock(),
-        upsert_documents=AsyncMock(),
-    )
-    vision = SimpleNamespace(extract_image_text=AsyncMock(return_value="текст с картинки"))
-    runtime = SimpleNamespace(
-        embedding_client=embedding,
-        qdrant_client=qdrant,
-        vision=vision,
-    )
-    service = KnowledgeIndexService(
-        risks_repository=AsyncMock(
-            spec=ProjectRiskRepository, get_by_project=AsyncMock(return_value=[])
-        ),
-        projects_repository=projects,
-        tasks_repository=tasks,
-        wbs_nodes_repository=nodes,
-        documents_repository=documents,
-        comments_repository=comments,
-        attachments_repository=attachments,
-        attachment_storage=storage,
-        milestones_repository=milestones,
-        embedding_batch_size=32,
-        chunk_target_chars=2200,
-        chunk_overlap_chars=300,
-        extract_max_chars=350_000,
-        embedding_client=embedding,
-        qdrant_client=qdrant,
-        vision=vision,
-    )
-    return service, project, task, runtime, documents, attachments
-
-
-def make_job(operation: KnowledgeIndexOperation, entity_type: KnowledgeEntityType, entity_id=7):
-    return SimpleNamespace(
-        operation=operation,
-        project_id=1,
-        entity_type=entity_type,
-        entity_id=str(entity_id) if entity_id is not None else None,
-    )
-
-
-@pytest.mark.asyncio
-async def test_task_context_is_replaced_or_deleted_as_a_whole(tmp_path) -> None:
-    """Обновление задачи заменяет её точку, исчезнувшая задача уносит весь свой контекст."""
-
-    service, _, task, runtime, _, _ = build_service(tmp_path)
-    task.checklist = {
-        "title": "Приёмка",
-        "items": [
-            {"text": "Согласовать поля API", "is_completed": True},
-            {"text": "Обновить контракт", "is_completed": False},
+def base_rows():
+    return {
+        "projects": [{"id": 1, "key": "PROJ", "name": "Вера", "description_md": "Паспорт проекта"}],
+        "tasks": [
+            {
+                "id": 7,
+                "project_id": 1,
+                "stage_id": 3,
+                "number": 12,
+                "title": "Приёмка",
+                "description_md": "Контроль качества",
+                "due_date": "2026-09-10",
+            }
+        ],
+        "task_comments": [
+            {
+                "id": 8,
+                "task_id": 7,
+                "author_name": "Иван",
+                "body_md": "Договорились провести проверку",
+            }
+        ],
+        "documents": [
+            {
+                "id": 9,
+                "project_id": 1,
+                "slug": "spec",
+                "title": "Спецификация",
+                "content_md": "Требования к изделию",
+            }
+        ],
+        "document_links": [{"id": 1, "document_id": 9, "task_id": 7}],
+        "project_risks": [
+            {
+                "id": 12,
+                "project_id": 1,
+                "task_id": 7,
+                "title": "Поставка",
+                "mitigation_plan": "Превентивные меры",
+                "response_plan": "Резервный адаптер",
+                "status": "OPEN",
+            }
         ],
     }
 
-    await service.process(make_job(KnowledgeIndexOperation.UPSERT, KnowledgeEntityType.TASK))
 
-    runtime.qdrant_client.delete_task_context.assert_not_awaited()
-    runtime.qdrant_client.delete_entity.assert_not_awaited()
-    runtime.qdrant_client.upsert_documents.assert_awaited_once()
-    indexed = runtime.qdrant_client.upsert_documents.await_args.kwargs["documents"]
-    assert "[x] Согласовать поля API" in indexed[0].text
-    assert "[ ] Обновить контракт" in indexed[0].text
-
-    service, _, _, runtime, _, _ = build_service(tmp_path)
-    service.tasks_repository.get_by_id.return_value = None
-
-    await service.process(make_job(KnowledgeIndexOperation.UPSERT, KnowledgeEntityType.TASK))
-
-    runtime.qdrant_client.delete_task_context.assert_awaited_once_with(project_id=1, task_id=7)
-    runtime.qdrant_client.upsert_documents.assert_not_awaited()
-
-    service, _, _, runtime, _, _ = build_service(tmp_path)
-
-    await service.process(make_job(KnowledgeIndexOperation.DELETE, KnowledgeEntityType.TASK))
-
-    runtime.qdrant_client.delete_task_context.assert_awaited_once_with(project_id=1, task_id=7)
-    runtime.embedding_client.get_embeddings.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_milestone_semantic_document_excludes_operational_dates(tmp_path) -> None:
-    service, _, _, runtime, _, _ = build_service(tmp_path)
-    milestones = service.milestones_repository
-    milestones.get_by_id.return_value = ProjectMilestone(
-        id=7,
-        project_id=1,
-        title="MVP",
-        description_md="Критерии запуска.",
-        due_date=datetime.now(UTC).date(),
-        status=ProjectMilestoneStatus.PLANNED,
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
+def build_service(tmp_path, *, rows=None, qdrant=None):
+    repository = AsyncMock(spec=KnowledgeSourcesRepository)
+    repository.get_project_rows.return_value = rows or base_rows()
+    embedding = AsyncMock()
+    embedding.model = "test-model"
+    embedding.get_embeddings.side_effect = lambda texts: [[1.0, 0.0, 0.0] for _ in texts]
+    qdrant = qdrant or ProjectQdrantClient(
+        client=AsyncQdrantClient(location=":memory:"), collection_prefix="test", vector_dim=3
     )
-    service.milestones_repository = milestones
-
-    await service.process(make_job(KnowledgeIndexOperation.UPSERT, KnowledgeEntityType.MILESTONE))
-
-    texts = runtime.embedding_client.get_embeddings.await_args.args[0]
-    assert len(texts) == 1
-    assert "MVP" in texts[0]
-    assert "Критерии запуска" in texts[0]
-    assert str(datetime.now(UTC).date()) not in texts[0]
-
-
-def test_document_text_does_not_depend_on_mutable_task_title(tmp_path) -> None:
-    """Тексты комментария и вложения не зависят от изменяемого заголовка задачи."""
-
-    _, project, task, _, _, _ = build_service(tmp_path)
-    comment = TaskComment(
-        id=5,
-        task_id=task.id,
-        author_name="Автор",
-        body_md="Комментарий",
-        created_at=datetime.now(UTC),
+    storage = Mock()
+    storage.resolve.side_effect = lambda key: tmp_path / key
+    service = KnowledgeIndexService(
+        sources_repository=repository,
+        unit_of_work=AsyncMock(),
+        attachment_storage=storage,
+        embedding_batch_size=32,
+        chunk_target_chars=2200,
+        chunk_overlap_chars=300,
+        embedding_client=embedding,
+        qdrant_client=qdrant,
+        vision=DisabledVisionCapability(),
     )
-
-    document = build_comment_document(comment, task=task, project=project)
-
-    assert "Задача: PROJ-12" in document.text
-    assert task.title not in document.text
-
-    _, project, task, _, _, _ = build_service(tmp_path)
-    attachment = TaskAttachment(
-        id=11,
-        task_id=task.id,
-        original_name="note.txt",
-        storage_key="tasks/7/note.txt",
-        content_type="text/plain",
-        size=10,
-        created_at=datetime.now(UTC),
-    )
-
-    documents = build_attachment_chunks(
-        attachment,
-        extracted_text="Текст файла",
-        task=task,
-        project=project,
-        target_chars=2200,
-        overlap_chars=300,
-    )
-
-    assert documents
-    assert "Задача: PROJ-12" in documents[0].text
-    assert task.title not in documents[0].text
+    return service
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("entity_type", "entity_id"),
-    [(KnowledgeEntityType.DOCUMENT, 9), (KnowledgeEntityType.ATTACHMENT, 11)],
-)
-async def test_multichunk_entity_replaces_its_chunks_and_fails_on_missing_vision(
-    tmp_path, entity_type: KnowledgeEntityType, entity_id: int
-) -> None:
-    """Многочанковая сущность удаляет старые чанки перед записью, недоступная модель зрения роняет задание."""
-
-    service, project, task, runtime, documents, attachments = build_service(tmp_path)
-    now = datetime.now(UTC)
-    documents.get_by_id.return_value = Document(
-        id=entity_id,
-        project_id=project.id,
-        slug="plan",
-        title="План",
-        content_md="Содержимое документа",
-        created_at=now,
-        updated_at=now,
-    )
-    attachments.get_by_id.return_value = TaskAttachment(
-        id=entity_id,
-        task_id=task.id,
-        original_name="attachment.txt",
-        storage_key="tasks/7/attachment.txt",
-        content_type="text/plain",
-        size=10,
-        created_at=now,
-    )
-    (tmp_path / "attachment.txt").write_text("Содержимое вложения", encoding="utf-8")
-    manager = Mock()
-    manager.attach_mock(runtime.qdrant_client.delete_entity, "delete")
-    manager.attach_mock(runtime.qdrant_client.upsert_documents, "upsert")
-
-    await service.process(make_job(KnowledgeIndexOperation.UPSERT, entity_type, entity_id))
-
-    assert manager.mock_calls[0] == call.delete(
-        project_id=1,
-        entity_type=entity_type.value.lower(),
-        entity_id=entity_id,
-    )
-    assert manager.mock_calls[1].args == ()
-    assert manager.mock_calls[1].kwargs["project_id"] == 1
-
-    service, project, task, runtime, _, attachments = build_service(tmp_path)
-    storage_name = "schema.png"
-    service.attachment_storage.resolve.return_value = tmp_path / storage_name
-    attachments.get_by_id.return_value = TaskAttachment(
-        id=11,
-        task_id=task.id,
-        original_name=storage_name,
-        storage_key=f"tasks/7/{storage_name}",
-        content_type="image/png",
-        size=10,
-        created_at=datetime.now(UTC),
-    )
-    (tmp_path / storage_name).write_bytes(b"\x89PNG\r\n\x1a\nvision-fixture")
-    runtime.vision.extract_image_text.side_effect = VisionClientError("vision API недоступен")
-
-    with pytest.raises(KnowledgeProviderError):
-        await service.process(
-            make_job(KnowledgeIndexOperation.UPSERT, KnowledgeEntityType.ATTACHMENT, 11)
-        )
-
-    runtime.qdrant_client.upsert_documents.assert_not_awaited()
+async def sync(service, rows=None):
+    if rows is not None:
+        service.sources_repository.get_project_rows.return_value = rows
+    action = await service.prepare(SimpleNamespace(project_id=1))
+    await service.extract(action)
+    await service.persist_extractions(action)
+    await service.execute_prepared(action)
+    return action
 
 
-@pytest.mark.asyncio
-async def test_task_batch_uses_one_load_and_one_embedding_call(tmp_path) -> None:
-    """Пачка задач читается одним запросом и уходит одним вызовом эмбеддингов; контекст удаляется только у исчезнувших задач."""
+async def test_repeated_sync_is_idempotent_and_metadata_needs_no_embeddings(tmp_path):
+    service = build_service(tmp_path)
+    first = await sync(service)
+    manifest = await service.qdrant_client.manifest(1)
+    rows, obsolete = coverage(first.catalog, manifest, target_chars=2200, overlap_chars=300)
+    assert all(row["total"] == row["indexed"] for row in rows) and obsolete == 0
+    service.embedding_client.reset_mock()
+    await sync(service)
+    service.embedding_client.get_embeddings.assert_not_awaited()
+    changed = deepcopy(base_rows())
+    changed["tasks"][0]["due_date"] = "2026-10-01"
+    changed["document_links"] = []
+    await sync(service, changed)
+    service.embedding_client.get_embeddings.assert_not_awaited()
+    payloads = {row["source_id"]: row for row in (await service.qdrant_client.manifest(1)).values()}
+    assert payloads["task:7"]["properties"]["due_date"] == "2026-10-01"
+    assert "task:7" not in payloads["document:9"]["related_source_ids"]
+    await service.qdrant_client.close()
 
-    service, project, task, runtime, _, _ = build_service(tmp_path)
-    second = Task(
-        id=8,
-        project_id=project.id,
-        stage_id=1,
-        number=13,
-        title="Вторая задача",
-        description_md="Описание",
-        position=2000,
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-    )
-    service.tasks_repository.get_by_ids.return_value = [task, second]
-    runtime.embedding_client.get_embeddings.return_value = [
-        [1.0, 0.0],
-        [0.0, 1.0],
+
+async def test_changes_shrink_chunks_and_keep_unrelated_sources(tmp_path):
+    service = build_service(tmp_path)
+    rows = base_rows()
+    rows["tasks"][0]["description_md"] = "Подробное условие. " * 1000 + "Хвост задачи"
+    first = await sync(service, rows)
+    old_points = await service.qdrant_client.manifest(1)
+    assert len([item for item in old_points.values() if item["source_id"] == "task:7"]) > 2
+    assert any("Хвост задачи" in item["text"] for item in old_points.values())
+    service.embedding_client.reset_mock()
+    rows["tasks"][0]["description_md"] = "Краткое новое условие"
+    rows["tasks"][0]["title"] = "Новая приёмка"
+    await sync(service, rows)
+    embedded = [
+        text
+        for call in service.embedding_client.get_embeddings.await_args_list
+        for text in call.args[0]
     ]
-
-    chunks = await service.upsert_tasks(project_id=1, entity_ids=[7, 8])
-
-    assert chunks == {7: 1, 8: 1}
-    service.tasks_repository.get_by_ids.assert_awaited_once_with({7, 8})
-    service.projects_repository.get_by_id.assert_awaited_once_with(1)
-    service.wbs_nodes_repository.get_by_project.assert_awaited_once_with(1)
-    runtime.embedding_client.get_embeddings.assert_awaited_once()
-    assert len(runtime.embedding_client.get_embeddings.await_args.args[0]) == 2
-    runtime.qdrant_client.upsert_documents.assert_awaited_once()
-
-    service, _, task, runtime, _, _ = build_service(tmp_path)
-    service.tasks_repository.get_by_ids.return_value = [task]
-
-    chunks = await service.upsert_tasks(project_id=1, entity_ids=[7, 404])
-
-    assert chunks == {7: 1, 404: 0}
-    runtime.qdrant_client.delete_task_context.assert_awaited_once_with(
-        project_id=1,
-        task_id=404,
+    assert embedded and all("Новая приёмка" in text for text in embedded)
+    assert all(
+        "Новая приёмка" not in item.text
+        for source in first.catalog.sources.values()
+        if source.kind != "task"
+        for item in source.chunks(2200, 300)
     )
+    current = await service.qdrant_client.manifest(1)
+    assert len(current) < len(old_points)
+    assert {row["source_id"] for row in current.values()} == set(first.catalog.sources)
+    await service.qdrant_client.close()
+
+
+async def test_deleted_task_removes_children_but_preserves_linked_risk_and_document(tmp_path):
+    service = build_service(tmp_path)
+    await sync(service)
+    rows = base_rows()
+    rows["tasks"] = []
+    rows["task_comments"] = []
+    rows["document_links"] = []
+    rows["project_risks"][0]["task_id"] = None
+    await sync(service, rows)
+    payloads = list((await service.qdrant_client.manifest(1)).values())
+    assert {item["source_id"] for item in payloads} == {"project:1", "risk:12", "document:9"}
+    assert all("task:7" not in item["related_source_ids"] for item in payloads)
+    await sync(service, {})
+    assert await service.qdrant_client.count(1) is None
+    await service.qdrant_client.close()
+
+
+async def test_embedding_failure_preserves_previous_index(tmp_path):
+    service = build_service(tmp_path)
+    await sync(service)
+    before = await service.qdrant_client.manifest(1)
+    rows = base_rows()
+    rows["tasks"][0]["title"] = "Новый текст"
+    service.embedding_client.get_embeddings.side_effect = RuntimeError("offline")
+    with pytest.raises(RuntimeError, match="offline"):
+        await sync(service, rows)
+    assert await service.qdrant_client.manifest(1) == before
+    service.embedding_client.get_embeddings.side_effect = lambda texts: [[1.0] for _ in texts]
+    with pytest.raises(ValueError, match="размерность"):
+        await sync(service, rows)
+    assert await service.qdrant_client.manifest(1) == before
+    await service.qdrant_client.close()
+
+
+async def test_attachment_text_is_complete_cached_and_fts_persisted_before_vectors(tmp_path):
+    text = "Полное содержимое. " * 22000 + "Окончательное условие"
+    (tmp_path / "long.txt").write_text(text, encoding="utf-8")
+    rows = base_rows()
+    rows["task_attachments"] = [
+        {"id": 11, "task_id": 7, "original_name": "long.txt", "storage_key": "long.txt"}
+    ]
+    service = build_service(tmp_path, rows=rows)
+    action = await sync(service)
+    assert action.extractions[0]["text"] == text
+    assert action.extractions[0]["status"] == "ready" and not file_issues(action.catalog)
+    service.sources_repository.save_extraction.assert_awaited_once_with(action.extractions[0])
+    assert any(
+        "Окончательное условие" in row["text"]
+        for row in (await service.qdrant_client.manifest(1)).values()
+    )
+    service.attachment_storage.resolve.reset_mock()
+    rows["knowledge_attachment_texts"] = action.extractions
+    await sync(service, rows)
+    service.attachment_storage.resolve.assert_not_called()
+    await service.qdrant_client.close()
+
+
+async def test_failed_file_does_not_hide_other_sources_and_retry_recovers(tmp_path):
+    rows = base_rows()
+    rows["task_attachments"] = [
+        {"id": 11, "task_id": 7, "original_name": "missing.txt", "storage_key": "missing.txt"}
+    ]
+    service = build_service(tmp_path, rows=rows)
+    with pytest.raises(KnowledgeProviderError):
+        await sync(service)
+    payloads = list((await service.qdrant_client.manifest(1)).values())
+    assert {row["source_id"] for row in payloads} >= {"task:7", "risk:12", "attachment:11"}
+    assert (
+        next(row for row in payloads if row["source_id"] == "attachment:11")["properties"][
+            "extraction"
+        ]["status"]
+        == "failed"
+    )
+    (tmp_path / "missing.txt").write_text("Файл восстановлен", encoding="utf-8")
+    action = await sync(service)
+    assert not file_issues(action.catalog)
+    await service.qdrant_client.close()
+
+
+async def test_imported_original_is_linked_to_document_without_duplicate_extraction(tmp_path):
+    rows = base_rows()
+    rows["documents"][0]["origin_attachment_id"] = 11
+    rows["task_attachments"] = [
+        {"id": 11, "task_id": 7, "original_name": "original.pdf", "storage_key": "original.pdf"}
+    ]
+    rows["knowledge_attachment_texts"] = [
+        {
+            "attachment_id": 11,
+            "text": "Исходные требования",
+            "status": "ready",
+            "detail": None,
+            "original_chars": 18,
+            "content_hash": "original",
+        }
+    ]
+    service = build_service(tmp_path, rows=rows)
+    action = await sync(service)
+    service.attachment_storage.resolve.assert_not_called()
+    assert not file_issues(action.catalog)
+    assert "Исходные требования" in action.catalog.sources["attachment:11"].text
+    rows["documents"][0]["content_md"] = "Отредактированные требования"
+    edited = await sync(service, rows)
+    assert "Исходные требования" in edited.catalog.sources["attachment:11"].text
+    assert "Отредактированные требования" in edited.catalog.sources["document:9"].text
+    assert {link["source_id"] for link in action.catalog.sources["document:9"].relations} >= {
+        "attachment:11",
+        "task:7",
+    }
+    await service.qdrant_client.close()
+
+
+@pytest.mark.parametrize(
+    "filename,content,status",
+    [("file.bin", b"x", "unsupported"), ("empty.txt", b"", "empty"), ("scan.png", b"", "empty")],
+)
+async def test_unreadable_files_have_explicit_status(tmp_path, filename, content, status):
+    (tmp_path / filename).write_bytes(content)
+    service = build_service(tmp_path)
+    result = await service._extract_attachment(
+        {"id": 1, "original_name": filename, "storage_key": filename}
+    )
+    assert result["status"] == status and result["detail"]
+    await service.qdrant_client.close()
+
+
+async def test_embedding_model_and_dimension_change_refreshes_all_vectors(tmp_path):
+    service = build_service(tmp_path)
+    await sync(service)
+    service.embedding_client.reset_mock()
+    service.embedding_client.model = "another-model"
+    await sync(service)
+    assert service.embedding_client.get_embeddings.await_count > 0
+    service.embedding_client.reset_mock()
+    service.qdrant_client.vector_dim = 2
+    service.embedding_client.get_embeddings.side_effect = lambda texts: [[1.0, 0.0] for _ in texts]
+    await sync(service)
+    points, _ = await service.qdrant_client.client.scroll(
+        collection_name="test_1", with_vectors=True, limit=100
+    )
+    assert points and all(len(point.vector) == 2 for point in points)
+    await service.qdrant_client.close()

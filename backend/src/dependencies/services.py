@@ -525,6 +525,8 @@ def build_project_agent_config(settings: Settings) -> ProjectAgentConfig:
         knowledge_enabled=settings.knowledge.knowledge_enabled,
         semantic_limit=settings.knowledge.knowledge_agent_semantic_limit,
         score_threshold=settings.knowledge.qdrant_score_threshold,
+        chunk_target_chars=settings.knowledge.knowledge_chunk_target_chars,
+        chunk_overlap_chars=settings.knowledge.knowledge_chunk_overlap_chars,
     )
 
 
@@ -702,7 +704,6 @@ def get_task_document_import_service(
         scope=scope,
         attachment_storage=storage,
         vision=vision,
-        extract_max_chars=settings.knowledge.knowledge_extract_max_chars,
         max_file_size=TaskAttachmentsService.MAX_FILE_SIZE,
     )
 

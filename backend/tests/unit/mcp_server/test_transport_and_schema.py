@@ -17,6 +17,7 @@ READ_TOOLS = {
     "list_comments",
     "search_tasks",
     "search_project_knowledge",
+    "read_project_knowledge",
     "get_calendar_range",
     "list_tasks_without_due_date",
     "list_milestones",

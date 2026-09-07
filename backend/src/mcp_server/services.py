@@ -20,6 +20,7 @@ from src.repositories.api_tokens import ApiTokensRepository
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
+from src.repositories.knowledge_sources import KnowledgeSourcesRepository
 from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_risks import ProjectRiskRepository
@@ -78,6 +79,7 @@ def build_project_query_scope(
     async def scope() -> AsyncIterator[ProjectQueryScope]:
         async with session_factory() as session:
             yield ProjectQueryScope(
+                sources=KnowledgeSourcesRepository(session),
                 projects=ProjectsRepository(session),
                 members=ProjectMembersRepository(session),
                 stages=ProjectStagesRepository(session),

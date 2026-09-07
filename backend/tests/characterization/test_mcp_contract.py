@@ -42,6 +42,7 @@ EXPECTED_TOOLS = {
     "list_comments",
     "search_tasks",
     "search_project_knowledge",
+    "read_project_knowledge",
     "get_calendar_range",
     "list_tasks_without_due_date",
     "list_milestones",
@@ -57,6 +58,7 @@ EXPECTED_TOOLS = {
 # Обязательные поля каждого инструмента: изменение этого множества ломает
 # уже настроенных внешних клиентов.
 EXPECTED_REQUIRED = {
+    "read_project_knowledge": {"project_key", "request"},
     "list_project_risks": {"project_key"},
     "get_project_risk": {"project_key", "risk_key"},
     "create_project_risk": {

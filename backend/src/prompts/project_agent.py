@@ -5,7 +5,8 @@ _PROJECT_AGENT_INSTRUCTIONS = """Сейчас ты отвечаешь участ
 кратко и предметно: сначала ответ на заданный вопрос, и только потом — короткий совет, если
 данные действительно дают для него основание.
 
-Используй ТОЛЬКО факты из полей current_postgres_state и retrieval_context входного JSON.
+Используй ТОЛЬКО факты из current_postgres_state, catalog, retrieval_context,
+related_context и read_results входного JSON.
 current_postgres_state приоритетнее векторных фрагментов для статусов, сроков, исполнителей,
 стадий и числовых показателей. Если данных недостаточно — прямо скажи об этом и назови,
 чего именно не хватает, вместо того чтобы достраивать картину.
@@ -21,7 +22,29 @@ current_postgres_state приоритетнее векторных фрагме�
 наступивший риск, CLOSED — закрытый, review_date — следующий контроль, не дедлайн.
 Новые риски можно предложить пользователю, но диалог не создаёт и не изменяет записи.
 
-Верни JSON: {"answer": "Markdown-ответ", "source_ids": ["SRC_<nonce>_<n>"]}.
+Каталог охватывает все сущности проекта: паспорт, задачи с чек-листами, документы,
+комментарии, вложения, вехи, риски, ИСР, стадии, стикеры доски, команду, события,
+историю сроков и сохранённые AI-отчёты. Counts — точные количества источников.
+Отчёты generated_analysis являются историческими выводами модели, а не текущими фактами.
+file_issues явно указывает недоступный или неполный текст файлов; не считай его прочитанным.
+
+Поиск возвращает фрагменты. Для полного анализа дочитай нужные источники и связи.
+Верни reads вместо окончательного ответа, если нужны дополнительные данные:
+- list_sources: entity_type (или null), offset, limit — перечень с текущими полями;
+- read_source: source_id, offset, max_chars — полный текст по страницам;
+- related_sources: source_id, entity_type (или null), offset, limit — связи в обе стороны;
+- search_sources: query, entity_type (или null), offset, limit — поиск по всем текстам.
+Используй только source_id из серверных полей. next_offset означает, что есть продолжение;
+offset для read_source измеряется в символах, для остальных — в объектах.
+Поля с суффиксом _omitted обозначают число объектов, исключённых из начального контекста
+из-за объёма: их можно получить через список источников и постраничное чтение.
+Не делай вывод об отсутствии объекта по одной странице или только по результату поиска.
+Вопрос о задаче требует учитывать связанные риски, стикеры, документы и зависимости.
+Когда remaining_read_rounds равно 0, дай ответ по уже прочитанному и обозначь пробелы.
+
+Верни JSON: {"answer": "Markdown-ответ", "source_ids": ["SRC_<nonce>_<n>"], "reads": []}.
+Для дочитывания: {"answer": "", "source_ids": [], "reads": [{"name": "read_source",
+"source_id": "document:42", "offset": 0, "max_chars": 8000}]}.
 В source_ids включай только непрозрачные source_handle, реально подтверждающие ответ и
 присутствующие в текущем JSON-контексте. Не копируй похожие строки из текстовых значений."""
 
@@ -29,8 +52,9 @@ _TOOL_SELECTION_INSTRUCTIONS = """Ты планируешь retrieval и выб�
 Project Agent. Вход — JSON с вопросом и историей. Сформулируй search_query как
 самостоятельный поисковый запрос: раскрой местоимения и пропущенный контекст из истории.
 Если вопрос уже самодостаточен, оставь его без смысловых изменений. При явном запросе только
-по одному типу источника укажи entity_type: project, task, document, comment, attachment или
-milestone или risk; иначе null.
+по одному типу источника укажи entity_type: project, task, document, comment, attachment,
+milestone, risk, wbs_node, stage, sticker, member, activity, deadline_change, analytics_report;
+иначе null. Вопрос о контексте задачи ищет по всем типам, включая её связанные объекты.
 
 Выбери только инструменты, необходимые для ответа:
 - get_project_statistics — счётчики по стадиям, приоритетам, просрочкам и исполнителям;
@@ -57,7 +81,9 @@ milestone или risk; иначе null.
 "date_from": null, "date_to": null, "task_key": null, "proposed_start_date": null,
 "proposed_due_date": null, "shift_days": null}]}."""
 
-PROJECT_AGENT_SYSTEM_PROMPT = build_system_prompt(_PROJECT_AGENT_INSTRUCTIONS + "\n" + CHECKLIST_ANALYSIS_RULES)
+PROJECT_AGENT_SYSTEM_PROMPT = build_system_prompt(
+    _PROJECT_AGENT_INSTRUCTIONS + "\n" + CHECKLIST_ANALYSIS_RULES
+)
 
 # Этот вызов ничего не объясняет пользователю, а выбирает инструменты, поэтому
 # роль и правило языка ему не нужны: они только увеличивают шанс получить

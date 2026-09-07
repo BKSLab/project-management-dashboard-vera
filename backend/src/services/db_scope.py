@@ -25,6 +25,7 @@ from src.repositories.analytics_reports import AnalyticsReportsRepository
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
+from src.repositories.knowledge_sources import KnowledgeSourcesRepository
 from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_risks import ProjectRiskRepository
@@ -100,6 +101,7 @@ class AnalyticsDbScope:
 class ProjectAgentScope:
     """Одна короткая область сценария Project Agent."""
 
+    sources: KnowledgeSourcesRepository
     projects: ProjectsRepository
     risks: ProjectRiskRepository
     stages: ProjectStagesRepository
@@ -134,6 +136,7 @@ class TaskDocumentImportScope:
     владельцу транзакции.
     """
 
+    knowledge_sources: KnowledgeSourcesRepository
     tasks: TasksRepository
     attachments: TaskAttachmentsService
     documents: DocumentsService
@@ -148,6 +151,7 @@ TaskDocumentImportScopeFactory = Callable[[], AbstractAsyncContextManager[TaskDo
 class ProjectQueryScope:
     """Одна короткая область read-сценариев проекта."""
 
+    sources: KnowledgeSourcesRepository
     projects: ProjectsRepository
     members: ProjectMembersRepository
     stages: ProjectStagesRepository

@@ -123,6 +123,7 @@ class DocumentsService:
         slug: str | None,
         content_md: str,
         commit: bool = True,
+        origin_attachment_id: int | None = None,
     ) -> DocumentDetailSchema:
         """Создаёт документ проекта, подбирая свободный slug при необходимости.
 
@@ -155,6 +156,7 @@ class DocumentsService:
                     "slug": candidate,
                     "title": title,
                     "content_md": content_md,
+                    "origin_attachment_id": origin_attachment_id,
                 }
             )
             await self.knowledge_events.upsert(

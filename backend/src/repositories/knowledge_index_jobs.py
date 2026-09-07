@@ -3,7 +3,6 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     Result,
-    and_,
     case,
     delete,
     exists,
@@ -13,6 +12,7 @@ from sqlalchemy import (
     select,
     update,
 )
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -31,17 +31,34 @@ LAST_ERROR_LIMIT = 4000
 MAX_RETRY_DELAY_SECONDS = 300
 STATUS_TYPE = KnowledgeIndexJob.__table__.c.status.type
 
-BARRIER_OPERATIONS = (
-    KnowledgeIndexOperation.REINDEX_PROJECT,
-    KnowledgeIndexOperation.DELETE_COLLECTION,
-)
-
-
 class KnowledgeIndexJobsRepository:
     """Репозиторий постоянной очереди индексации знаний."""
 
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
+
+    async def add_project_change(self, project_id: int) -> None:
+        """Одно outbox-событие на проект и транзакцию, включая ручной reindex."""
+        try:
+            await self.db_session.execute(
+                insert(KnowledgeIndexJob)
+                .values(
+                    project_id=project_id,
+                    entity_type=KnowledgeEntityType.PROJECT,
+                    entity_id=None,
+                    operation=KnowledgeIndexOperation.REINDEX_PROJECT,
+                    status=KnowledgeIndexStatus.PENDING,
+                    attempts=0,
+                    transaction_id=func.txid_current(),
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[KnowledgeIndexJob.project_id, KnowledgeIndexJob.transaction_id]
+                )
+            )
+        except SQLAlchemyError as error:
+            raise KnowledgeIndexJobsRepositoryError(
+                "Не удалось поставить синхронизацию проекта."
+            ) from error
 
     async def get_pending(
         self,
@@ -145,89 +162,74 @@ class KnowledgeIndexJobsRepository:
             logger.error("❌ Не удалось поставить задание индексации.", exc_info=True)
             raise KnowledgeIndexJobsRepositoryError(str(error)) from error
 
-    async def claim_next_batch(
-        self,
-        *,
-        limit: int,
-        commit: bool = True,
-    ) -> list[KnowledgeIndexJob]:
-        """Забирает совместимую пачку TASK UPSERT, соблюдая барьеры проекта."""
+    async def claim_next_batch(self, *, limit: int, commit: bool = True) -> list[KnowledgeIndexJob]:
+        """Объединяет накопленные изменения проекта; у коллекции один активный writer."""
         if limit < 1:
             raise ValueError("Размер пачки заданий должен быть положительным.")
         try:
             now = datetime.now(UTC)
             candidate = aliased(KnowledgeIndexJob)
-            earlier_barrier = aliased(KnowledgeIndexJob)
-            blocked_task = and_(
-                candidate.entity_type == KnowledgeEntityType.TASK,
-                candidate.operation == KnowledgeIndexOperation.UPSERT,
-                exists(
-                    select(1).where(
-                        earlier_barrier.project_id == candidate.project_id,
-                        earlier_barrier.id < candidate.id,
-                        earlier_barrier.status.in_(
-                            (KnowledgeIndexStatus.PENDING, KnowledgeIndexStatus.PROCESSING)
-                        ),
-                        earlier_barrier.operation.in_(BARRIER_OPERATIONS),
-                    )
-                ),
-            )
-            result: Result = await self.db_session.execute(
-                select(candidate)
-                .where(
-                    candidate.status == KnowledgeIndexStatus.PENDING,
-                    candidate.available_at <= now,
-                    ~blocked_task,
+            other = aliased(KnowledgeIndexJob)
+            blocked = exists(
+                select(1).where(
+                    other.project_id == candidate.project_id,
+                    or_(
+                        other.status == KnowledgeIndexStatus.PROCESSING,
+                        (other.status == KnowledgeIndexStatus.PENDING) & (other.id < candidate.id),
+                    ),
                 )
-                .order_by(candidate.id)
-                .with_for_update(skip_locked=True)
-                .limit(1)
             )
-            first = result.scalar_one_or_none()
+            first = (
+                await self.db_session.execute(
+                    select(candidate)
+                    .where(
+                        candidate.status == KnowledgeIndexStatus.PENDING,
+                        candidate.available_at <= now,
+                        ~blocked,
+                    )
+                    .order_by(candidate.id)
+                    .with_for_update(skip_locked=True)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
             if first is None:
                 await self.db_session.rollback()
                 return []
-
-            jobs = [first]
-            if (
-                limit > 1
-                and first.entity_type is KnowledgeEntityType.TASK
-                and first.operation is KnowledgeIndexOperation.UPSERT
-            ):
-                next_barrier_id = await self.db_session.scalar(
-                    select(func.min(KnowledgeIndexJob.id)).where(
-                        KnowledgeIndexJob.project_id == first.project_id,
-                        KnowledgeIndexJob.id > first.id,
-                        KnowledgeIndexJob.status.in_(
-                            (KnowledgeIndexStatus.PENDING, KnowledgeIndexStatus.PROCESSING)
-                        ),
-                        KnowledgeIndexJob.operation.in_(BARRIER_OPERATIONS),
-                    )
-                )
-                conditions = [
-                    KnowledgeIndexJob.project_id == first.project_id,
-                    KnowledgeIndexJob.entity_type == KnowledgeEntityType.TASK,
-                    KnowledgeIndexJob.operation == KnowledgeIndexOperation.UPSERT,
-                    KnowledgeIndexJob.status == KnowledgeIndexStatus.PENDING,
-                    KnowledgeIndexJob.available_at <= now,
-                    KnowledgeIndexJob.id >= first.id,
-                ]
-                if next_barrier_id is not None:
-                    conditions.append(KnowledgeIndexJob.id < next_barrier_id)
-                jobs = list(
-                    (
-                        await self.db_session.execute(
-                            select(KnowledgeIndexJob)
-                            .where(*conditions)
-                            .order_by(KnowledgeIndexJob.id)
-                            .with_for_update(skip_locked=True)
-                            .limit(limit)
+            # ID выдаётся до commit: более ранняя транзакция может стать видна позже.
+            # Короткая блокировка и повторная проверка исключают два одновременных claim.
+            locked = await self.db_session.scalar(
+                func.pg_try_advisory_xact_lock(734103, first.project_id)
+            )
+            processing = (
+                await self.db_session.scalar(
+                    select(
+                        exists().where(
+                            KnowledgeIndexJob.project_id == first.project_id,
+                            KnowledgeIndexJob.status == KnowledgeIndexStatus.PROCESSING,
                         )
                     )
-                    .scalars()
-                    .all()
                 )
-
+                if locked
+                else True
+            )
+            if processing:
+                await self.db_session.rollback()
+                return []
+            jobs = list(
+                (
+                    await self.db_session.execute(
+                        select(KnowledgeIndexJob)
+                        .where(
+                            KnowledgeIndexJob.project_id == first.project_id,
+                            KnowledgeIndexJob.status == KnowledgeIndexStatus.PENDING,
+                            KnowledgeIndexJob.available_at <= now,
+                        )
+                        .order_by(KnowledgeIndexJob.id)
+                        .with_for_update(skip_locked=True)
+                        .limit(limit)
+                    )
+                ).scalars()
+            )
             for job in jobs:
                 job.status = KnowledgeIndexStatus.PROCESSING
                 job.attempts += 1

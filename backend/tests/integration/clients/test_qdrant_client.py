@@ -1,8 +1,6 @@
 import os
 from collections.abc import Generator
-from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 from docker.errors import DockerException
@@ -11,12 +9,6 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import HttpWaitStrategy
 
 from src.clients.qdrant import PAYLOAD_INDEX_FIELDS, ProjectQdrantClient
-from src.clients.vision import DisabledVisionCapability
-from src.db.models.knowledge_index_jobs import KnowledgeEntityType, KnowledgeIndexOperation
-from src.db.models.projects import Project
-from src.db.models.tasks import Task
-from src.knowledge.documents import build_task_document
-from src.services.knowledge_index import KnowledgeIndexService, PreparedIndexAction
 
 
 @pytest.fixture(scope="module")
@@ -122,108 +114,43 @@ async def test_grouped_search_keeps_entity_types_separate_and_filters_them(
             entity_type="document",
         )
 
-        assert [hit.payload["source_id"] for hit in all_hits] == ["task:5", "document:5"]
+        assert [hit.payload["source_id"] for hit in all_hits] == ["task:5", "task:5", "document:5"]
         assert [hit.payload["source_id"] for hit in document_hits] == ["document:5"]
     finally:
         await client.close()
 
 
 @pytest.mark.asyncio
-async def test_task_upsert_preserves_comment_and_attachment_points(qdrant_url: str) -> None:
+async def test_project_sync_updates_and_deletes_points_in_real_qdrant(
+    qdrant_url: str, tmp_path
+) -> None:
+    from tests.unit.knowledge.test_knowledge_index import base_rows, build_service, sync
+
     client = build_client(qdrant_url)
-    now = datetime.now(UTC)
-    project = Project(id=103, owner_id=1, key="PROJ", name="Вера", updated_at=now)
-    old_task = Task(
-        id=5,
-        project_id=project.id,
-        stage_id=1,
-        number=5,
-        title="Старый заголовок",
-        description_md="Описание",
-        position=1000,
-        created_at=now,
-        updated_at=now,
-    )
-    new_task = Task(
-        id=5,
-        project_id=project.id,
-        stage_id=1,
-        number=5,
-        title="Новый заголовок",
-        description_md="Описание",
-        position=1000,
-        created_at=now,
-        updated_at=now,
-    )
-    old_task_document = build_task_document(old_task, project=project, wbs_path=None)
-    new_task_document = build_task_document(new_task, project=project, wbs_path=None)
-    child_documents = [
-        SimpleNamespace(
-            point_id=2,
-            payload={
-                "source_id": "comment:8",
-                "entity_type": "comment",
-                "entity_id": "8",
-                "task_id": "5",
-                "text": "Комментарий сохраняется",
-            },
-        ),
-        SimpleNamespace(
-            point_id=3,
-            payload={
-                "source_id": "attachment:9",
-                "entity_type": "attachment",
-                "entity_id": "9",
-                "task_id": "5",
-                "text": "Вложение сохраняется",
-            },
-        ),
-    ]
-    embedding_client = SimpleNamespace(get_embeddings=AsyncMock(return_value=[[1.0, 0.0, 0.0]]))
-    service = KnowledgeIndexService(
-        risks_repository=SimpleNamespace(),
-        projects_repository=SimpleNamespace(),
-        tasks_repository=SimpleNamespace(),
-        wbs_nodes_repository=SimpleNamespace(),
-        documents_repository=SimpleNamespace(),
-        comments_repository=SimpleNamespace(),
-        attachments_repository=SimpleNamespace(),
-        attachment_storage=SimpleNamespace(),
-        milestones_repository=SimpleNamespace(),
-        embedding_batch_size=32,
-        chunk_target_chars=2200,
-        chunk_overlap_chars=300,
-        extract_max_chars=350_000,
-        embedding_client=embedding_client,
-        qdrant_client=client,
-        vision=DisabledVisionCapability(),
-    )
+    service = build_service(tmp_path, qdrant=client)
     try:
-        await client.upsert_documents(
-            project_id=project.id,
-            documents=[old_task_document, *child_documents],
-            vectors=[[0.8, 0.2, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        await sync(service)
+        first = await client.manifest(1)
+        service.embedding_client.reset_mock()
+        rows = base_rows()
+        rows["tasks"][0]["due_date"] = "2026-10-01"
+        rows["document_links"] = []
+        await sync(service, rows)
+        service.embedding_client.get_embeddings.assert_not_awaited()
+        updated = await client.manifest(1)
+        assert set(first) == set(updated)
+        assert (
+            next(item for item in updated.values() if item["source_id"] == "task:7")["properties"][
+                "due_date"
+            ]
+            == "2026-10-01"
         )
-
-        await service.execute_prepared(
-            PreparedIndexAction(
-                project_id=project.id,
-                entity_type=KnowledgeEntityType.TASK,
-                operation=KnowledgeIndexOperation.UPSERT,
-                entity_id=new_task.id,
-                documents=(new_task_document,),
-            )
-        )
-        points, _ = await client.client.scroll(
-            collection_name=client.collection_name(project.id),
-            limit=10,
-            with_payload=True,
-        )
-
-        payloads = {point.payload["source_id"]: point.payload for point in points}
-        assert set(payloads) == {"task:5", "comment:8", "attachment:9"}
-        assert payloads["task:5"]["title"] == "PROJ-5 · Новый заголовок"
-        assert payloads["comment:8"]["text"] == "Комментарий сохраняется"
-        assert payloads["attachment:9"]["text"] == "Вложение сохраняется"
+        rows["task_comments"] = []
+        await sync(service, rows)
+        assert "comment:8" not in {
+            item["source_id"] for item in (await client.manifest(1)).values()
+        }
+        await sync(service, {})
+        assert await client.count(1) is None
     finally:
         await client.close()

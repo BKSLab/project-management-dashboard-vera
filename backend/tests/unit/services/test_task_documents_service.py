@@ -57,6 +57,7 @@ def build_service():
     unit_of_work = AsyncMock(spec=UnitOfWork)
     storage = AsyncMock(spec=TaskAttachmentStorage)
     db = TaskDocumentImportScope(
+        knowledge_sources=AsyncMock(),
         tasks=tasks,
         attachments=attachments,
         documents=documents,
@@ -72,7 +73,6 @@ def build_service():
         scope=scope,
         attachment_storage=storage,
         vision=DisabledVisionCapability(),
-        extract_max_chars=350_000,
         max_file_size=10 * 1024 * 1024,
     )
     return service, attachments, documents, links, unit_of_work, storage

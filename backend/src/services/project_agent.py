@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from enum import StrEnum
 from time import perf_counter
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -30,6 +30,15 @@ from src.exceptions.knowledge import (
 )
 from src.exceptions.projects import ProjectNotFoundError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
+from src.knowledge.catalog import SourceType, build_catalog, digest
+from src.knowledge.context import (
+    citation,
+    coverage,
+    file_issues,
+    read_catalog,
+    retrieve,
+    source_view,
+)
 from src.knowledge.documents import build_wbs_paths
 from src.knowledge.retrieval import reciprocal_rank_fusion
 from src.prompts.project_agent import (
@@ -40,6 +49,7 @@ from src.repositories.tasks import ProjectTaskStatistics
 from src.schemas.knowledge import (
     KnowledgeAnswerSchema,
     KnowledgeChatMessageSchema,
+    KnowledgeReadRequest,
     KnowledgeSourceSchema,
     KnowledgeStatusSchema,
 )
@@ -100,16 +110,15 @@ class AgentToolPlan(BaseModel):
 
     calls: list[AgentToolCall] = Field(default_factory=list, max_length=7)
     search_query: str | None = Field(default=None, max_length=2000)
-    entity_type: (
-        Literal["project", "task", "document", "comment", "attachment", "milestone", "risk"] | None
-    ) = None
+    entity_type: SourceType | None = None
 
 
 class AgentOutput(BaseModel):
     """Внутренняя structured-схема ответа LLM."""
 
-    answer: str = Field(min_length=1, max_length=20000)
+    answer: str = Field(default="", max_length=20000)
     source_ids: list[str] = Field(default_factory=list, max_length=20)
+    reads: list[KnowledgeReadRequest] = Field(default_factory=list, max_length=8)
 
 
 @dataclass(slots=True)
@@ -181,6 +190,8 @@ class ProjectAgentConfig:
     knowledge_enabled: bool
     semantic_limit: int
     score_threshold: float
+    chunk_target_chars: int = 2200
+    chunk_overlap_chars: int = 300
 
 
 class ProjectAgentService:
@@ -218,254 +229,241 @@ class ProjectAgentService:
         question: str,
         history: list[KnowledgeChatMessageSchema],
     ) -> KnowledgeAnswerSchema:
-        """Формирует grounded-ответ внутри строго одной collection проекта.
-
-        Сценарий разделён на фазы: короткое чтение базы, затем внешние
-        вызовы уже без открытого соединения.
-
-        Args:
-            project_id: Проект, в границах которого работает агент.
-            question: Вопрос пользователя.
-            history: Предыдущие сообщения диалога.
-
-        Returns:
-            Ответ агента вместе со списком источников.
-
-        Raises:
-            ProjectNotFoundError: Если проект не найден.
-            KnowledgeProviderError: Если внешний сервис недоступен.
-            ProjectAgentError: Если ответ не удалось сформировать.
-        """
-        ask_started_at = perf_counter()
-        phases_ms: dict[str, float | None] = {
-            "planner": None,
-            "ranked_fts": None,
-            "embedding": None,
-            "qdrant": None,
-            "llm": None,
-        }
-        normalized_question = question.strip()
+        """Ищет по всем источникам и позволяет модели дочитать текст и связи."""
+        started = perf_counter()
+        phases = {name: None for name in ("planner", "ranked_fts", "embedding", "qdrant", "llm")}
+        question = question.strip()
         async with self.scope() as db:
-            project = await self._require_project(db, project_id=project_id)
-        phase_started_at = perf_counter()
+            await self._require_project(db, project_id=project_id)
+        phase = perf_counter()
         try:
+            plan = await self._select_tools(question=question, history=history)
+        except KnowledgeProviderError:
+            plan = AgentToolPlan(
+                calls=[AgentToolCall(name=StructuredToolName.PROJECT_STATISTICS)],
+                search_query=question,
+            )
+        phases["planner"] = self._elapsed_ms(phase)
+        query = (plan.search_query or question).strip()
+        semantic_hits = []
+        semantic_available = False
+        if self.config.knowledge_enabled:
             try:
-                tool_plan = await self._select_tools(question=normalized_question, history=history)
-            except KnowledgeProviderError:
+                phase = perf_counter()
+                vector = await self.embedding_client.get_embedding(query)
+                phases["embedding"] = self._elapsed_ms(phase)
+                phase = perf_counter()
+                semantic_hits = await self.qdrant_client.search(
+                    project_id=project_id,
+                    vector=vector,
+                    limit=self.config.semantic_limit,
+                    score_threshold=self.config.score_threshold,
+                    entity_type=plan.entity_type,
+                )
+                phases["qdrant"] = self._elapsed_ms(phase)
+                semantic_available = True
+            except ClientError:
+                phases["qdrant" if phases["embedding"] is not None else "embedding"] = (
+                    self._elapsed_ms(phase)
+                )
                 logger.warning(
-                    "⚠️ Планировщик Project Agent недоступен для проекта id=%s; "
-                    "использую базовый SQL-план.",
-                    project.id,
+                    "Семантический поиск проекта %s недоступен; читаю PostgreSQL.",
+                    project_id,
                     exc_info=True,
                 )
-                tool_plan = AgentToolPlan(
-                    calls=[AgentToolCall(name=StructuredToolName.PROJECT_STATISTICS)],
-                    search_query=normalized_question,
-                )
-        finally:
-            phases_ms["planner"] = self._elapsed_ms(phase_started_at)
-        condensed_query = (tool_plan.search_query or "").strip()
-        retrieval_query = condensed_query or normalized_question
-        entity_type = tool_plan.entity_type
-        # Короткая DB-фаза: собирается весь срез, нужный для ответа, и
-        # соединение возвращается в пул до обращения к эмбеддингам,
-        # Qdrant и модели.
         try:
+            phase = perf_counter()
             async with self.scope() as db:
-                stages = await db.stages.get_by_project(project.id)
-                phase_started_at = perf_counter()
-                try:
-                    ranked_tasks = (
-                        await db.tasks.search_ranked(
-                            project_id=project.id,
-                            search=retrieval_query,
-                            limit=MAX_RETRIEVED_TASKS,
-                        )
-                        if entity_type in (None, "task")
-                        else []
-                    )
-                    ranked_documents = (
-                        await db.documents.search_ranked(
-                            project_id=project.id,
-                            search=retrieval_query,
-                            limit=MAX_RETRIEVED_DOCUMENTS,
-                        )
-                        if entity_type in (None, "document")
-                        else []
-                    )
-                finally:
-                    phases_ms["ranked_fts"] = self._elapsed_ms(phase_started_at)
-                nodes = await db.wbs_nodes.get_by_project(project.id)
+                project = await self._require_project(db, project_id=project_id)
+                catalog = build_catalog(project_id, await db.sources.get_project_rows(project_id))
+                fts_hits = await db.sources.search(
+                    project_id, query, entity_type=plan.entity_type, limit=30
+                )
                 database_context = await self._load_structured_tools(
                     db,
                     project=project,
-                    stages=stages,
-                    ranked_tasks=ranked_tasks,
-                    ranked_documents=ranked_documents,
-                    nodes=nodes,
-                    tool_plan=tool_plan,
+                    stages=await db.stages.get_by_project(project_id),
+                    nodes=await db.wbs_nodes.get_by_project(project_id),
+                    ranked_tasks=[],
+                    ranked_documents=[],
+                    tool_plan=plan,
                 )
-                if entity_type in (None, "risk"):
-                    database_context.ranked_risks = await db.risks.get_page(
-                        project_id=project.id,
-                        filters=ProjectRiskFilters(search=retrieval_query[:255]),
-                        page=1,
-                        page_size=MAX_TOOL_TASKS,
-                    )
+            phases["ranked_fts"] = self._elapsed_ms(phase)
         except RepositoryError as error:
             raise ProjectAgentError(str(error)) from error
-
-        semantic_hits: list[KnowledgeSearchHit] = []
-        if self.config.knowledge_enabled:
-            try:
-                phase_started_at = perf_counter()
-                try:
-                    query_vector = await self.embedding_client.get_embedding(retrieval_query)
-                finally:
-                    phases_ms["embedding"] = self._elapsed_ms(phase_started_at)
-                phase_started_at = perf_counter()
-                try:
-                    semantic_hits = await self.qdrant_client.search(
-                        project_id=project.id,
-                        vector=query_vector,
-                        limit=self.config.semantic_limit,
-                        score_threshold=self.config.score_threshold,
-                        entity_type=entity_type,
-                    )
-                finally:
-                    phases_ms["qdrant"] = self._elapsed_ms(phase_started_at)
-            except ClientError:
-                # Вопросы по текущим статусам продолжают работать по PostgreSQL даже
-                # во время переиндексации или временной недоступности Qdrant/embeddings.
-                logger.warning(
-                    "⚠️ Semantic retrieval проекта id=%s недоступен; использую SQL-срез.",
-                    project.id,
-                    exc_info=True,
-                )
-
-        # Индекс даёт кандидатов, но риски могли измениться или исчезнуть после
-        # индексации. Проверяем весь набор одним коротким SQL-запросом.
-        risk_ids = {
-            int(str(hit.payload["entity_id"]))
-            for hit in semantic_hits
-            if hit.payload.get("entity_type") == "risk"
-            and str(hit.payload.get("entity_id", "")).isdigit()
-            and 0 < int(str(hit.payload["entity_id"])) <= 2147483647
-        }
-        semantic_risks: dict[int, Any] = {}
-        task_ids = {
-            int(str(hit.payload["entity_id"]))
-            for hit in semantic_hits
-            if hit.payload.get("entity_type") == "task"
-            and str(hit.payload.get("entity_id", "")).isdigit()
-            and 0 < int(str(hit.payload["entity_id"])) <= 2147483647
-        }
-        semantic_task_records: dict[int, Any] = {}
-        if risk_ids or task_ids:
-            try:
-                async with self.scope() as db:
-                    semantic_risks = (
-                        {
-                            risk.id: risk
-                            for risk in await db.risks.get_by_ids(
-                                project_id=project.id, risk_ids=risk_ids
-                            )
-                        }
-                        if risk_ids
-                        else {}
-                    )
-                    if task_ids:
-                        semantic_task_records = {
-                            task.id: task
-                            for task in await db.tasks.get_by_ids(task_ids)
-                            if task.project_id == project.id
-                        }
-            except RepositoryError as error:
-                raise ProjectAgentError(str(error)) from error
-
         registry = _SourceRegistry()
-        postgres_context = self._build_postgres_context(
-            project=project,
-            context=database_context,
-            registry=registry,
+        postgres = self._build_postgres_context(
+            project=project, context=database_context, registry=registry
         )
-        task_candidates = postgres_context.pop("retrieved_tasks")
-        document_candidates = postgres_context.pop("retrieved_documents")
-        risk_candidates = postgres_context.pop("retrieved_risks")
-        semantic_candidates = self._build_semantic_context(
-            semantic_hits,
-            registry,
-            semantic_risks=semantic_risks,
-            semantic_tasks={
-                task.id: self._task_context(
-                    task=task,
-                    project=project,
-                    stage_by_id={stage.id: stage for stage in database_context.stages},
-                    wbs_paths=build_wbs_paths(database_context.nodes),
-                    registry=registry,
-                )
-                for task in semantic_task_records.values()
+        for key in ("retrieved_tasks", "retrieved_documents", "retrieved_risks"):
+            postgres.pop(key, None)
+        retrieved = retrieve(
+            catalog,
+            fts_hits=fts_hits,
+            semantic_hits=semantic_hits,
+            query=query,
+            target_chars=self.config.chunk_target_chars,
+            overlap_chars=self.config.chunk_overlap_chars,
+        )
+        # Связи раскрываются на один шаг, а продолжение доступно через related_sources.
+        seeds = {item["source_id"] for item in retrieved}
+        neighbors = []
+        seen = set(seeds)
+        for item in retrieved[:8]:
+            for link in catalog.sources[item["source_id"]].relations:
+                target = link["source_id"]
+                if target not in seen and not target.startswith("project:") and len(neighbors) < 20:
+                    neighbors.append(source_view(catalog.sources[target], max_chars=600))
+                    seen.add(target)
+        content = {
+            "current_date": date.today().isoformat(),
+            "question": question,
+            "retrieval_query": query,
+            "dialog_history": [message.model_dump() for message in history[-10:]],
+            "current_postgres_state": postgres,
+            "catalog": {
+                "counts": catalog.counts,
+                "file_issues": file_issues(catalog),
+                "project": source_view(catalog.sources[f"project:{project_id}"], max_chars=5000),
+                "team": read_catalog(
+                    catalog,
+                    KnowledgeReadRequest(name="list_sources", entity_type=SourceType.MEMBER),
+                ),
+                "semantic_available": semantic_available,
             },
-        )
-        retrieval_context = self._build_hybrid_context(
-            task_candidates=task_candidates,
-            document_candidates=document_candidates,
-            risk_candidates=risk_candidates,
-            semantic_candidates=semantic_candidates,
-            registry=registry,
-        )
-        user_content = json.dumps(
-            {
-                "current_date": date.today().isoformat(),
-                "current_postgres_state": postgres_context,
-                "retrieval_context": retrieval_context,
-                "dialog_history": [
-                    {"role": message.role, "content": message.content[:TEXT_FRAGMENT_LIMIT]}
-                    for message in history[-10:]
-                ],
-                "question": normalized_question,
-                "retrieval_query": retrieval_query,
-            },
-            ensure_ascii=False,
-        )
-        phase_started_at = perf_counter()
+            "retrieval_context": retrieved,
+            "related_context": neighbors,
+            "read_results": [],
+        }
+        self._limit_initial_context(content)
+        self._register_views(content, catalog, registry)
+        phase = perf_counter()
+        output = AgentOutput()
         try:
-            try:
+            for round_index in range(5):
+                content["remaining_read_rounds"] = 4 - round_index
+                serialized = json.dumps(content, ensure_ascii=False, default=str)
                 output = await self.llm_client.get_structured_response(
                     system_prompt=PROJECT_AGENT_SYSTEM_PROMPT,
-                    content=user_content,
+                    content=serialized,
                     schema=AgentOutput,
-                    max_completion_tokens=3000,
+                    max_completion_tokens=4000,
                 )
-            except ClientError as error:
-                raise KnowledgeProviderError(str(error)) from error
-            except Exception as error:
-                raise ProjectAgentError(str(error)) from error
-
-            selected: list[KnowledgeSourceSchema] = []
-            seen: set[str] = set()
+                if not output.reads or round_index == 4:
+                    break
+                async with self.scope() as db:
+                    await self._require_project(db, project_id=project_id)
+                    catalog = build_catalog(
+                        project_id, await db.sources.get_project_rows(project_id)
+                    )
+                    for request in output.reads:
+                        hits = (
+                            await db.sources.search(
+                                project_id,
+                                request.query or "",
+                                entity_type=request.entity_type,
+                                limit=request.limit + 1,
+                                offset=request.offset,
+                            )
+                            if request.name == "search_sources"
+                            else None
+                        )
+                        result = read_catalog(catalog, request, search_hits=hits)
+                        # Не обрываем JSON/источник без явного сообщения о лимите.
+                        if (
+                            len(serialized)
+                            + len(json.dumps(result, ensure_ascii=False, default=str))
+                            > 180000
+                        ):
+                            result = {
+                                "error": "Лимит контекста ответа достигнут. Укажи, что удалось проверить и что осталось непрочитанным."
+                            }
+                        self._register_views(result, catalog, registry)
+                        entry = {"request": request.model_dump(mode="json"), "result": result}
+                        content["read_results"].append(entry)
+                        serialized += json.dumps(entry, ensure_ascii=False, default=str)
+            selected = []
+            seen_sources = set()
             for handle in output.source_ids:
                 source = registry.resolve(handle)
-                if source is not None and source.source_id not in seen:
+                if (
+                    source
+                    and source.source_id in catalog.sources
+                    and source.source_id not in seen_sources
+                ):
                     selected.append(source)
-                    seen.add(source.source_id)
-            return KnowledgeAnswerSchema(answer=output.answer, sources=selected)
+                    seen_sources.add(source.source_id)
+            answer = (
+                output.answer.strip()
+                or "Не удалось завершить проверку источников. Уточните вопрос или сузьте перечень объектов."
+            )
+            if output.reads and output.answer.strip():
+                answer += "\n\nПроверка контекста неполная: часть запрошенных источников осталась непрочитанной."
+            return KnowledgeAnswerSchema(answer=answer, sources=selected)
+        except ClientError as error:
+            raise KnowledgeProviderError(str(error)) from error
+        except RepositoryError as error:
+            raise ProjectAgentError(str(error)) from error
         finally:
-            phases_ms["llm"] = self._elapsed_ms(phase_started_at)
+            phases["llm"] = self._elapsed_ms(phase)
             logger.info(
-                "🤖 Метрики Project Agent: %s",
+                "Метрики Project Agent: %s",
                 json.dumps(
                     {
                         "event": "project_agent.ask",
-                        "project_id": project.id,
-                        "phases_ms": phases_ms,
-                        "total_ms": self._elapsed_ms(ask_started_at),
-                        "context_chars": len(user_content),
+                        "project_id": project_id,
+                        "phases_ms": phases,
+                        "total_ms": self._elapsed_ms(started),
+                        "context_chars": len(json.dumps(content, ensure_ascii=False, default=str)),
                     },
                     ensure_ascii=False,
-                    separators=(",", ":"),
                 ),
             )
+
+    @staticmethod
+    def _limit_initial_context(content: dict, max_chars: int = 120000) -> None:
+        """Сокращает самые большие списки с явным счётчиком непрочитанных объектов."""
+
+        def lists(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key == "properties":
+                        continue
+                    if isinstance(item, list) and len(item) > 1:
+                        yield len(json.dumps(item, ensure_ascii=False, default=str)), value, key
+                    yield from lists(item)
+            elif isinstance(value, list):
+                for item in value:
+                    yield from lists(item)
+
+        while len(json.dumps(content, ensure_ascii=False, default=str)) > max_chars:
+            candidates = list(lists(content))
+            if not candidates:
+                break
+            _, parent, key = max(candidates, key=lambda candidate: candidate[0])
+            previous = parent[key]
+            keep = max(1, len(previous) // 2)
+            parent[key] = previous[-keep:] if key == "dialog_history" else previous[:keep]
+            omitted_key = f"{key}_omitted"
+            parent[omitted_key] = parent.get(omitted_key, 0) + len(previous) - keep
+
+    @staticmethod
+    def _register_views(value, catalog, registry) -> None:
+        if isinstance(value, dict):
+            if value.get("entity_type") and value.get("source_id") in catalog.sources:
+                source = catalog.sources[value["source_id"]]
+                excerpt = (value.get("matching_chunks") or [{}])[0].get("text") or value.get(
+                    "text", ""
+                )
+                record = citation(source, excerpt=excerpt, score=value.get("score"))
+                value["source_handle"] = registry.register(record)
+                registry.update(source.source_id, **record.model_dump(exclude={"source_id"}))
+            for key, item in list(value.items()):
+                if key not in {"properties", "dialog_history"}:
+                    ProjectAgentService._register_views(item, catalog, registry)
+        elif isinstance(value, list):
+            for item in value:
+                ProjectAgentService._register_views(item, catalog, registry)
 
     @staticmethod
     def _elapsed_ms(started_at: float) -> float:
@@ -481,37 +479,57 @@ class ProjectAgentService:
         return project
 
     async def get_status(self, project_id: int) -> KnowledgeStatusSchema:
-        """Возвращает состояние очереди и доступность collection проекта."""
+        """Сверяет каждый источник и chunk, а не только наличие collection."""
         try:
             async with self.scope() as db:
+                await self._require_project(db, project_id=project_id)
                 counts = await db.jobs.get_status_counts(project_id)
                 last_error = await db.jobs.get_last_error(project_id)
+                catalog = build_catalog(project_id, await db.sources.get_project_rows(project_id))
         except KnowledgeIndexJobsRepositoryError as error:
             raise KnowledgeServiceError(str(error)) from error
-
-        points_count: int | None = None
-        provider_error: str | None = None
+        manifest = {}
+        provider_error = None
+        points_count = None
         if self.config.knowledge_enabled:
             try:
-                points_count = await self.qdrant_client.count(project_id)
+                manifest = await self.qdrant_client.manifest(project_id)
+                points_count = len(manifest)
             except ClientError as error:
                 provider_error = error.error_details
+        rows, obsolete = coverage(
+            catalog,
+            manifest,
+            target_chars=self.config.chunk_target_chars,
+            overlap_chars=self.config.chunk_overlap_chars,
+            embedding_signature=digest(
+                [self.embedding_client.model, self.qdrant_client.vector_dim]
+            ),
+        )
+        issues = file_issues(catalog)
         pending = counts.get(KnowledgeIndexStatus.PENDING, 0)
         processing = counts.get(KnowledgeIndexStatus.PROCESSING, 0)
-        failed = counts.get(KnowledgeIndexStatus.FAILED, 0)
+        complete = (
+            bool(catalog.sources)
+            and not any(row["missing"] or row["stale"] for row in rows)
+            and not obsolete
+            and not issues
+        )
         return KnowledgeStatusSchema(
             enabled=self.config.knowledge_enabled,
-            ready=(
-                self.config.knowledge_enabled
-                and points_count is not None
-                and pending == 0
-                and processing == 0
-            ),
+            ready=self.config.knowledge_enabled
+            and provider_error is None
+            and complete
+            and pending == 0
+            and processing == 0,
             points_count=points_count,
             pending_jobs=pending,
             processing_jobs=processing,
-            failed_jobs=failed,
+            failed_jobs=counts.get(KnowledgeIndexStatus.FAILED, 0),
             last_error=provider_error or last_error,
+            coverage=rows,
+            file_issues=issues,
+            obsolete_points=obsolete,
         )
 
     async def reindex(self, project_id: int) -> None:
@@ -816,8 +834,8 @@ class ProjectAgentService:
                         "task_key": build_task_key(project.key, task.number),
                         "created_at": item.created_at.isoformat(),
                         "event_type": item.event_type.value,
-                        "from_value": item.from_value,
-                        "to_value": item.to_value,
+                        "from_value": (item.from_value or "")[:TEXT_FRAGMENT_LIMIT],
+                        "to_value": (item.to_value or "")[:TEXT_FRAGMENT_LIMIT],
                     }
                 )
             tools[StructuredToolName.RECENT_PROJECT_ACTIVITY.value] = activity_rows
@@ -982,7 +1000,7 @@ class ProjectAgentService:
             "task_key": build_task_key(project.key, task.number),
             "title": task.title[:512],
             "description": (task.description_md or "")[:TEXT_FRAGMENT_LIMIT],
-            "checklist": checklist_context(getattr(task, "checklist", None)),
+            "checklist": checklist_context(getattr(task, "checklist", None), limit=10, chars=200),
             "stage": stage.name[:255] if stage is not None else None,
             "is_done": bool(stage and stage.is_done_stage),
             "priority": task.priority.value,

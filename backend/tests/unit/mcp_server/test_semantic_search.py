@@ -11,7 +11,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from mcp.server.mcpserver.exceptions import ToolError
 
 from src.core.app_state import (
     RUNTIME_STATE_KEY,
@@ -76,6 +75,8 @@ class SearchContext:
                     knowledge=SimpleNamespace(
                         knowledge_enabled=True,
                         qdrant_score_threshold=0.42,
+                        knowledge_chunk_target_chars=2200,
+                        knowledge_chunk_overlap_chars=300,
                     )
                 ),
                 SESSION_FACTORY_STATE_KEY: tracker,
@@ -113,72 +114,54 @@ def search(monkeypatch: pytest.MonkeyPatch):
     return install
 
 
-async def test_semantic_search_presents_hits_and_filters_them(search) -> None:
-    """Фильтр по типу сущности и представление попадания с ключом и округлённой оценкой."""
-    # Фильтр по типу сущности отсеивает лишние фрагменты.
-    context, _, _, _ = search([hit("task"), hit("document")])
+async def test_semantic_search_returns_current_catalog_views(search) -> None:
+    from src.knowledge.catalog import SourceType
 
+    context, _, runtime, services = search([hit("document")])
+    current = [{"source_id": "document:9", "text": "Актуальное решение", "next_offset": 1200}]
+    services.query.search_knowledge.return_value = current
     result = await srv.search_project_knowledge(
-        context,
-        project_key="PROJ",
-        query="отчёт",
-        entity_type=" Document ",
+        context, project_key="PROJ", query="отчёт", entity_type=SourceType.DOCUMENT
     )
-
-    assert [item["entity_type"] for item in result] == ["document"]
-    # Фрагмент отдаётся ключом задачи и округлённой оценкой.
-    context, _, _, _ = search([hit()])
-
-    result = await srv.search_project_knowledge(context, project_key="PROJ", query="отчёт")
-
-    assert result == [
-        {
-            "source": "task:100",
-            "entity_type": "task",
-            "task_key": "PROJ-142",
-            "title": "Собрать отчёт",
-            "score": 0.877,
-            "excerpt": "Решили считать отчёт по фактическим датам.",
-        }
-    ]
-
-
-async def test_semantic_search_keeps_db_scope_short_and_reports_failures(search) -> None:
-    """Доступ проверяется внутри области базы, внешний вызов идёт после её закрытия, выключенная база знаний не доходит до клиентов, сбой клиента становится ошибкой инструмента."""
-    # Доступ проверяется до внешнего вызова и внутри короткой области.
-    context, _, runtime, services = search([hit()])
-
-    await srv.search_project_knowledge(context, project_key="proj", query="отчёт")
-
-    services.access.ensure_project_access.assert_awaited_once_with(
+    assert result == current
+    services.query.search_knowledge.assert_awaited_once_with(
         project_id=PROJECT_ID,
-        user_id=1,
+        query="отчёт",
+        semantic_hits=runtime._hits,
+        entity_type=SourceType.DOCUMENT,
+        limit=10,
+        target_chars=2200,
+        overlap_chars=300,
     )
-    assert runtime.search_kwargs["project_id"] == PROJECT_ID
-    assert runtime.search_kwargs["score_threshold"] == 0.42
-    # Эмбеддинг и Qdrant вызываются уже без открытого соединения с БД.
-    context, tracker, runtime, _ = search([hit()])
+    assert runtime.search_kwargs["entity_type"] == SourceType.DOCUMENT
 
+
+async def test_search_keeps_external_calls_outside_db_and_falls_back_to_fts(search) -> None:
+    context, tracker, runtime, services = search([hit()])
+    services.query.search_knowledge.return_value = []
     await srv.search_project_knowledge(context, project_key="PROJ", query="отчёт")
-
-    assert runtime.scope_active_during_call == [False, False]
-    assert tracker.opened == 1
-    assert tracker.active is False
-    # При выключенной базе знаний внешние клиенты не вызываются.
-    context, _, runtime, _ = search()
+    services.access.ensure_project_access.assert_awaited_once_with(project_id=PROJECT_ID, user_id=1)
+    assert runtime.search_kwargs["score_threshold"] == 0.42
+    assert runtime.scope_active_during_call == [False, False] and not tracker.active
+    context, _, runtime, services = search()
     context.request_context.request.state.app_settings.knowledge.knowledge_enabled = False
-
-    with pytest.raises(ToolError) as error:
-        await srv.search_project_knowledge(context, project_key="PROJ", query="отчёт")
-
-    assert "отключён" in str(error.value)
+    await srv.search_project_knowledge(context, project_key="PROJ", query="отчёт")
     assert runtime.scope_active_during_call == []
-    # Сбой внешнего клиента не выносит наружу деталей интеграции.
-    context, _, runtime, _ = search()
+    assert services.query.search_knowledge.await_args.kwargs["semantic_hits"] == []
+    context, _, runtime, services = search()
     runtime.embedding_client.get_embedding = AsyncMock(side_effect=ClientError("qdrant 503"))
+    await srv.search_project_knowledge(context, project_key="PROJ", query="отчёт")
+    assert services.query.search_knowledge.await_args.kwargs["semantic_hits"] == []
 
-    with pytest.raises(ToolError) as error:
-        await srv.search_project_knowledge(context, project_key="PROJ", query="отчёт")
 
-    assert str(error.value) == "Семантический поиск временно недоступен."
-    assert "503" not in str(error.value)
+async def test_full_source_read_uses_the_same_project_access_check(search):
+    from src.schemas.knowledge import KnowledgeReadRequest
+
+    context, _, runtime, services = search()
+    request = KnowledgeReadRequest(name="read_source", source_id="document:9", offset=1200)
+    services.query.read_knowledge.return_value = {"text": "Продолжение", "next_offset": None}
+    result = await srv.read_project_knowledge(context, project_key="PROJ", request=request)
+    assert result["text"] == "Продолжение"
+    services.access.ensure_project_access.assert_awaited_once_with(project_id=PROJECT_ID, user_id=1)
+    services.query.read_knowledge.assert_awaited_once_with(project_id=PROJECT_ID, request=request)
+    assert runtime.scope_active_during_call == []

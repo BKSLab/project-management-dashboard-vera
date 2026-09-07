@@ -25,6 +25,7 @@ from src.repositories.api_tokens import ApiTokensRepository
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
+from src.repositories.knowledge_sources import KnowledgeSourcesRepository
 from src.repositories.milestones import MilestonesRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_risks import ProjectRiskRepository
@@ -73,32 +74,44 @@ def build_checklist_suggestion_scope(
     *, session_factory: SessionFactory, settings: Settings
 ) -> ChecklistSuggestionScopeFactory:
     """Собирает авторизацию и чтение контекста задачи до внешнего вызова."""
+
     @asynccontextmanager
     async def scope() -> AsyncIterator[ChecklistSuggestionScope]:
         async with session_factory() as session:
             yield ChecklistSuggestionScope(
                 auth=AuthService(
-                    users_repository=UsersRepository(session), tokens_repository=ApiTokensRepository(session),
+                    users_repository=UsersRepository(session),
+                    tokens_repository=ApiTokensRepository(session),
                     invite_code=settings.auth.registration_invite_code.get_secret_value(),
                 ),
                 access=AccessService(
-                    members_repository=ProjectMembersRepository(session), tasks_repository=TasksRepository(session),
-                    stages_repository=ProjectStagesRepository(session), documents_repository=DocumentsRepository(session),
-                    comments_repository=TaskCommentsRepository(session), links_repository=DocumentLinksRepository(session),
+                    members_repository=ProjectMembersRepository(session),
+                    tasks_repository=TasksRepository(session),
+                    stages_repository=ProjectStagesRepository(session),
+                    documents_repository=DocumentsRepository(session),
+                    comments_repository=TaskCommentsRepository(session),
+                    links_repository=DocumentLinksRepository(session),
                 ),
-                projects=ProjectsRepository(session), tasks=TasksRepository(session),
-                documents=DocumentsRepository(session), links=DocumentLinksRepository(session),
+                projects=ProjectsRepository(session),
+                tasks=TasksRepository(session),
+                documents=DocumentsRepository(session),
+                links=DocumentLinksRepository(session),
                 attachments=TaskAttachmentsRepository(session),
             )
+
     return scope
 
 
 def get_checklist_suggestion_scope(settings: SettingsDep) -> ChecklistSuggestionScopeFactory:
     """Возвращает короткую область генерации чек-листа."""
-    return build_checklist_suggestion_scope(session_factory=async_session_factory, settings=settings)
+    return build_checklist_suggestion_scope(
+        session_factory=async_session_factory, settings=settings
+    )
 
 
-ChecklistSuggestionScopeDep = Annotated[ChecklistSuggestionScopeFactory, Depends(get_checklist_suggestion_scope)]
+ChecklistSuggestionScopeDep = Annotated[
+    ChecklistSuggestionScopeFactory, Depends(get_checklist_suggestion_scope)
+]
 
 
 def build_risk_suggestion_scope(
@@ -355,6 +368,7 @@ def build_project_agent_scope(
     async def scope() -> AsyncIterator[ProjectAgentScope]:
         async with session_factory() as session:
             yield ProjectAgentScope(
+                sources=KnowledgeSourcesRepository(session),
                 risks=ProjectRiskRepository(session),
                 projects=ProjectsRepository(session),
                 stages=ProjectStagesRepository(session),
@@ -429,6 +443,7 @@ def build_task_document_import_scope(
                 enabled=settings.knowledge.knowledge_enabled,
             )
             yield TaskDocumentImportScope(
+                knowledge_sources=KnowledgeSourcesRepository(session),
                 tasks=TasksRepository(session),
                 attachments=TaskAttachmentsService(
                     attachments_repository=TaskAttachmentsRepository(session),

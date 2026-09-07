@@ -18,7 +18,10 @@ from src.db.models.projects import Project
 from src.exceptions.base import RepositoryError
 from src.exceptions.projects import ProjectNotFoundError, ProjectsServiceError
 from src.exceptions.tasks import TaskNotFoundError
+from src.knowledge.catalog import SourceType, build_catalog
+from src.knowledge.context import read_catalog, retrieve
 from src.knowledge.documents import build_wbs_paths
+from src.schemas.knowledge import KnowledgeReadRequest
 from src.services.db_scope import ProjectQueryScope, ProjectQueryScopeFactory
 from src.utils.checklists import checklist_context
 
@@ -134,6 +137,60 @@ class ProjectQueryService:
             scope: Фабрика короткой области работы с базой.
         """
         self.scope = scope
+
+    async def read_knowledge(self, *, project_id: int, request: KnowledgeReadRequest) -> dict:
+        """Читает любой источник или связь в границах разрешённого проекта."""
+        try:
+            async with self.scope() as db:
+                catalog = build_catalog(project_id, await db.sources.get_project_rows(project_id))
+                if not catalog.sources:
+                    raise ProjectNotFoundError(project_id=project_id)
+                hits = (
+                    await db.sources.search(
+                        project_id,
+                        request.query or "",
+                        entity_type=request.entity_type,
+                        limit=request.limit + 1,
+                        offset=request.offset,
+                    )
+                    if request.name == "search_sources"
+                    else None
+                )
+                return read_catalog(catalog, request, search_hits=hits)
+        except RepositoryError as error:
+            raise ProjectsServiceError(str(error)) from error
+
+    async def search_knowledge(
+        self,
+        *,
+        project_id: int,
+        query: str,
+        semantic_hits: list,
+        entity_type: SourceType | None,
+        limit: int,
+        target_chars: int,
+        overlap_chars: int,
+    ) -> list[dict]:
+        """Общий гибридный поиск с проверкой каждого типа источника по PostgreSQL."""
+        try:
+            async with self.scope() as db:
+                catalog = build_catalog(project_id, await db.sources.get_project_rows(project_id))
+                if not catalog.sources:
+                    raise ProjectNotFoundError(project_id=project_id)
+                fts_hits = await db.sources.search(
+                    project_id, query, entity_type=entity_type, limit=limit
+                )
+            return retrieve(
+                catalog,
+                fts_hits=fts_hits,
+                semantic_hits=semantic_hits,
+                query=query,
+                target_chars=target_chars,
+                overlap_chars=overlap_chars,
+                limit=limit,
+            )
+        except RepositoryError as error:
+            raise ProjectsServiceError(str(error)) from error
 
     async def list_accessible_projects(self, *, user_id: int) -> list[ProjectSummaryDto]:
         """Возвращает проекты, доступные пользователю.

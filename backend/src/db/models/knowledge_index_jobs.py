@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Index, Integer, String, Text, func
+from sqlalchemy import BigInteger, DateTime, Enum, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, TimestampMixin
@@ -48,6 +48,7 @@ class KnowledgeIndexJob(Base, TimestampMixin):
 
     __tablename__ = "knowledge_index_jobs"
     __table_args__ = (
+        Index("uq_knowledge_jobs_transaction", "project_id", "transaction_id", unique=True),
         Index(
             "ix_knowledge_index_jobs_ready",
             "status",
@@ -58,6 +59,7 @@ class KnowledgeIndexJob(Base, TimestampMixin):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    transaction_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     project_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     entity_type: Mapped[KnowledgeEntityType] = mapped_column(
         Enum(KnowledgeEntityType, name="knowledge_entity_type"),

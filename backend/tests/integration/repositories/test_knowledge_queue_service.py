@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.postgres import PostgresContainer
 
@@ -66,8 +66,22 @@ async def project_id(session_factory) -> int:
             color="#58a6ff",
         )
         session.add(project)
+        await session.flush()
+        # Автоматический outbox создания проверяется отдельно; здесь тестируется lifecycle.
+        await session.execute(
+            delete(KnowledgeIndexJob).where(KnowledgeIndexJob.project_id == project.id)
+        )
         await session.commit()
-        return project.id
+        saved_project_id = project.id
+        saved_user_id = user.id
+    yield saved_project_id
+    async with session_factory() as session:
+        await session.execute(delete(Project).where(Project.id == saved_project_id))
+        await session.execute(
+            delete(KnowledgeIndexJob).where(KnowledgeIndexJob.project_id == saved_project_id)
+        )
+        await session.execute(delete(User).where(User.id == saved_user_id))
+        await session.commit()
 
 
 async def enqueue(session_factory, *, project_id: int, entity_ids: list[str]) -> list[int]:
@@ -261,9 +275,7 @@ async def test_retention_removes_only_old_succeeded_jobs(
         remaining = set(
             (
                 await session.execute(
-                    select(KnowledgeIndexJob.id).where(
-                        KnowledgeIndexJob.project_id == project_id
-                    )
+                    select(KnowledgeIndexJob.id).where(KnowledgeIndexJob.project_id == project_id)
                 )
             )
             .scalars()
@@ -299,3 +311,48 @@ async def test_queue_uses_a_fresh_session_per_operation(
     assert len(sessions) == 2
     assert sessions[0] is not sessions[1]
     assert not any(session.in_transaction() for session in sessions)
+
+
+async def test_outbox_tracks_each_committed_transaction_and_rollback_is_atomic(
+    session_factory, project_id
+):
+    async with session_factory() as session:
+        record = await session.get(Project, project_id)
+        record.name = "Не фиксировать"
+        await session.flush()
+        assert await session.scalar(
+            select(KnowledgeIndexJob.id).where(KnowledgeIndexJob.project_id == project_id)
+        )
+        await session.rollback()
+    async with session_factory() as session:
+        assert (
+            await session.scalar(
+                select(KnowledgeIndexJob.id).where(KnowledgeIndexJob.project_id == project_id)
+            )
+            is None
+        )
+        record = await session.get(Project, project_id)
+        record.name = "Первая версия"
+        await session.commit()
+    queue = make_queue(session_factory)
+    (first,) = await queue.claim_next_batch(limit=8)
+    async with session_factory() as session:
+        record = await session.get(Project, project_id)
+        record.name = "Вторая версия"
+        await session.flush()
+        record.description_md = "Ещё одно изменение в той же транзакции"
+        await session.commit()
+        jobs = list(
+            (
+                await session.execute(
+                    select(KnowledgeIndexJob)
+                    .where(KnowledgeIndexJob.project_id == project_id)
+                    .order_by(KnowledgeIndexJob.id)
+                )
+            ).scalars()
+        )
+        assert len(jobs) == 2 and jobs[0].transaction_id != jobs[1].transaction_id
+    assert await queue.claim_next_batch(limit=8) == []
+    await queue.finish([JobOutcome(job_id=first.id, chunks_count=2)], max_attempts=3)
+    (second,) = await queue.claim_next_batch(limit=8)
+    assert second.id != first.id

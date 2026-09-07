@@ -18,6 +18,7 @@ from starlette.applications import Starlette
 from src.core.settings import Settings
 from src.exceptions.base import ApplicationError
 from src.exceptions.clients import ClientError
+from src.knowledge.catalog import SourceType
 from src.mcp_server.context import resolve_project, resolve_task, tool_context
 from src.mcp_server.presenters import (
     comment_item,
@@ -27,6 +28,7 @@ from src.mcp_server.presenters import (
     task_detail,
     task_summary,
 )
+from src.schemas.knowledge import KnowledgeReadRequest
 from src.services.project_query import UnknownStageError
 
 logger = logging.getLogger(__name__)
@@ -216,11 +218,10 @@ async def search_project_knowledge(
     project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
     query: Annotated[str, Field(description="Смысловой запрос.", min_length=2)],
     entity_type: Annotated[
-        str | None,
+        SourceType | None,
         Field(
             description=(
-                "Ограничить тип: project, task, document, comment, attachment, milestone или risk. "
-                "Текущие оценки и планы риска проверяйте через get_project_risk."
+                "Ограничить тип источника. Все поля проверяются по текущему состоянию проекта."
             )
         ),
     ] = None,
@@ -229,46 +230,56 @@ async def search_project_knowledge(
         Field(description="Максимум фрагментов в ответе.", ge=1, le=50),
     ] = 10,
 ) -> list[dict]:
-    """Возвращает смысловые фрагменты базы знаний проекта."""
-    # Аутентификация и проверка доступа выполняются в короткой DB-области,
-    # и она закрывается до обращения к эмбеддингам и Qdrant: иначе
-    # соединение с PostgreSQL удерживалось бы всё время внешнего вызова.
+    """Гибридный поиск по всем типам с актуальным содержимым и связями."""
     async with tool_context(context) as tools:
-        if not tools.settings.knowledge.knowledge_enabled:
-            raise ToolError("Семантический поиск отключён в конфигурации сервера.")
         project_id = await resolve_project(tools, project_key)
         runtime = tools.runtime
-        score_threshold = tools.settings.knowledge.qdrant_score_threshold
-
+        config = tools.settings.knowledge
+        query_service = tools.services.query
+    hits = []
+    if config.knowledge_enabled:
+        try:
+            vector = await runtime.embedding_client.get_embedding(query.strip())
+            hits = await runtime.qdrant_client.search(
+                project_id=project_id,
+                vector=vector,
+                limit=limit,
+                score_threshold=config.qdrant_score_threshold,
+                entity_type=entity_type,
+            )
+        except ClientError:
+            logger.warning("Семантический поиск недоступен, используется FTS.", exc_info=True)
     try:
-        vector = await runtime.embedding_client.get_embedding(query.strip())
-        hits = await runtime.qdrant_client.search(
+        return await query_service.search_knowledge(
             project_id=project_id,
-            vector=vector,
+            query=query.strip(),
+            semantic_hits=hits,
+            entity_type=entity_type,
             limit=limit,
-            score_threshold=score_threshold,
+            target_chars=config.knowledge_chunk_target_chars,
+            overlap_chars=config.knowledge_chunk_overlap_chars,
         )
-    except ClientError as error:
-        raise ToolError("Семантический поиск временно недоступен.") from error
+    except ApplicationError as error:
+        raise ToolError("Не удалось прочитать источники проекта.") from error
 
-    wanted = entity_type.strip().lower() if entity_type else None
-    results: list[dict] = []
-    for hit in hits:
-        payload = hit.payload
-        hit_type = str(payload.get("entity_type") or "")
-        if wanted and hit_type != wanted:
-            continue
-        results.append(
-            {
-                "source": str(payload.get("source_id") or ""),
-                "entity_type": hit_type,
-                "task_key": payload.get("task_key"),
-                "title": payload.get("title"),
-                "score": round(float(hit.score), 3),
-                "excerpt": shorten(str(payload.get("text") or "")),
-            }
-        )
-    return results
+
+@mcp_server.tool(
+    name="read_project_knowledge",
+    title="Источники и связи проекта",
+    description="Читает все типы знаний проекта: list_sources — список, read_source — текст по страницам, related_sources — связи в обе стороны, search_sources — FTS. Используйте source_id из результатов поиска/списка; next_offset задаёт следующую страницу. Для read_source offset измеряется в символах. Работает без векторного поиска.",
+)
+async def read_project_knowledge(
+    context: Context,
+    project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
+    request: KnowledgeReadRequest,
+) -> dict:
+    """Единый read-only доступ к полному каталогу после проверки участия."""
+    async with tool_context(context) as tools:
+        project_id = await resolve_project(tools, project_key)
+        try:
+            return await tools.services.query.read_knowledge(project_id=project_id, request=request)
+        except ApplicationError as error:
+            raise ToolError("Не удалось прочитать источники проекта.") from error
 
 
 @mcp_server.tool(

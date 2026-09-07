@@ -28,6 +28,7 @@ from src.exceptions.task_documents import TaskDocumentStepFailedError
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
+from src.repositories.knowledge_sources import KnowledgeSourcesRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_attachments import TaskAttachmentsRepository
@@ -78,6 +79,7 @@ def build_import_service(
         members_repository=ProjectMembersRepository(session),
     )
     db = TaskDocumentImportScope(
+        knowledge_sources=KnowledgeSourcesRepository(session),
         tasks=TasksRepository(session),
         attachments=attachments,
         documents=documents,
@@ -94,7 +96,6 @@ def build_import_service(
         scope=scope,
         attachment_storage=storage,
         vision=DisabledVisionCapability(),
-        extract_max_chars=350_000,
         max_file_size=10 * 1024 * 1024,
     )
 
