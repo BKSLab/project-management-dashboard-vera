@@ -71,7 +71,7 @@ class KnowledgeReadParameters(BaseModel):
     source_id: str | None = Field(default=None, max_length=64)
     query: str | None = Field(default=None, max_length=2000)
     offset: int = Field(default=0, ge=0)
-    limit: int = Field(default=20, ge=1, le=30)
+    limit: int = Field(default=5, ge=1, le=30)
     max_chars: int = Field(default=4000, ge=500, le=8000)
 
 

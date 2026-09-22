@@ -131,6 +131,7 @@ class KnowledgeSettings(SettingsBase):
     knowledge_chunk_overlap_chars: int = 300
     knowledge_agent_semantic_limit: int = 10
     knowledge_vision_enabled: bool = True
+    knowledge_summary_chunk_chars: int = Field(default=16000, ge=2000, le=32000)
 
 
 class DBSettings(SettingsBase):
@@ -186,6 +187,10 @@ class AgentSettings(SettingsBase):
     agent_history_messages: int = Field(default=10, ge=2, le=10)
     agent_summary_batch_size: int = Field(default=10, ge=1, le=10)
     agent_tool_rounds: int = Field(default=8, ge=1, le=16)
+    # Локальная оценка токенов; включает системный prompt и все результаты раунда.
+    agent_context_tokens: int = Field(default=12000, ge=9000, le=64000)
+    agent_retrieval_limit: int = Field(default=5, ge=1, le=10)
+    agent_history_tokens: int = Field(default=1200, ge=200, le=4000)
 
 
 class ChatSettings(SettingsBase):

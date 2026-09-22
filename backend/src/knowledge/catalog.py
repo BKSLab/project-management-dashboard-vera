@@ -45,11 +45,21 @@ class SourcePolicy:
     fields: tuple[str, ...]
     semantic: tuple[str, ...] = ()
     title_field: str = "title"
+    invalidates_index: bool = True
 
 
-def policy(table, scope, kind, label, fields, semantic="", title="title"):
+def policy(
+    table, scope, kind, label, fields, semantic="", title="title", *, invalidates_index=True
+):
     return SourcePolicy(
-        table, scope, kind, label, tuple(fields.split()), tuple(semantic.split()), title
+        table,
+        scope,
+        kind,
+        label,
+        tuple(fields.split()),
+        tuple(semantic.split()),
+        title,
+        invalidates_index,
     )
 
 
@@ -205,6 +215,15 @@ POLICIES = (
         None,
         "Извлечённый текст",
         "attachment_id text status detail original_chars content_hash updated_at",
+        invalidates_index=False,
+    ),
+    policy(
+        "knowledge_source_summaries",
+        "project",
+        None,
+        "Кэш описания источника",
+        "project_id source_id document_id attachment_id content_hash summary updated_at",
+        invalidates_index=False,
     ),
 )
 POLICY_BY_TABLE = {item.table: item for item in POLICIES}
@@ -294,6 +313,12 @@ class ProjectSource:
     properties: dict
     parent_source_id: str | None
     relations: list[dict] = field(default_factory=list)
+    summary: str | None = None
+
+    @property
+    def summary_hash(self) -> str:
+        """Изменение связей/метаданных не требует повторного чтения текста моделью."""
+        return digest(["source-summary-v1", self.text])
 
     @property
     def source_id(self) -> str:
@@ -407,6 +432,11 @@ class ProjectCatalog:
 
 def build_catalog(project_id: int, rows: dict[str, list[dict]]) -> ProjectCatalog:
     catalog = ProjectCatalog(project_id, rows, {})
+    summaries = {
+        item["source_id"]: item
+        for item in rows.get("knowledge_source_summaries", [])
+        if item["project_id"] == project_id
+    }
     project = next(iter(rows.get("projects", [])), None)
     if project is None or project["id"] != project_id:
         return catalog
@@ -481,6 +511,9 @@ def build_catalog(project_id: int, rows: dict[str, list[dict]]) -> ProjectCatalo
             source = ProjectSource(
                 project_id, rule.kind, row["id"], title, "\n\n".join(text_parts), properties, parent
             )
+            cached = summaries.get(source.source_id)
+            if cached and cached["content_hash"] == source.summary_hash:
+                source.summary = cached["summary"]
             catalog.sources[source.source_id] = source
     for source in list(catalog.sources.values()):
         if source.parent_source_id:

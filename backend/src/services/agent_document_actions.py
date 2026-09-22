@@ -36,13 +36,21 @@ async def list_documents(
 
 
 async def get_document(
-    db: AgentProjectToolScope, ctx: AgentToolContext, args: inputs.DocumentInput
+    db: AgentProjectToolScope, ctx: AgentToolContext, args: inputs.DocumentReadInput
 ) -> dict:
-    """Возвращает документ и его связи с задачами."""
+    """Возвращает страницу оригинала и связи; весь документ не раздувает контекст."""
     await checked_document(db, ctx, args.document_id)
     document = await db.documents.get_document(args.document_id)
+    text = document.content_md or ""
+    end = min(len(text), args.offset + args.max_chars)
     return {
-        "document": document.model_dump(mode="json"),
+        "document": {
+            **document.model_dump(mode="json", exclude={"content_md"}),
+            "content_md": text[args.offset : end],
+            "offset": args.offset,
+            "total_chars": len(text),
+            "next_offset": end if end < len(text) else None,
+        },
         "tasks": [
             item.model_dump(mode="json")
             for item in await db.links.get_links_for_document(args.document_id)

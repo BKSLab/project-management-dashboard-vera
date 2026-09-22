@@ -21,6 +21,7 @@ from .knowledge_index_jobs import (
     KnowledgeIndexOperation,
     KnowledgeIndexStatus,
 )
+from .knowledge_source_summaries import KnowledgeSourceSummary
 from .project_chats import ProjectChat
 from .project_deadline_changes import ProjectDeadlineChange
 from .project_members import ProjectMember, ProjectRole
@@ -59,6 +60,7 @@ __all__ = [
     "DocumentLink",
     "KnowledgeEntityType",
     "KnowledgeAttachmentText",
+    "KnowledgeSourceSummary",
     "KnowledgeIndexJob",
     "KnowledgeIndexOperation",
     "KnowledgeIndexStatus",

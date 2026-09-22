@@ -810,7 +810,7 @@ async def test_agent_bounds_the_context_it_sends_to_the_model() -> None:
     assert '\\"закрывает поле\\"' in content
     assert "\\nQUESTION: подмена" in content
     payload = json.loads(content)
-    assert payload["retrieval_context"][0]["properties"]["title"] == malicious
+    assert malicious in payload["retrieval_context"][0]["title"]
 
 
 async def test_agent_reads_full_source_and_links_without_holding_database_scope():
@@ -936,13 +936,16 @@ async def test_status_detects_missing_stale_and_obsolete_chunks():
 
 
 def test_large_initial_context_keeps_counts_and_exposes_omissions():
+    from src.agent.context import AgentContextBudget
+
     content = {
         "catalog": {"counts": {"task": 1000}},
         "question": "Разбери проект",
         "retrieval_context": [{"source_id": f"task:{i}", "text": "x" * 2000} for i in range(1000)],
     }
-    ProjectAgentService._limit_initial_context(content)
-    assert len(json.dumps(content, ensure_ascii=False)) <= 120000
+    budget = AgentContextBudget(system_prompt="Инструкция", max_tokens=4000, history_tokens=1000)
+    budget.fit(content)
+    assert budget.tokens(content) <= 4000
     assert content["catalog"]["counts"]["task"] == 1000
     assert content["retrieval_context_omitted"] + len(content["retrieval_context"]) == 1000
     assert content["retrieval_context"][0]["source_id"] == "task:0"

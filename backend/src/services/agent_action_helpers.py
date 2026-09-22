@@ -17,6 +17,7 @@ def page(items: Sequence[BaseModel], args: PageInput) -> dict[str, Any]:
     end = args.offset + args.limit
     return {
         "items": [item.model_dump(mode="json") for item in items[args.offset : end]],
+        "offset": args.offset,
         "total": len(items),
         "next_offset": end if end < len(items) else None,
     }

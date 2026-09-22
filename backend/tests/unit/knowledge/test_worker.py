@@ -150,6 +150,30 @@ async def test_external_calls_run_after_the_database_scope_is_closed() -> None:
     service.persist_extractions.assert_awaited_once()
 
 
+async def test_each_summary_is_saved_before_the_next_external_call():
+    service = AsyncMock(spec=KnowledgeIndexService)
+    worker, tracker = make_worker(service=service)
+    service.prepare.return_value = action(1)
+    service.execute_prepared.return_value = 2
+
+    async def summaries(_action):
+        assert not tracker.active
+        yield {"source_id": "document:1", "summary": "Первое описание"}
+        service.persist_summary.assert_awaited_once()
+        assert not tracker.active
+        yield {"source_id": "document:2", "summary": "Второе описание"}
+
+    async def persist(_summary):
+        assert tracker.active
+
+    service.summarize = summaries
+    service.persist_summary.side_effect = persist
+    result = await worker._prepare_and_execute_job(job(1))
+    assert result.error is None
+    assert service.persist_summary.await_count == 2
+    assert tracker.opened == 4
+
+
 async def test_worker_persists_outcomes_and_survives_failures() -> None:
     """Итоги уходят через сервис очереди, ошибка сохраняется с текстом, отмена не считается провалом, пустая очередь не считается работой, сбой итерации не останавливает цикл."""
     # Статусы пачки сохраняет сервис очереди, а не сам цикл.

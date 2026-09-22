@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from src.agent.context import AgentContextBudget
 from src.agent.tools import AgentToolContext, AgentToolExecutor, AgentToolRequest
 from src.clients.embedding import EmbeddingClient
 from src.clients.llm import LlmClient
@@ -36,9 +37,7 @@ from src.knowledge.context import (
     citation,
     coverage,
     file_issues,
-    read_catalog,
     retrieve,
-    source_view,
 )
 from src.knowledge.documents import build_wbs_paths
 from src.knowledge.retrieval import reciprocal_rank_fusion
@@ -72,7 +71,7 @@ MAX_RETRIEVED_TASKS = 30
 MAX_RETRIEVED_DOCUMENTS = 30
 MAX_RETRIEVAL_CONTEXT = 30
 MAX_TOOL_TASKS = 30
-PROJECT_DESCRIPTION_LIMIT = 1200
+PROJECT_DESCRIPTION_LIMIT = 400
 TEXT_FRAGMENT_LIMIT = 1200
 SOURCE_EXCERPT_LIMIT = 500
 
@@ -206,6 +205,9 @@ class ProjectAgentConfig:
     chunk_target_chars: int = 2200
     chunk_overlap_chars: int = 300
     tool_rounds: int = 4
+    context_tokens: int = 12000
+    retrieval_limit: int = 5
+    history_tokens: int = 1200
 
 
 class ProjectAgentService:
@@ -347,17 +349,8 @@ class ProjectAgentService:
             query=query,
             target_chars=self.config.chunk_target_chars,
             overlap_chars=self.config.chunk_overlap_chars,
+            limit=self.config.retrieval_limit,
         )
-        # Связи раскрываются на один шаг, а продолжение доступно через related_sources.
-        seeds = {item["source_id"] for item in retrieved}
-        neighbors = []
-        seen = set(seeds)
-        for item in retrieved[:8]:
-            for link in catalog.sources[item["source_id"]].relations:
-                target = link["source_id"]
-                if target not in seen and not target.startswith("project:") and len(neighbors) < 20:
-                    neighbors.append(source_view(catalog.sources[target], max_chars=600))
-                    seen.add(target)
         content = {
             "current_date": date.today().isoformat(),
             "question": question,
@@ -368,16 +361,11 @@ class ProjectAgentService:
             "current_postgres_state": postgres,
             "catalog": {
                 "counts": catalog.counts,
-                "file_issues": file_issues(catalog),
-                "project": source_view(catalog.sources[f"project:{project_id}"], max_chars=5000),
-                "team": read_catalog(
-                    catalog,
-                    KnowledgeReadRequest(name="list_sources", entity_type=SourceType.MEMBER),
-                ),
+                "file_issues": file_issues(catalog)[:5],
+                "file_issues_total": len(file_issues(catalog)),
                 "semantic_available": semantic_available,
             },
             "retrieval_context": retrieved,
-            "related_context": neighbors,
             "read_results": [],
             "available_tools": [
                 item
@@ -392,14 +380,30 @@ class ProjectAgentService:
             "previous_actions": action_history or [],
             "uploaded_files": uploaded_files or [],
         }
-        self._limit_initial_context(content)
+        budget = AgentContextBudget(
+            system_prompt=PROJECT_AGENT_SYSTEM_PROMPT,
+            max_tokens=self.config.context_tokens,
+            history_tokens=self.config.history_tokens,
+        )
+        budget.prepare(content)
         self._register_views(content, catalog, registry)
         phase = perf_counter()
         output = AgentOutput()
+        context_rounds = []
+        serialized = ""
         try:
             for round_index in range(self.config.tool_rounds + 1):
                 content["remaining_read_rounds"] = self.config.tool_rounds - round_index
-                serialized = json.dumps(content, ensure_ascii=False, default=str)
+                before = budget.tokens(content)
+                serialized = budget.fit(content)
+                context_rounds.append(
+                    {
+                        "round": round_index,
+                        "before_tokens_estimate": before,
+                        "input_tokens_estimate": budget.tokens(content),
+                        "chars": len(serialized),
+                    }
+                )
                 output = await self.llm_client.get_structured_response(
                     system_prompt=PROJECT_AGENT_SYSTEM_PROMPT,
                     content=serialized,
@@ -424,31 +428,10 @@ class ProjectAgentService:
                         project_id, await db.sources.get_project_rows(project_id)
                     )
                     for request, result in results:
-                        # Не обрываем JSON/источник без явного сообщения о лимите.
-                        if (
-                            len(serialized)
-                            + len(json.dumps(result, ensure_ascii=False, default=str))
-                            > 180000
-                        ):
-                            if "action" in result:
-                                # Успешное изменение нельзя превращать в ошибку чтения:
-                                # иначе модель повторит уже выполненную операцию.
-                                action = result["action"]
-                                result = {
-                                    "action": {
-                                        key: action[key]
-                                        for key in ("id", "tool_name", "title", "status")
-                                    },
-                                    "message": "Полные параметры и результат сохранены в карточке действия.",
-                                }
-                            else:
-                                result = {
-                                    "error": "Лимит контекста ответа достигнут. Укажи, что удалось проверить и что осталось непрочитанным."
-                                }
                         self._register_views(result, catalog, registry)
-                        entry = {"request": request.model_dump(mode="json"), "result": result}
-                        content["read_results"].append(entry)
-                        serialized += json.dumps(entry, ensure_ascii=False, default=str)
+                        budget.add_result(
+                            content, request=request.model_dump(mode="json"), result=result
+                        )
             selected = []
             seen_sources = set()
             for handle in output.source_ids:
@@ -480,6 +463,8 @@ class ProjectAgentService:
             raise KnowledgeProviderError(str(error)) from error
         except RepositoryError as error:
             raise ProjectAgentError(str(error)) from error
+        except ValueError as error:
+            raise ProjectAgentError(str(error)) from error
         finally:
             phases["llm"] = self._elapsed_ms(phase)
             logger.info(
@@ -490,38 +475,13 @@ class ProjectAgentService:
                         "project_id": project_id,
                         "phases_ms": phases,
                         "total_ms": self._elapsed_ms(started),
-                        "context_chars": len(json.dumps(content, ensure_ascii=False, default=str)),
+                        "context_chars": len(serialized),
+                        "context_rounds": context_rounds,
+                        "context_budget_tokens_estimate": self.config.context_tokens,
                     },
                     ensure_ascii=False,
                 ),
             )
-
-    @staticmethod
-    def _limit_initial_context(content: dict, max_chars: int = 120000) -> None:
-        """Сокращает самые большие списки с явным счётчиком непрочитанных объектов."""
-
-        def lists(value):
-            if isinstance(value, dict):
-                for key, item in value.items():
-                    if key == "properties":
-                        continue
-                    if isinstance(item, list) and len(item) > 1:
-                        yield len(json.dumps(item, ensure_ascii=False, default=str)), value, key
-                    yield from lists(item)
-            elif isinstance(value, list):
-                for item in value:
-                    yield from lists(item)
-
-        while len(json.dumps(content, ensure_ascii=False, default=str)) > max_chars:
-            candidates = list(lists(content))
-            if not candidates:
-                break
-            _, parent, key = max(candidates, key=lambda candidate: candidate[0])
-            previous = parent[key]
-            keep = max(1, len(previous) // 2)
-            parent[key] = previous[-keep:] if key == "dialog_history" else previous[:keep]
-            omitted_key = f"{key}_omitted"
-            parent[omitted_key] = parent.get(omitted_key, 0) + len(previous) - keep
 
     @staticmethod
     def _register_views(value, catalog, registry) -> None:
@@ -631,13 +591,22 @@ class ProjectAgentService:
         memory: str = "",
     ) -> AgentToolPlan:
         """Просит модель выбрать только необходимые structured tools."""
+        recent = {
+            "dialog_history": [message.model_dump() for message in history[-10:]],
+            "dialog_memory": memory,
+        }
+        AgentContextBudget(
+            system_prompt=PROJECT_AGENT_TOOL_SELECTION_PROMPT,
+            max_tokens=self.config.context_tokens,
+            history_tokens=self.config.history_tokens,
+        ).prepare(recent)
         content = json.dumps(
             {
                 "question": question,
-                "dialog_memory": memory,
+                "dialog_memory": recent["dialog_memory"],
                 "history": [
-                    {"role": message.role, "content": message.content[:TEXT_FRAGMENT_LIMIT]}
-                    for message in history[-10:]
+                    {"role": message["role"], "content": message["content"][:TEXT_FRAGMENT_LIMIT]}
+                    for message in recent["dialog_history"]
                 ],
             },
             ensure_ascii=False,

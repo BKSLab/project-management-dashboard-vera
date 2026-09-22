@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -11,11 +12,13 @@ from src.clients.vision import VisionCapability
 from src.db.models.knowledge_index_jobs import KnowledgeIndexJob
 from src.exceptions.clients import ClientError
 from src.exceptions.knowledge import KnowledgeProviderError
-from src.knowledge.catalog import ProjectCatalog, build_catalog, digest
+from src.knowledge.catalog import ProjectCatalog, SourceType, build_catalog, digest
 from src.knowledge.documents import KnowledgeDocument
 from src.knowledge.extract import IMAGE_EXTENSIONS, INDEXABLE_EXTENSIONS, extract_indexable_text
+from src.repositories.knowledge_source_summaries import KnowledgeSourceSummariesRepository
 from src.repositories.knowledge_sources import KnowledgeSourcesRepository
 from src.repositories.unit_of_work import UnitOfWork
+from src.services.source_summaries import SourceSummariesService
 from src.storage.task_attachments import TaskAttachmentStorage
 
 
@@ -27,6 +30,7 @@ class PreparedIndexAction:
     catalog: ProjectCatalog
     extractions: list[dict] = field(default_factory=list)
     extraction_errors: list[str] = field(default_factory=list)
+    summaries: list[dict] = field(default_factory=list)
 
 
 class KnowledgeIndexService:
@@ -34,6 +38,8 @@ class KnowledgeIndexService:
         self,
         *,
         sources_repository: KnowledgeSourcesRepository,
+        summaries_repository: KnowledgeSourceSummariesRepository,
+        summarizer: SourceSummariesService,
         unit_of_work: UnitOfWork,
         attachment_storage: TaskAttachmentStorage,
         embedding_batch_size: int,
@@ -44,6 +50,8 @@ class KnowledgeIndexService:
         vision: VisionCapability,
     ):
         self.sources_repository = sources_repository
+        self.summaries_repository = summaries_repository
+        self.summarizer = summarizer
         self.unit_of_work = unit_of_work
         self.attachment_storage = attachment_storage
         self.embedding_batch_size = embedding_batch_size
@@ -74,6 +82,37 @@ class KnowledgeIndexService:
         rows["knowledge_attachment_texts"] = list(cached.values())
         action.catalog = build_catalog(action.project_id, rows)
 
+    async def summarize(self, action: PreparedIndexAction) -> AsyncIterator[dict]:
+        """Готовит описания по одному, чтобы worker сразу сохранял каждый результат.
+
+        Args:
+            action: Снимок с извлечёнными оригиналами, не связанный с DB-сессией.
+        Yields:
+            Готовое описание новой версии документа или файла.
+        """
+        rows = action.catalog.rows
+        summaries = {item["source_id"]: item for item in rows.get("knowledge_source_summaries", [])}
+        for source in action.catalog.sources.values():
+            if source.kind not in {SourceType.DOCUMENT, SourceType.ATTACHMENT} or source.summary:
+                continue
+            if (
+                source.kind is SourceType.ATTACHMENT
+                and source.properties.get("extraction", {}).get("status") != "ready"
+            ):
+                continue
+            try:
+                result = await self.summarizer.summarize(source)
+                action.summaries.append(result)
+                summaries[source.source_id] = result
+                source.summary = result["summary"]
+                rows["knowledge_source_summaries"] = list(summaries.values())
+                yield result
+            except (ClientError, ValueError):
+                # Поиск по оригиналам продолжает работать; очередь повторит только
+                # отсутствующие версии, уже готовые описания сохранены worker-ом.
+                action.extraction_errors.append(f"Описание {source.source_id} временно недоступно.")
+        rows["knowledge_source_summaries"] = list(summaries.values())
+
     async def persist_extractions(self, action: PreparedIndexAction) -> None:
         """Сохраняет извлечение для FTS до обращения к embeddings/Qdrant."""
         if not action.extractions:
@@ -81,6 +120,19 @@ class KnowledgeIndexService:
         try:
             for result in action.extractions:
                 await self.sources_repository.save_extraction(result)
+            await self.unit_of_work.commit()
+        except Exception:
+            await self.unit_of_work.rollback()
+            raise
+
+    async def persist_summary(self, result: dict) -> None:
+        """Фиксирует одно описание до перехода к следующему внешнему вызову.
+
+        Args:
+            result: Описание и идентификаторы версии источника.
+        """
+        try:
+            await self.summaries_repository.save(result)
             await self.unit_of_work.commit()
         except Exception:
             await self.unit_of_work.rollback()

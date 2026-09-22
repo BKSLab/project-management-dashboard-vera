@@ -207,6 +207,13 @@ class DocumentInput(ToolInput):
     document_id: int = Field(gt=0, description="ID документа текущего проекта.")
 
 
+class DocumentReadInput(DocumentInput):
+    offset: int = Field(default=0, ge=0, description="Начало страницы в символах content_md.")
+    max_chars: int = Field(
+        default=4000, ge=500, le=8000, description="Размер страницы оригинального текста."
+    )
+
+
 class DocumentChangesInput(DocumentUpdateSchema, ToolInput):
     """Название и содержимое документа."""
 

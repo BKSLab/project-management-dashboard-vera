@@ -43,7 +43,7 @@ def install_outbox(connection, rules=None):
         from src.knowledge.catalog import POLICIES
 
         rules = [
-            (rule.table, rule.scope, rule.fields) for rule in POLICIES if rule.scope != "attachment"
+            (rule.table, rule.scope, rule.fields) for rule in POLICIES if rule.invalidates_index
         ]
     connection.execute(text(OUTBOX_FUNCTION))
     for table, scope, fields in rules:

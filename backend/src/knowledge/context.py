@@ -40,6 +40,62 @@ def source_view(source: ProjectSource, *, offset: int = 0, max_chars: int = 1200
     }
 
 
+def source_brief(source: ProjectSource, *, offset: int = 0) -> dict:
+    """Описание для отбора: без тела документа, графа связей и тяжёлых свойств."""
+    payload = source.payload()
+    fields = {
+        "task_key",
+        "slug",
+        "status",
+        "stage_id",
+        "priority",
+        "assignee",
+        "role",
+        "start_date",
+        "due_date",
+        "is_done_stage",
+        "risk_level",
+        "owner_user_id",
+        "original_name",
+        "content_type",
+        "task_id",
+        "user_id",
+        "updated_at",
+    }
+    properties = {
+        key: value
+        for key, value in payload["properties"].items()
+        if key in fields and value is not None
+    }
+    is_document = source.kind in {SourceType.DOCUMENT, SourceType.ATTACHMENT}
+    result = {
+        "source_id": source.source_id,
+        "entity_type": source.kind.value,
+        "entity_id": source.entity_id,
+        "title": source.title[:250],
+        "properties": properties,
+        "text": source.summary
+        if is_document and source.summary
+        else source.text[offset : offset + 400],
+        "content_kind": "summary" if is_document and source.summary else "preview",
+        "total_chars": len(source.text),
+        "relations_total": len(source.relations),
+    }
+    if is_document:
+        result["summary_status"] = "ready" if source.summary else "pending"
+    if source.kind is SourceType.ATTACHMENT:
+        extraction = source.properties.get("extraction", {})
+        result["extraction_status"] = extraction.get("status", "pending")
+        if extraction.get("detail"):
+            result["extraction_detail"] = extraction["detail"][:200]
+    if offset:
+        result["matched_locations"] = [{"offset": offset}]
+    if not source.summary:
+        result["offset"] = offset
+        result["next_offset"] = offset + 400 if offset + 400 < len(source.text) else None
+    return result
+
+
 def citation(
     source: ProjectSource, *, excerpt: str, score: float | None = None
 ) -> KnowledgeSourceSchema:
@@ -78,10 +134,11 @@ def read_catalog(
             "items": [
                 {
                     "relation": link,
-                    "source": source_view(catalog.sources[link["source_id"]], max_chars=500),
+                    "source": source_brief(catalog.sources[link["source_id"]]),
                 }
                 for link in page
             ],
+            "offset": request.offset,
             "total": len(links),
             "next_offset": request.offset + len(page)
             if request.offset + len(page) < len(links)
@@ -91,16 +148,16 @@ def read_catalog(
         page = (search_hits or [])[: request.limit]
         return {
             "items": [
-                source_view(
+                source_brief(
                     catalog.sources[hit["source_id"]],
                     offset=matching_offset(
                         catalog.sources[hit["source_id"]].text, request.query or ""
                     ),
-                    max_chars=1200,
                 )
                 for hit in page
                 if hit["source_id"] in catalog.sources
             ],
+            "offset": request.offset,
             "next_offset": request.offset + request.limit
             if len(search_hits or []) > request.limit
             else None,
@@ -115,7 +172,8 @@ def read_catalog(
     )
     page = sources[request.offset : request.offset + request.limit]
     return {
-        "items": [source_view(source, max_chars=500) for source in page],
+        "items": [source_brief(source) for source in page],
+        "offset": request.offset,
         "total": len(sources),
         "next_offset": request.offset + len(page)
         if request.offset + len(page) < len(sources)
@@ -139,7 +197,7 @@ def retrieve(
     query: str,
     target_chars: int,
     overlap_chars: int,
-    limit: int = 20,
+    limit: int = 5,
 ) -> list[dict]:
     """Qdrant задаёт кандидатов; весь текст и метаданные читаются из текущего каталога."""
     by_source = defaultdict(list)
@@ -159,11 +217,11 @@ def retrieve(
     result = []
     for source_id, score in list(scores.items())[:limit]:
         source = catalog.sources[source_id]
-        item = source_view(source, offset=matching_offset(source.text, query))
+        item = source_brief(source, offset=matching_offset(source.text, query))
         item["score"] = score
         chunks = None
         verified = []
-        for hit in by_source[source_id][:3]:
+        for hit in by_source[source_id][:1]:
             index = hit.payload.get("chunk_index")
             if not isinstance(index, int) or index < 0:
                 continue
@@ -172,9 +230,25 @@ def retrieve(
             if index < len(chunks) and chunks[index].payload["text_hash"] == hit.payload.get(
                 "text_hash"
             ):
-                verified.append({"chunk_index": index, "text": chunks[index].text})
+                text = chunks[index].text
+                offset = source.text.find(text)
+                if offset < 0:
+                    # Markdown chunks нормализуют пробелы; offset всегда относится
+                    # к оригиналу, а не к нормализованной строке или номеру chunk.
+                    offset = matching_offset(source.text, query)
+                verified.append({"chunk_index": index, "offset": max(0, offset)})
+                # Пока описание не готово, показываем один короткий актуальный
+                # фрагмент. Кандидат из Qdrant никогда не отдаёт свой старый текст.
+                if not source.summary:
+                    start = matching_offset(text, query)
+                    item["offset"] = (
+                        max(0, offset) + start if source.text.find(text) >= 0 else offset
+                    )
+                    item["text"] = source.text[item["offset"] : item["offset"] + 400]
+                    end = item["offset"] + len(item["text"])
+                    item["next_offset"] = end if end < len(source.text) else None
         if verified:
-            item["matching_chunks"] = verified
+            item["matched_locations"] = verified
         result.append(item)
     return result
 

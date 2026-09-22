@@ -153,6 +153,9 @@ class KnowledgeWorker:
             await service.extract(action)
             async with self.index_service() as persistence:
                 await persistence.persist_extractions(action)
+            async for summary in service.summarize(action):
+                async with self.index_service() as persistence:
+                    await persistence.persist_summary(summary)
             chunks_count = await service.execute_prepared(action)
             return JobExecutionResult(job=job, chunks_count=chunks_count)
         except asyncio.CancelledError:

@@ -49,7 +49,8 @@ async def test_passport_migration_preserves_existing_projects(postgres_container
             .scalars()
             .all()
         )
-        assert set(triggers) == {rule.table for rule in POLICIES if rule.scope != "attachment"}
+        # Производные кэши не ставят самих себя на повторную индексацию.
+        assert set(triggers) == {rule.table for rule in POLICIES if rule.invalidates_index}
         assert connection.execute(
             text(
                 "SELECT description_md, description_sections, due_date_has_been_set FROM projects ORDER BY id"

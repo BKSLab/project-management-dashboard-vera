@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from time import perf_counter
 from typing import TypeVar
 
 import httpx
@@ -84,6 +85,7 @@ class LlmClient:
         }
         last_error: Exception | None = None
         for attempt in range(1, self.retries + 1):
+            started = perf_counter()
             try:
                 response = await self.http_client.post(
                     self.url,
@@ -92,7 +94,31 @@ class LlmClient:
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
-                content_value = response.json()["choices"][0]["message"]["content"]
+                data = response.json()
+                if not isinstance(data, dict):
+                    raise ValueError("Ответ LLM API должен быть объектом.")
+                usage = data.get("usage")
+                usage = usage if isinstance(usage, dict) else {}
+                details = usage.get("prompt_tokens_details")
+                details = details if isinstance(details, dict) else {}
+                logger.info(
+                    "Метрики LLM: %s",
+                    json.dumps(
+                        {
+                            "event": "llm.request",
+                            "model": self.model,
+                            "schema": schema.__name__,
+                            "provider_request_id": data.get("id"),
+                            "attempt": attempt,
+                            "duration_ms": round((perf_counter() - started) * 1000, 3),
+                            "prompt_tokens": usage.get("prompt_tokens"),
+                            "completion_tokens": usage.get("completion_tokens"),
+                            "cached_tokens": details.get("cached_tokens"),
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                content_value = data["choices"][0]["message"]["content"]
                 if not isinstance(content_value, str) or not content_value.strip():
                     raise ValueError("LLM вернул пустой content.")
                 normalized = CODE_FENCE.sub("", content_value.strip()).strip()

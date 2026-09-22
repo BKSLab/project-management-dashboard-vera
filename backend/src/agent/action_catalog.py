@@ -203,8 +203,8 @@ PROJECT_ACTIONS = (
     ProjectAction(
         "get_document",
         "Прочитать документ",
-        "Текст документа и связи с задачами; длинный текст можно дочитать через read_source.",
-        p.DocumentInput,
+        "Страница оригинального текста и связи с задачами; next_offset указывает продолжение.",
+        p.DocumentReadInput,
         documents.get_document,
         mutating=False,
     ),

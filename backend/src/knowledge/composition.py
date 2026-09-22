@@ -20,11 +20,13 @@ from src.core.settings import Settings
 from src.knowledge.runtime import KnowledgeRuntime
 from src.knowledge.worker import IndexServiceFactory, KnowledgeWorker, WorkerConfig
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
+from src.repositories.knowledge_source_summaries import KnowledgeSourceSummariesRepository
 from src.repositories.knowledge_sources import KnowledgeSourcesRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.services.db_scope import KnowledgeQueueScope, KnowledgeQueueScopeFactory
 from src.services.knowledge_index import KnowledgeIndexService
 from src.services.knowledge_queue import KnowledgeQueueService
+from src.services.source_summaries import SourceSummariesService
 from src.storage.task_attachments import TaskAttachmentStorage
 
 
@@ -57,6 +59,11 @@ def build_index_service_factory(
         async with session_factory() as session:
             yield KnowledgeIndexService(
                 sources_repository=KnowledgeSourcesRepository(session),
+                summaries_repository=KnowledgeSourceSummariesRepository(session),
+                summarizer=SourceSummariesService(
+                    llm_client=runtime.llm_client,
+                    chunk_chars=settings.knowledge.knowledge_summary_chunk_chars,
+                ),
                 unit_of_work=UnitOfWork(session),
                 attachment_storage=TaskAttachmentStorage(settings.app.uploads_path),
                 embedding_batch_size=settings.knowledge.knowledge_embedding_batch_size,

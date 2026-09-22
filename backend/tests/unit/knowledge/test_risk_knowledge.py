@@ -108,10 +108,8 @@ def test_matching_tail_chunk_is_kept_and_reading_pages_covers_entire_source():
         target_chars=2200,
         overlap_chars=300,
     )[0]
-    assert (
-        len(result["matching_chunks"]) == 2
-        and "Важное решение" in result["matching_chunks"][0]["text"]
-    )
+    assert len(result["matched_locations"]) == 1 and "Важное решение" in result["text"]
+    assert len(result["text"]) <= 400
     offset = 0
     pages = []
     while offset is not None:

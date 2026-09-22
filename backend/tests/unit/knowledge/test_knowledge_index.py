@@ -11,8 +11,10 @@ from src.clients.qdrant import ProjectQdrantClient
 from src.clients.vision import DisabledVisionCapability
 from src.exceptions.knowledge import KnowledgeProviderError
 from src.knowledge.context import coverage, file_issues
+from src.repositories.knowledge_source_summaries import KnowledgeSourceSummariesRepository
 from src.repositories.knowledge_sources import KnowledgeSourcesRepository
 from src.services.knowledge_index import KnowledgeIndexService
+from src.services.source_summaries import SourceSummariesService, SourceSummaryOutput
 
 
 def base_rows():
@@ -74,6 +76,15 @@ def build_service(tmp_path, *, rows=None, qdrant=None):
     storage.resolve.side_effect = lambda key: tmp_path / key
     service = KnowledgeIndexService(
         sources_repository=repository,
+        summaries_repository=AsyncMock(spec=KnowledgeSourceSummariesRepository),
+        summarizer=SourceSummariesService(
+            llm_client=AsyncMock(
+                get_structured_response=AsyncMock(
+                    return_value=SourceSummaryOutput(summary="Описание тестового документа.")
+                )
+            ),
+            chunk_chars=16000,
+        ),
         unit_of_work=AsyncMock(),
         attachment_storage=storage,
         embedding_batch_size=32,
@@ -92,6 +103,8 @@ async def sync(service, rows=None):
     action = await service.prepare(SimpleNamespace(project_id=1))
     await service.extract(action)
     await service.persist_extractions(action)
+    async for summary in service.summarize(action):
+        await service.persist_summary(summary)
     await service.execute_prepared(action)
     return action
 

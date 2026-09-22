@@ -6,6 +6,7 @@ worst-case на число попыток. Разделение категори
 """
 
 import json
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -20,6 +21,33 @@ class AnswerSchema(BaseModel):
     """Минимальная схема структурированного ответа."""
 
     answer: str
+
+
+async def test_usage_metrics_include_tokens_but_not_document_text(monkeypatch):
+    info = Mock()
+    monkeypatch.setattr("src.clients.llm.logger.info", info)
+    client = build_client(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "id": "gen-test",
+                "usage": {
+                    "prompt_tokens": 321,
+                    "completion_tokens": 12,
+                    "prompt_tokens_details": {"cached_tokens": 100},
+                },
+                "choices": [{"message": {"content": '{"answer":"секретный текст документа"}'}}],
+            },
+        )
+    )
+    try:
+        await _ask(client)
+        record = json.loads(info.call_args.args[1])
+        assert record["prompt_tokens"] == 321 and record["cached_tokens"] == 100
+        assert record["provider_request_id"] == "gen-test"
+        assert "секретный текст" not in info.call_args.args[1]
+    finally:
+        await client.http_client.aclose()
 
 
 def build_client(handler, *, retries: int = 2) -> LlmClient:
@@ -79,14 +107,13 @@ async def test_retryable_statuses_are_retried() -> None:
         assert (await _ask(build_client(handler, retries=3))).answer == "готово"
         assert attempts["count"] == 2, f"{status_code} не повторён"
 
+
 async def test_worst_case_budget_is_derived_from_timeout_and_attempts() -> None:
     """Бюджет худшего случая считается из timeout и попыток, ноль попыток недопустим, продовые значения дают известное число."""
     # Бюджет вызова доступен как свойство клиента.
     client = build_client(lambda request: build_response("{}"), retries=3)
 
-    assert client.worst_case_seconds == pytest.approx(
-        worst_case_seconds(timeout=5, attempts=3)
-    )
+    assert client.worst_case_seconds == pytest.approx(worst_case_seconds(timeout=5, attempts=3))
     # Ноль попыток — некорректный бюджет, а не мгновенный вызов.
     with pytest.raises(ValueError):
         worst_case_seconds(timeout=5, attempts=0)
