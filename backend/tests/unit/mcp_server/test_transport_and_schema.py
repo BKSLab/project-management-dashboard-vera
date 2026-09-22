@@ -8,6 +8,7 @@ from src.core.settings import get_settings
 from src.mcp_server.server import MAX_LIMIT, mcp_server
 
 READ_TOOLS = {
+    "list_project_tools",
     "list_project_risks",
     "get_project_risk",
     "list_projects",
@@ -23,6 +24,7 @@ READ_TOOLS = {
     "list_milestones",
 }
 WRITE_TOOLS = {
+    "execute_project_tool",
     "create_project_risk",
     "update_project_risk",
     "create_task",

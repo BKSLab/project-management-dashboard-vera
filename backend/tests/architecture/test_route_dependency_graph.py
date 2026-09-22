@@ -29,6 +29,7 @@ SESSION_ONLY_ROUTES = {
 
 # POST, которые ничего не меняют: расчёт, предпросмотр и поиск.
 READ_ONLY_POST_ROUTES = {
+    ("POST", "/api/v1/projects/{project_id}/chat/entities/resolve"),
     ("POST", "/api/v1/projects/{project_id}/risks/field-suggestion"),
     ("POST", "/api/v1/projects/{project_id}/tasks/checklist-suggestion"),
     ("POST", "/api/v1/projects/{project_id}/risks/suggestions"),
@@ -42,6 +43,7 @@ READ_ONLY_POST_ROUTES = {
 # короткой области базы внутри сервиса, поэтому guard в графе маршрута
 # отсутствует намеренно, а request-scoped сессии там быть не должно.
 STREAMING_ROUTES = {
+    ("GET", "/api/v1/projects/{project_id}/chat/attachments/{file_id}/content"),
     ("GET", "/api/v1/tasks/{task_id}/attachments/{attachment_id}/content"),
 }
 
@@ -53,8 +55,8 @@ DETACHED_AUTH_ROUTES = STREAMING_ROUTES | {
     ("POST", "/api/v1/projects/{project_id}/risks/suggestions"),
 }
 
-EXPECTED_NON_GET_TOTAL = 62
-EXPECTED_MUTATION_TOTAL = 50
+EXPECTED_NON_GET_TOTAL = 77
+EXPECTED_MUTATION_TOTAL = 64
 
 
 def route_dependencies(route: APIRoute) -> set[str]:
@@ -96,6 +98,7 @@ def mutation_routes() -> list[tuple[str, str, APIRoute]]:
 def test_project_scoped_routes_check_project_access() -> None:
     """Маршрут внутри проекта проверяет доступ к этому проекту."""
     guards = {
+        "require_chat_access",
         "require_project_access",
         "require_project_ownership",
         "require_task_access",
@@ -179,7 +182,7 @@ def test_write_scope_is_required_exactly_where_it_should_be() -> None:
     unprotected = [
         f"{method} {path}"
         for method, path, route in mutation_routes()
-        if "require_write_scope" not in route_dependencies(route)
+        if not {"require_write_scope", "require_chat_write_scope"} & route_dependencies(route)
     ]
 
     assert not unprotected, "Маршруты изменяют данные без проверки scope записи:\n  " + "\n  ".join(
@@ -190,7 +193,7 @@ def test_write_scope_is_required_exactly_where_it_should_be() -> None:
         f"{method} {path}"
         for method, path, route in api_routes()
         if (method, path) in READ_ONLY_POST_ROUTES
-        and "require_write_scope" in route_dependencies(route)
+        and {"require_write_scope", "require_chat_write_scope"} & route_dependencies(route)
     ]
 
     assert not wrongly_protected, (
@@ -201,7 +204,8 @@ def test_write_scope_is_required_exactly_where_it_should_be() -> None:
     wrongly_protected = [
         f"{method} {path}"
         for method, path, route in api_routes()
-        if method == "GET" and "require_write_scope" in route_dependencies(route)
+        if method == "GET"
+        and {"require_write_scope", "require_chat_write_scope"} & route_dependencies(route)
     ]
 
     assert not wrongly_protected, "Чтение требует право записи:\n  " + "\n  ".join(
@@ -210,7 +214,7 @@ def test_write_scope_is_required_exactly_where_it_should_be() -> None:
 
 
 def test_route_inventory_is_classified_and_counted() -> None:
-    """Каждый non-GET маршрут классифицирован, числа совпадают с зафиксированным реестром, WebSocket-маршрутов нет."""
+    """HTTP-реестр и единственный WebSocket чата классифицированы явно."""
     # Каждый изменяющий по методу маршрут отнесён к известному классу. Новый неклассифицированный маршрут ломает тест: решение о его правах должно быть принято явно, а не унаследовано по умолчанию.
     actual = {(method, path) for method, path, _ in non_get_routes()}
     explicit = PUBLIC_ROUTES | SESSION_ONLY_ROUTES | READ_ONLY_POST_ROUTES
@@ -223,13 +227,20 @@ def test_route_inventory_is_classified_and_counted() -> None:
     )
     # Число доменных мутаций совпадает с зафиксированным инвентарём.
     assert len(mutation_routes()) == EXPECTED_MUTATION_TOTAL
-    # WebSocket-маршрутов нет, и новый не появится незамеченным. Классификация выше построена на `APIRoute` и парах метод-путь; WebSocket в неё не попадает, поэтому его появление должно потребовать отдельного решения о правах, а не пройти мимо всех проверок.
-    sockets = [route.path for route in app.routes if isinstance(route, APIWebSocketRoute)]
+    sockets = [route for route in app.routes if isinstance(route, APIWebSocketRoute)]
+    assert [route.path for route in sockets] == ["/api/v1/projects/{project_id}/chat/ws"]
+    # Auth/membership и READ/WRITE проверяются короткими фазами ChatService;
+    # реальные HTTP/ASGI интеграционные проверки покрывают запреты и отзыв прав.
+    for route in sockets:
+        assert "get_chat_runtime" in route_dependencies(route)
+        assert "get_db_session" not in route_dependencies(route)
 
-    assert not sockets, (
-        f"Появились WebSocket-маршруты без классификации прав: {sockets}. "
-        "Добавь для них проверку scope и удержания ресурсов."
-    )
+
+def test_chat_http_never_holds_guard_connection_during_service_operation() -> None:
+    """Пул не исчерпывается вложенными guard/service-сессиями HTTP чата."""
+    for _, path, route in api_routes():
+        if "/chat" in path:
+            assert "get_db_session" not in route_dependencies(route)
 
 
 def test_authentication_is_required_everywhere_except_public_routes() -> None:
@@ -247,7 +258,7 @@ def test_authentication_is_required_everywhere_except_public_routes() -> None:
         f"{method} {path}"
         for method, path, route in api_routes()
         if (method, path) not in PUBLIC_ROUTES | DETACHED_AUTH_ROUTES
-        and "get_principal" not in route_dependencies(route)
+        and not {"get_principal", "require_chat_access"} & route_dependencies(route)
     ]
 
     assert not unauthenticated, "Маршруты доступны без аутентификации:\n  " + "\n  ".join(

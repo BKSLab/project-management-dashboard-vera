@@ -337,6 +337,49 @@ class ProjectsService:
             payload["description_sections"] = None
         return payload
 
+    async def transfer_ownership(
+        self, project_id: int, new_owner_id: int, acting_user_id: int
+    ) -> ProjectSchema:
+        """Передаёт владение активному участнику, оставляя прежнего в команде.
+
+        Args:
+            project_id: Проект передачи.
+            new_owner_id: Уже включённый в команду участник.
+            acting_user_id: Текущий владелец, подтверждающий передачу.
+        Returns:
+            Проект с новым владельцем.
+        Raises:
+            ProjectValidationError: Если владелец сменился или получатель недоступен.
+            ProjectsServiceError: Если записать передачу не удалось.
+        """
+        try:
+            project = await self.projects_repository.get_by_id(
+                project_id=project_id, for_update=True
+            )
+            if project is None:
+                raise ProjectNotFoundError(project_id=project_id)
+            if project.owner_id != acting_user_id:
+                raise ProjectValidationError("Передачу может выполнить только текущий владелец.")
+            member = await self.members_repository.get(
+                project_id=project_id, user_id=new_owner_id, for_update=True
+            )
+            user = await self.users_repository.get_by_id(new_owner_id)
+            if member is None or user is None or not user.is_active:
+                raise ProjectValidationError(
+                    "Новый владелец должен быть активным участником проекта."
+                )
+            if new_owner_id != project.owner_id:
+                await self.members_repository.set_role(
+                    project_id, project.owner_id, ProjectRole.MEMBER
+                )
+                await self.members_repository.set_role(project_id, new_owner_id, ProjectRole.OWNER)
+                await self.projects_repository.update(project, {"owner_id": new_owner_id})
+            await self.unit_of_work.commit()
+            return ProjectSchema.model_validate(project)
+        except RepositoryErrors as error:
+            await self.unit_of_work.rollback()
+            raise ProjectsServiceError(str(error)) from error
+
     async def delete_project(self, project_id: int) -> None:
         """Удаляет проект вместе с задачами, стадиями, структурой и документами.
 

@@ -31,6 +31,8 @@ from src.services.project_query import (
 )
 
 EXPECTED_TOOLS = {
+    "list_project_tools",
+    "execute_project_tool",
     "list_project_risks",
     "get_project_risk",
     "create_project_risk",
@@ -58,6 +60,8 @@ EXPECTED_TOOLS = {
 # Обязательные поля каждого инструмента: изменение этого множества ломает
 # уже настроенных внешних клиентов.
 EXPECTED_REQUIRED = {
+    "list_project_tools": {"project_key"},
+    "execute_project_tool": {"project_key", "name", "arguments"},
     "read_project_knowledge": {"project_key", "request"},
     "list_project_risks": {"project_key"},
     "get_project_risk": {"project_key", "risk_key"},

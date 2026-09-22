@@ -9,24 +9,43 @@
 получают только фабрику области и о SQLAlchemy не знают.
 """
 
+from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from time import monotonic
 from typing import Annotated
 
 from fastapi import Depends
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.core.settings import Settings
 from src.db.session import async_session_factory
 from src.dependencies.settings import SettingsDep
 from src.dependencies.storage import TaskAttachmentStorageDep
+from src.exceptions.project_chats import ChatRepositoryError
+from src.repositories.agent_conversations import AgentConversationsRepository
+from src.repositories.agent_files import AgentFilesRepository
+from src.repositories.agent_messages import AgentMessagesRepository
+from src.repositories.agent_tool_runs import AgentToolRunsRepository
 from src.repositories.analytics_reports import AnalyticsReportsRepository
 from src.repositories.api_tokens import ApiTokensRepository
+from src.repositories.chat_attachments import ChatAttachmentsRepository
+from src.repositories.chat_entity_lookup import ChatEntityLookupRepository
+from src.repositories.chat_events import ChatEventsRepository
+from src.repositories.chat_message_entities import ChatMessageEntitiesRepository
+from src.repositories.chat_message_mentions import ChatMessageMentionsRepository
+from src.repositories.chat_messages import ChatMessagesRepository
+from src.repositories.chat_participants import ChatParticipantsRepository
+from src.repositories.chat_reactions import ChatReactionsRepository
+from src.repositories.chat_read_states import ChatReadStatesRepository
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.knowledge_sources import KnowledgeSourcesRepository
 from src.repositories.milestones import MilestonesRepository
+from src.repositories.project_chats import ProjectChatsRepository
+from src.repositories.project_deadline_changes import ProjectDeadlineChangesRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.project_stages import ProjectStagesRepository
@@ -38,10 +57,11 @@ from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.task_dependencies import TaskDependenciesRepository
 from src.repositories.task_participants import TaskParticipantsRepository
 from src.repositories.tasks import TasksRepository
-from src.repositories.unit_of_work import UnitOfWork
+from src.repositories.unit_of_work import AgentToolUnitOfWork, UnitOfWork
 from src.repositories.users import UsersRepository
 from src.repositories.wbs_nodes import WbsNodesRepository
 from src.services.access import AccessService
+from src.services.agent_tool_scope import AgentProjectToolScope, AgentProjectToolScopeFactory
 from src.services.attachment_download import (
     AttachmentDownloadScope,
     AttachmentDownloadService,
@@ -49,9 +69,14 @@ from src.services.attachment_download import (
 from src.services.auth import AuthService
 from src.services.calendar import CalendarService
 from src.services.calendar_scenarios import CalendarScenarioService
+from src.services.chat_scope import ChatScope, ChatScopeFactory
 from src.services.db_scope import (
+    AgentConversationScope,
+    AgentConversationScopeFactory,
     AnalyticsDbScope,
     ProjectAgentScope,
+    ProjectQueryScope,
+    ProjectQueryScopeFactory,
     TaskDescriptionScope,
     TaskDocumentImportScope,
     WbsSuggestionScope,
@@ -59,15 +84,346 @@ from src.services.db_scope import (
 from src.services.document_links import DocumentLinksService
 from src.services.documents import DocumentsService
 from src.services.knowledge_events import KnowledgeEvents
+from src.services.milestones import MilestonesService
+from src.services.project_members import ProjectMembersService
+from src.services.project_risks import ProjectRiskService
+from src.services.project_stages import ProjectStagesService
+from src.services.project_stickers import ProjectStickersService
+from src.services.projects import ProjectsService
 from src.services.risk_suggestions import RiskSuggestionScope, RiskSuggestionScopeFactory
 from src.services.task_attachments import TaskAttachmentsService
 from src.services.task_checklist_suggestions import (
     ChecklistSuggestionScope,
     ChecklistSuggestionScopeFactory,
 )
+from src.services.task_comments import TaskCommentsService
+from src.services.task_dependencies import TaskDependenciesService
+from src.services.tasks import TasksService
+from src.services.users import UsersService
+from src.services.wbs_nodes import WbsNodesService
+from src.storage.agent_tool_files import AgentToolFileStorage
+from src.storage.avatars import AvatarStorage
 from src.storage.task_attachments import TaskAttachmentStorage
 
 SessionFactory = async_sessionmaker[AsyncSession]
+
+
+def build_chat_scope(
+    *, session_factory: SessionFactory, invite_code: str, metrics: Counter | None = None
+) -> ChatScopeFactory:
+    """Создаёт сессию только на одну операцию чата или проверку handshake."""
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[ChatScope]:
+        async with session_factory() as session:
+            started = monotonic()
+            if metrics is not None:
+                metrics["db_acquiring"] += 1
+            try:
+                await session.connection()
+            except SQLAlchemyError as error:
+                if metrics is not None:
+                    metrics["db_acquire_failures_total"] += 1
+                raise ChatRepositoryError(type(error).__name__) from None
+            finally:
+                if metrics is not None:
+                    duration = (monotonic() - started) * 1000
+                    metrics["db_acquiring"] -= 1
+                    metrics["db_acquire_count"] += 1
+                    metrics["db_acquire_ms_sum"] += duration
+                    metrics["db_acquire_ms_max"] = max(metrics["db_acquire_ms_max"], duration)
+            yield ChatScope(
+                chats=ProjectChatsRepository(session),
+                messages=ChatMessagesRepository(session),
+                entities=ChatMessageEntitiesRepository(session),
+                entity_lookup=ChatEntityLookupRepository(session),
+                mentions=ChatMessageMentionsRepository(session),
+                attachments=ChatAttachmentsRepository(session),
+                reactions=ChatReactionsRepository(session),
+                reads=ChatReadStatesRepository(session),
+                events=ChatEventsRepository(session),
+                participants=ChatParticipantsRepository(session),
+                auth=AuthService(
+                    UsersRepository(session),
+                    tokens_repository=ApiTokensRepository(session),
+                    invite_code=invite_code,
+                ),
+                unit_of_work=UnitOfWork(session),
+            )
+
+    return scope
+
+
+def build_agent_project_tool_scope(
+    *, session_factory: SessionFactory, settings: Settings
+) -> AgentProjectToolScopeFactory:
+    """Объединяет результат инструмента и доменные commit одной внешней транзакцией.
+
+    Сервисы используют обычный UnitOfWork. Их commit завершает SAVEPOINT;
+    внешнюю транзакцию фиксирует только AgentToolUnitOfWork после записи журнала.
+    """
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[AgentProjectToolScope]:
+        files = AgentToolFileStorage(settings.app.uploads_path)
+        upload_storage = AgentToolFileStorage(settings.app.uploads_path / "agent")
+        async with session_factory() as outer:
+            async with outer.begin():
+                connection = await outer.connection()
+                async with session_factory(
+                    bind=connection, join_transaction_mode="create_savepoint"
+                ) as session:
+                    unit_of_work = AgentToolUnitOfWork(outer, session)
+                    domain_uow = UnitOfWork(session)
+                    projects = ProjectsRepository(session)
+                    members = ProjectMembersRepository(session)
+                    users = UsersRepository(session)
+                    stages = ProjectStagesRepository(session)
+                    tasks = TasksRepository(session)
+                    participants = TaskParticipantsRepository(session)
+                    comments = TaskCommentsRepository(session)
+                    activity = TaskActivityRepository(session)
+                    nodes = WbsNodesRepository(session)
+                    documents = DocumentsRepository(session)
+                    links = DocumentLinksRepository(session)
+                    milestones = MilestonesRepository(session)
+                    dependencies = TaskDependenciesRepository(session)
+                    risks = ProjectRiskRepository(session)
+                    access = AccessService(
+                        members_repository=members,
+                        tasks_repository=tasks,
+                        stages_repository=stages,
+                        documents_repository=documents,
+                        comments_repository=comments,
+                        links_repository=links,
+                    )
+                    events = KnowledgeEvents(
+                        repository=KnowledgeIndexJobsRepository(session),
+                        enabled=settings.knowledge.knowledge_enabled,
+                    )
+                    try:
+                        yield AgentProjectToolScope(
+                            projects=ProjectsService(
+                                projects_repository=projects,
+                                members_repository=members,
+                                stages_repository=stages,
+                                tasks_repository=tasks,
+                                unit_of_work=domain_uow,
+                                attachment_storage=files,
+                                knowledge_events=events,
+                                users_repository=users,
+                                deadline_changes_repository=ProjectDeadlineChangesRepository(
+                                    session
+                                ),
+                            ),
+                            tasks=TasksService(
+                                tasks_repository=tasks,
+                                members_repository=members,
+                                participants_repository=participants,
+                                projects_repository=projects,
+                                stages_repository=stages,
+                                comments_repository=comments,
+                                activity_repository=activity,
+                                wbs_nodes_repository=nodes,
+                                unit_of_work=domain_uow,
+                                attachment_storage=files,
+                                knowledge_events=events,
+                            ),
+                            comments=TaskCommentsService(
+                                comments_repository=comments,
+                                tasks_repository=tasks,
+                                activity_repository=activity,
+                                unit_of_work=domain_uow,
+                                knowledge_events=events,
+                            ),
+                            members=ProjectMembersService(
+                                members_repository=members,
+                                users_repository=users,
+                                participants_repository=participants,
+                                tasks_repository=tasks,
+                                unit_of_work=domain_uow,
+                                risks_repository=risks,
+                                knowledge_events=events,
+                                users_service=UsersService(
+                                    users_repository=users,
+                                    avatar_storage=AvatarStorage(settings.auth.avatars_path),
+                                ),
+                            ),
+                            stickers=ProjectStickersService(
+                                stickers_repository=ProjectStickersRepository(session),
+                                tasks_repository=tasks,
+                                unit_of_work=domain_uow,
+                            ),
+                            stages=ProjectStagesService(
+                                stages_repository=stages,
+                                projects_repository=projects,
+                                tasks_repository=tasks,
+                                unit_of_work=domain_uow,
+                            ),
+                            documents=DocumentsService(
+                                documents_repository=documents,
+                                projects_repository=projects,
+                                unit_of_work=domain_uow,
+                                knowledge_events=events,
+                            ),
+                            links=DocumentLinksService(
+                                document_links_repository=links,
+                                documents_repository=documents,
+                                tasks_repository=tasks,
+                                projects_repository=projects,
+                                members_repository=members,
+                            ),
+                            attachments=TaskAttachmentsService(
+                                attachments_repository=TaskAttachmentsRepository(session),
+                                tasks_repository=tasks,
+                                storage=files,
+                                unit_of_work=domain_uow,
+                                knowledge_events=events,
+                            ),
+                            wbs=WbsNodesService(
+                                wbs_nodes_repository=nodes,
+                                projects_repository=projects,
+                                stages_repository=stages,
+                                tasks_repository=tasks,
+                                activity_repository=activity,
+                                unit_of_work=domain_uow,
+                                knowledge_events=events,
+                            ),
+                            milestones=MilestonesService(
+                                milestones_repository=milestones,
+                                projects_repository=projects,
+                                wbs_nodes_repository=nodes,
+                                unit_of_work=domain_uow,
+                                knowledge_events=events,
+                            ),
+                            dependencies=TaskDependenciesService(
+                                dependencies_repository=dependencies,
+                                projects_repository=projects,
+                                tasks_repository=tasks,
+                                unit_of_work=domain_uow,
+                            ),
+                            calendar=CalendarService(
+                                projects_repository=projects,
+                                tasks_repository=tasks,
+                                stages_repository=stages,
+                                wbs_nodes_repository=nodes,
+                                activity_repository=activity,
+                                dependencies_repository=dependencies,
+                                milestones_repository=milestones,
+                            ),
+                            scenarios=CalendarScenarioService(
+                                projects_repository=projects,
+                                tasks_repository=tasks,
+                                dependencies_repository=dependencies,
+                                milestones_repository=milestones,
+                                activity_repository=activity,
+                                unit_of_work=domain_uow,
+                            ),
+                            risks=ProjectRiskService(
+                                risks_repository=risks,
+                                tasks_repository=tasks,
+                                members_repository=members,
+                                access_service=access,
+                                knowledge_events=events,
+                                unit_of_work=domain_uow,
+                                projects_repository=projects,
+                            ),
+                            access=access,
+                            users=users,
+                            conversations=AgentConversationsRepository(session),
+                            messages=AgentMessagesRepository(session),
+                            runs=AgentToolRunsRepository(session),
+                            unit_of_work=unit_of_work,
+                            uploads=AgentFilesRepository(session),
+                            upload_storage=upload_storage,
+                        )
+                    finally:
+                        if not unit_of_work.committed:
+                            await outer.rollback()
+                        await files.finish(committed=unit_of_work.committed)
+                        await upload_storage.finish(committed=unit_of_work.committed)
+
+    return scope
+
+
+def get_agent_project_tool_scope(settings: SettingsDep) -> AgentProjectToolScopeFactory:
+    """Внедряет фабрику коротких атомарных действий проекта."""
+    return build_agent_project_tool_scope(session_factory=async_session_factory, settings=settings)
+
+
+AgentProjectToolScopeDep = Annotated[
+    AgentProjectToolScopeFactory, Depends(get_agent_project_tool_scope)
+]
+
+
+def build_agent_conversation_scope(
+    *, session_factory: SessionFactory
+) -> AgentConversationScopeFactory:
+    """Собирает короткие области переписки и повторной проверки доступа worker-а."""
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[AgentConversationScope]:
+        async with session_factory() as session:
+            yield AgentConversationScope(
+                conversations=AgentConversationsRepository(session),
+                messages=AgentMessagesRepository(session),
+                runs=AgentToolRunsRepository(session),
+                uploads=AgentFilesRepository(session),
+                users=UsersRepository(session),
+                access=AccessService(
+                    members_repository=ProjectMembersRepository(session),
+                    tasks_repository=TasksRepository(session),
+                    stages_repository=ProjectStagesRepository(session),
+                    documents_repository=DocumentsRepository(session),
+                    comments_repository=TaskCommentsRepository(session),
+                    links_repository=DocumentLinksRepository(session),
+                ),
+                unit_of_work=UnitOfWork(session),
+            )
+
+    return scope
+
+
+def get_agent_conversation_scope() -> AgentConversationScopeFactory:
+    """Возвращает фабрику коротких транзакций проектного диалога."""
+    return build_agent_conversation_scope(session_factory=async_session_factory)
+
+
+AgentConversationScopeDep = Annotated[
+    AgentConversationScopeFactory, Depends(get_agent_conversation_scope)
+]
+
+
+def build_project_knowledge_query_scope(
+    *, session_factory: SessionFactory
+) -> ProjectQueryScopeFactory:
+    """Собирает короткую область существующего сервиса чтения знаний."""
+
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[ProjectQueryScope]:
+        async with session_factory() as session:
+            yield ProjectQueryScope(
+                sources=KnowledgeSourcesRepository(session),
+                projects=ProjectsRepository(session),
+                members=ProjectMembersRepository(session),
+                stages=ProjectStagesRepository(session),
+                tasks=TasksRepository(session),
+                comments=TaskCommentsRepository(session),
+                wbs_nodes=WbsNodesRepository(session),
+                milestones=MilestonesRepository(session),
+            )
+
+    return scope
+
+
+def get_project_knowledge_query_scope() -> ProjectQueryScopeFactory:
+    """Возвращает фабрику области инструментов чтения."""
+    return build_project_knowledge_query_scope(session_factory=async_session_factory)
+
+
+ProjectKnowledgeQueryScopeDep = Annotated[
+    ProjectQueryScopeFactory, Depends(get_project_knowledge_query_scope)
+]
 
 
 def build_checklist_suggestion_scope(

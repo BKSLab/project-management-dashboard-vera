@@ -114,6 +114,15 @@ export const endpoints = {
     projectKnowledgeStatus: (projectId: number) =>
         `${V1}/projects/${projectId}/knowledge/status`,
     projectKnowledgeAsk: (projectId: number) => `${V1}/projects/${projectId}/knowledge/ask`,
+    agentConversations: (projectId: number) => `${V1}/projects/${projectId}/agent/conversations`,
+    agentMessages: (projectId: number, conversationId: number) =>
+        `${V1}/projects/${projectId}/agent/conversations/${conversationId}/messages`,
+    agentActionDecision: (projectId: number, conversationId: number, actionId: string) =>
+        `${V1}/projects/${projectId}/agent/conversations/${conversationId}/actions/${actionId}/decision`,
+    agentFiles: (projectId: number, conversationId: number) =>
+        `${V1}/projects/${projectId}/agent/conversations/${conversationId}/files`,
+    agentMessageRetry: (projectId: number, conversationId: number, messageId: number) =>
+        `${V1}/projects/${projectId}/agent/conversations/${conversationId}/messages/${messageId}/retry`,
     projectKnowledgeReindex: (projectId: number) =>
         `${V1}/projects/${projectId}/knowledge/reindex`,
     projectStages: (projectId: number) => `${V1}/projects/${projectId}/stages`,

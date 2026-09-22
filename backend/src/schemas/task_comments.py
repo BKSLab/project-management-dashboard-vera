@@ -3,6 +3,16 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class CommentUpdateSchema(BaseModel):
+    """Правка комментария с проверкой прочитанной версии."""
+
+    model_config = ConfigDict(extra="forbid")
+    body_md: str = Field(min_length=1, max_length=50000, description="Новый текст комментария.")
+    expected_body_md: str = Field(
+        max_length=50000, description="Прочитанный текст для защиты от потери чужой правки."
+    )
+
+
 class CommentSchema(BaseModel):
     """Комментарий задачи канбана."""
 

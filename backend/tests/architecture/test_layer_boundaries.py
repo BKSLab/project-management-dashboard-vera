@@ -38,6 +38,8 @@ COMPOSITION_MODULES = {
     SRC / "mcp_server" / "services.py",
     SRC / "knowledge" / "composition.py",
     SRC / "knowledge" / "runtime.py",
+    # Lifecycle и сборка общего чата с одним Redis transport на процесс.
+    SRC / "realtime" / "runtime.py",
     SRC / "main.py",
 }
 
@@ -66,9 +68,7 @@ def endpoint_files() -> list[Path]:
 
 def service_files() -> list[Path]:
     """Возвращает модули сервисного слоя."""
-    return [
-        path for path in sorted((SRC / "services").glob("*.py")) if path.name != "__init__.py"
-    ]
+    return [path for path in sorted((SRC / "services").glob("*.py")) if path.name != "__init__.py"]
 
 
 def imported_modules(path: Path) -> list[tuple[str, int]]:
@@ -189,8 +189,8 @@ def test_repository_constructors_live_only_in_composition_modules() -> None:
             and node.func.id.endswith("Repository")
         )
 
-    assert not offenders, (
-        "Репозитории создаются вне модулей сборки графа:\n  " + "\n  ".join(offenders)
+    assert not offenders, "Репозитории создаются вне модулей сборки графа:\n  " + "\n  ".join(
+        offenders
     )
 
 

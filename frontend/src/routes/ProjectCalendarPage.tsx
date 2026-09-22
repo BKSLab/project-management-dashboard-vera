@@ -87,7 +87,7 @@ export function ProjectCalendarPage() {
     const scale = normalizeScale(searchParams.get("scale"));
     const anchor = normalizeDate(searchParams.get("anchor"), today);
     const range = useMemo(() => timelineRange(anchor, scale), [anchor, scale]);
-    const initialSelected = today >= range.dateFrom && today <= range.dateTo ? today : range.dateFrom;
+    const initialSelected = searchParams.has("milestone") ? anchor : today >= range.dateFrom && today <= range.dateTo ? today : range.dateFrom;
     const [selectedDate, setSelectedDate] = useState(initialSelected);
     const [activeTask, setActiveTask] = useState<CalendarTaskModel | null>(null);
     const [deadlineTask, setDeadlineTask] = useState<CalendarTaskModel | null>(null);

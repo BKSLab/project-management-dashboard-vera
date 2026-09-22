@@ -3,16 +3,60 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
-from src.api.v1.responses import NOT_FOUND_RESPONSE, SERVER_ERROR_RESPONSE, VALIDATION_RESPONSE
+from src.api.v1.responses import (
+    CONFLICT_RESPONSE,
+    NOT_FOUND_RESPONSE,
+    SERVER_ERROR_RESPONSE,
+    VALIDATION_RESPONSE,
+)
 from src.dependencies.access import require_comment_access, require_task_access
 from src.dependencies.auth import require_write_scope
 from src.dependencies.services import TaskCommentsServiceDep
 from src.exceptions.task_comments import TaskCommentsServiceError
 from src.exceptions.tasks import TasksServiceError
-from src.schemas.task_comments import CommentCreateSchema, CommentSchema
+from src.schemas.task_comments import CommentCreateSchema, CommentSchema, CommentUpdateSchema
 
 router = APIRouter(prefix="", tags=["task-comments"])
 logger = logging.getLogger(__name__)
+
+
+@router.patch(
+    "/comments/{comment_id}",
+    dependencies=[Depends(require_comment_access), Depends(require_write_scope)],
+    response_model=CommentSchema,
+    summary="Изменить комментарий",
+    description="Меняет текст без смены автора. Прочитанный текст должен совпасть с текущим; иначе возвращается конфликт.",
+    operation_id="updateTaskComment",
+    response_description="Изменённый комментарий.",
+    responses={
+        404: NOT_FOUND_RESPONSE,
+        409: CONFLICT_RESPONSE,
+        422: VALIDATION_RESPONSE,
+        500: SERVER_ERROR_RESPONSE,
+    },
+)
+async def update_comment(
+    comment_id: Annotated[int, Path(gt=0, description="ID комментария.")],
+    data: CommentUpdateSchema,
+    service: TaskCommentsServiceDep,
+) -> CommentSchema:
+    """Редактирует комментарий через общий доменный сценарий.
+
+    Args:
+        comment_id: Комментарий, доступ к которому проверен зависимостью.
+        data: Текст и прочитанная версия.
+        service: Сервис комментариев.
+    Returns:
+        Изменённая карточка комментария.
+    """
+    logger.info("🚀 Изменение комментария id=%s.", comment_id)
+    try:
+        result = await service.update_comment(comment_id, data.body_md, data.expected_body_md)
+        logger.info("✅ Комментарий id=%s изменён.", comment_id)
+        return result
+    except (TaskCommentsServiceError, TasksServiceError) as error:
+        logger.exception("❌ Не удалось изменить комментарий id=%s.", comment_id)
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.get(

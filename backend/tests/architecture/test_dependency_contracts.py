@@ -41,6 +41,7 @@ DEPENDENCIES = SRC / "dependencies"
 # Сценарии с медленным внешним вызовом. Каждый обязан работать через
 # короткую область базы, а не через репозитории, живущие вместе с ним.
 EXTERNAL_CALL_SERVICES = {
+    "agent_conversations.py": "AgentConversationsService",
     "risk_suggestions.py": "RiskSuggestionService",
     "task_checklist_suggestions.py": "TaskChecklistSuggestionService",
     "analytics.py": "AnalyticsService",

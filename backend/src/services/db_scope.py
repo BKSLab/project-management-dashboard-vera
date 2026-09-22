@@ -21,6 +21,10 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 
+from src.repositories.agent_conversations import AgentConversationsRepository
+from src.repositories.agent_files import AgentFilesRepository
+from src.repositories.agent_messages import AgentMessagesRepository
+from src.repositories.agent_tool_runs import AgentToolRunsRepository
 from src.repositories.analytics_reports import AnalyticsReportsRepository
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
@@ -39,7 +43,9 @@ from src.repositories.task_dependencies import TaskDependenciesRepository
 from src.repositories.task_participants import TaskParticipantsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
+from src.repositories.users import UsersRepository
 from src.repositories.wbs_nodes import WbsNodesRepository
+from src.services.access import AccessService
 from src.services.calendar import CalendarService
 from src.services.calendar_scenarios import CalendarScenarioService
 from src.services.document_links import DocumentLinksService
@@ -177,3 +183,19 @@ class KnowledgeQueueScope:
 
 
 KnowledgeQueueScopeFactory = Callable[[], AbstractAsyncContextManager[KnowledgeQueueScope]]
+
+
+@dataclass(frozen=True, slots=True)
+class AgentConversationScope:
+    """Одна короткая транзакция диалога или очереди ответов."""
+
+    conversations: AgentConversationsRepository
+    messages: AgentMessagesRepository
+    runs: AgentToolRunsRepository
+    uploads: AgentFilesRepository
+    users: UsersRepository
+    access: AccessService
+    unit_of_work: UnitOfWork
+
+
+AgentConversationScopeFactory = Callable[[], AbstractAsyncContextManager[AgentConversationScope]]

@@ -163,6 +163,7 @@ interface StructureCanvasProps {
     layoutMode: WbsLayoutMode;
     editingNodeId: number | null;
     selectedTaskId: number | null;
+    focusNodeId?: number | null;
     /** Задача, которую сейчас тащат из пула. */
     draggingTask: TaskCompact | null;
     /** Зависимости задач проекта: последовательность работ поверх структуры. */
@@ -187,6 +188,7 @@ function CanvasInner({
     layoutMode,
     editingNodeId,
     selectedTaskId,
+    focusNodeId,
     draggingTask,
     dependencies,
     handlers,
@@ -197,6 +199,14 @@ function CanvasInner({
     const isConnecting = useConnection((connection) => connection.inProgress);
     const [flowNodes, setFlowNodes] = useState<Node[]>([]);
     const [flowEdges, setFlowEdges] = useState<Edge[]>([]);
+    const focusedSection = useRef<number | null>(null);
+    useEffect(() => {
+        if (!focusNodeId || focusedSection.current === focusNodeId) return;
+        const target = flowNodes.find((node) => node.id === sectionNodeId(focusNodeId));
+        if (!target) return;
+        focusedSection.current = focusNodeId;
+        void setCenter(target.position.x + (target.width ?? 240) / 2, target.position.y + (target.height ?? 120) / 2, { zoom: 0.9, duration: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 200 });
+    }, [flowNodes, focusNodeId, setCenter]);
     const [zoom, setZoom] = useState(1);
     const [dropTargetId, setDropTargetId] = useState<number | null>(null);
     const [sectionDrop, setSectionDrop] = useState<SectionDropState | null>(null);

@@ -37,7 +37,8 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 
 INSTRUCTIONS = """Трекер задач. Проекты обозначаются ключом вида PROJ,
-задачи — ключом вида PROJ-142. Числовых идентификаторов в контракте нет.
+задачи — ключом вида PROJ-142. Каталог list_project_tools раскрывает полный набор
+операций; execute_project_tool принимает числовые ID, возвращённые этими операциями.
 Токен видит только те проекты, в которых состоит его владелец.
 Списки всегда ограничены: увеличивайте limit осознанно."""
 
@@ -493,3 +494,4 @@ def build_mcp_app(*, settings: Settings) -> Starlette:
 # на уже созданный ``mcp_server``.
 from src.mcp_server import write_tools  # noqa: E402,F401  isort:skip
 from src.mcp_server import risk_tools  # noqa: E402,F401  isort:skip
+from src.mcp_server import project_tools  # noqa: E402,F401  isort:skip

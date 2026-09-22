@@ -9,6 +9,7 @@ import { ProjectStatusBadge, StatusDot } from "@/components/ui/Badge";
 import { IconButton } from "@/components/ui/Button";
 import { ProgressBar } from "@/components/ui/Progress";
 import { EmptyState, ErrorMessage, Skeleton } from "@/components/ui/States";
+import { ChatUnreadBadge } from "@/components/chat/ChatUnreadBadge";
 
 const TABS = [
     { path: "", label: "Пульс", end: true },
@@ -20,7 +21,8 @@ const TABS = [
     { path: "risks", label: "Риски", end: false },
     { path: "whiteboard", label: "Доска", end: false },
     { path: "docs", label: "Документы", end: false },
-    { path: "knowledge", label: "AI-вики", end: false },
+    { path: "chat", label: "Чат", end: false },
+    { path: "agent", label: "Агент", end: false },
 ];
 
 /**
@@ -145,6 +147,7 @@ export function ProjectLayout() {
                                 }
                             >
                                 {tab.label}
+                                {tab.path === "chat" && <ChatUnreadBadge />}
                             </NavLink>
                         ))}
                     </nav>

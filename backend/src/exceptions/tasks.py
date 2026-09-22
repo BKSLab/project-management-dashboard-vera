@@ -33,6 +33,13 @@ class TaskChecklistConflictError(TasksServiceError):
     detail = "Чек-лист уже изменён. Обновите его и повторите правки."
 
 
+class TaskVersionConflictError(TasksServiceError):
+    """Прочитанная версия задачи устарела перед удалением."""
+
+    status_code = status.HTTP_409_CONFLICT
+    detail = "Задача изменилась. Прочитайте свежую версию перед удалением."
+
+
 class TaskChecklistValidationError(TasksServiceError):
     """Пункты или версия чек-листа не соответствуют контракту."""
 
@@ -112,9 +119,7 @@ class TaskParticipantNotProjectMemberError(TasksServiceError):
 
     def __init__(self, user_id: int):
         self.user_id = user_id
-        super().__init__(
-            error_details=f"Пользователь id={user_id} не состоит в команде проекта."
-        )
+        super().__init__(error_details=f"Пользователь id={user_id} не состоит в команде проекта.")
 
 
 class TaskReporterPermissionError(TasksServiceError):

@@ -5,6 +5,7 @@ from src.db.models.task_activity import TaskActivityEventType
 from src.exceptions.knowledge import KnowledgeEventsServiceError
 from src.exceptions.task_activity import TaskActivityRepositoryError
 from src.exceptions.task_comments import (
+    TaskCommentConflictError,
     TaskCommentNotFoundError,
     TaskCommentsRepositoryError,
     TaskCommentsServiceError,
@@ -111,6 +112,55 @@ class TaskCommentsService:
             UnitOfWorkRepositoryError,
         ) as error:
             logger.error("❌ Ошибка добавления комментария задачи id=%s.", task_id, exc_info=True)
+            raise TaskCommentsServiceError(str(error)) from error
+
+    async def get_comment(self, comment_id: int) -> CommentSchema:
+        """Возвращает комментарий для предпросмотра изменения."""
+        try:
+            item = await self.comments_repository.get_by_id(comment_id)
+            if item is None:
+                raise TaskCommentNotFoundError(comment_id)
+            return CommentSchema.model_validate(item)
+        except TaskCommentsRepositoryError as error:
+            raise TaskCommentsServiceError(str(error)) from error
+
+    async def update_comment(
+        self, comment_id: int, body_md: str, expected_body_md: str
+    ) -> CommentSchema:
+        """Редактирует прочитанную версию комментария, сохраняя авторство.
+
+        Args:
+            comment_id: Проверенный транспортом комментарий.
+            body_md: Новый текст.
+            expected_body_md: Текст прочитанной версии для проверки конфликта.
+        Returns:
+            Изменённый комментарий.
+        Raises:
+            TaskCommentsServiceError: Если запись или индексация не удалась.
+            TaskCommentConflictError: Если комментарий уже изменился.
+        """
+        if not body_md.strip() or "\x00" in body_md or "\x00" in expected_body_md:
+            raise TaskCommentConflictError("Текст комментария некорректен.")
+        try:
+            comment = await self.comments_repository.update_text(
+                comment_id, body_md, expected_body_md
+            )
+            if comment is None:
+                raise TaskCommentConflictError("Комментарий изменён или удалён другим участником.")
+            task = await self.tasks_repository.get_by_id(task_id=comment.task_id)
+            await self.knowledge_events.upsert(
+                project_id=task.project_id,
+                entity_type=KnowledgeEntityType.COMMENT,
+                entity_id=comment.id,
+            )
+            await self.unit_of_work.commit()
+            return CommentSchema.model_validate(comment)
+        except (
+            TaskCommentsRepositoryError,
+            TasksRepositoryError,
+            KnowledgeEventsServiceError,
+            UnitOfWorkRepositoryError,
+        ) as error:
             raise TaskCommentsServiceError(str(error)) from error
 
     async def delete_comment(self, comment_id: int) -> None:

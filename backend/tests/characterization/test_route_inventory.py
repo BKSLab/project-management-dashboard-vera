@@ -13,6 +13,38 @@ from fastapi.routing import APIRoute
 from main import app
 
 FROZEN_ROUTES: set[tuple[str, str]] = {
+    ("GET", "/api/v1/projects/{project_id}/chat"),
+    ("GET", "/api/v1/projects/{project_id}/chat/messages"),
+    ("GET", "/api/v1/projects/{project_id}/chat/search"),
+    ("GET", "/api/v1/projects/{project_id}/chat/events"),
+    ("GET", "/api/v1/projects/{project_id}/chat/entities"),
+    ("POST", "/api/v1/projects/{project_id}/chat/entities/resolve"),
+    ("POST", "/api/v1/projects/{project_id}/chat/messages"),
+    ("PATCH", "/api/v1/projects/{project_id}/chat/messages/{message_id}"),
+    ("DELETE", "/api/v1/projects/{project_id}/chat/messages/{message_id}"),
+    ("PUT", "/api/v1/projects/{project_id}/chat/messages/{message_id}/reaction"),
+    ("PUT", "/api/v1/projects/{project_id}/chat/read"),
+    ("POST", "/api/v1/projects/{project_id}/chat/attachments"),
+    ("DELETE", "/api/v1/projects/{project_id}/chat/attachments/{file_id}"),
+    ("GET", "/api/v1/projects/{project_id}/chat/attachments/{file_id}/content"),
+    ("PATCH", "/api/v1/comments/{comment_id}"),
+    (
+        "POST",
+        "/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/actions/{action_id}/decision",
+    ),
+    ("POST", "/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/files"),
+    (
+        "DELETE",
+        "/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/files/{file_id}",
+    ),
+    ("GET", "/api/v1/projects/{project_id}/agent/conversations"),
+    ("POST", "/api/v1/projects/{project_id}/agent/conversations"),
+    ("GET", "/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/messages"),
+    ("POST", "/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/messages"),
+    (
+        "POST",
+        "/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/messages/{message_id}/retry",
+    ),
     ("GET", "/api/v1/projects/defaults"),
     ("GET", "/api/v1/projects/{project_id}/deadline-history"),
     ("POST", "/api/v1/projects/{project_id}/risks/field-suggestion"),
@@ -126,6 +158,7 @@ SESSION_ONLY_ROUTES: set[tuple[str, str]] = {
 
 # POST, которые ничего не меняют: расчёт, предпросмотр и поиск.
 READ_ONLY_POST_ROUTES: set[tuple[str, str]] = {
+    ("POST", "/api/v1/projects/{project_id}/chat/entities/resolve"),
     ("POST", "/api/v1/projects/{project_id}/risks/field-suggestion"),
     ("POST", "/api/v1/projects/{project_id}/tasks/checklist-suggestion"),
     ("POST", "/api/v1/projects/{project_id}/risks/suggestions"),
@@ -181,8 +214,8 @@ def test_non_get_routes_are_fully_classified() -> None:
     )
 
     mutations = non_get - explicit
-    assert len(non_get) == 62, f"Изменилось число изменяющих маршрутов: {len(non_get)}"
-    assert len(mutations) == 50, f"Изменилось число доменных мутаций: {len(mutations)}"
+    assert len(non_get) == 77, f"Изменилось число изменяющих маршрутов: {len(non_get)}"
+    assert len(mutations) == 64, f"Изменилось число доменных мутаций: {len(mutations)}"
 
 
 def test_every_route_has_unique_method_and_path() -> None:

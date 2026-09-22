@@ -15,7 +15,9 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from src.agent.action_catalog import PROJECT_ACTIONS
 from src.core.settings import Settings
+from src.dependencies.scopes import build_agent_project_tool_scope
 from src.repositories.api_tokens import ApiTokensRepository
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
@@ -35,6 +37,7 @@ from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.users import UsersRepository
 from src.repositories.wbs_nodes import WbsNodesRepository
 from src.services.access import AccessService
+from src.services.agent_actions import AgentActionsService
 from src.services.auth import AuthService
 from src.services.calendar import CalendarService
 from src.services.db_scope import ProjectQueryScope
@@ -68,6 +71,7 @@ class ToolServices:
     calendar: CalendarService
     members: ProjectMembersService
     risks: ProjectRiskService
+    actions: AgentActionsService
 
 
 def build_project_query_scope(
@@ -237,4 +241,10 @@ def build_tool_services(
         calendar=build_calendar_service(session),
         members=build_members_service(session, settings),
         risks=build_risks_service(session, settings),
+        actions=AgentActionsService(
+            scope=build_agent_project_tool_scope(
+                session_factory=session_factory, settings=settings
+            ),
+            actions=PROJECT_ACTIONS,
+        ),
     )

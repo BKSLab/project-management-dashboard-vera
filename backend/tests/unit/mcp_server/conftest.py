@@ -22,6 +22,7 @@ from src.mcp_server import write_tools as wt
 from src.mcp_server.context import READ_ONLY_TOKEN, ToolContext
 from src.mcp_server.services import ToolServices
 from src.services.access import AccessGrant, AccessService
+from src.services.agent_actions import AgentActionsService
 from src.services.auth import AuthService, Principal
 from src.services.calendar import CalendarService
 from src.services.milestones import MilestonesService
@@ -77,6 +78,7 @@ def make_services() -> ToolServices:
         calendar=AsyncMock(spec=CalendarService),
         members=AsyncMock(spec=ProjectMembersService),
         risks=AsyncMock(spec=ProjectRiskService),
+        actions=AsyncMock(spec=AgentActionsService),
     )
 
 
@@ -121,8 +123,8 @@ def tools(services: ToolServices, monkeypatch: pytest.MonkeyPatch):
             settings=get_settings(),
         )
 
-    from src.mcp_server import risk_tools
+    from src.mcp_server import project_tools, risk_tools
 
-    for module in (srv, wt, ctx, risk_tools):
+    for module in (srv, wt, ctx, risk_tools, project_tools):
         monkeypatch.setattr(module, "tool_context", fake_tool_context, raising=False)
     return install

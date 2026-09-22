@@ -15,6 +15,13 @@ class TaskCommentsServiceError(ServiceError):
     detail = "Не удалось выполнить операцию с комментариями задачи."
 
 
+class TaskCommentConflictError(TaskCommentsServiceError):
+    """Прочитанная версия комментария больше не актуальна."""
+
+    status_code = status.HTTP_409_CONFLICT
+    detail = "Комментарий изменён или удалён другим участником. Перечитайте его перед правкой."
+
+
 class TaskCommentNotFoundError(TaskCommentsServiceError):
     """Комментарий задачи не найден."""
 

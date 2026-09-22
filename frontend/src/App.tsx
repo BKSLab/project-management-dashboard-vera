@@ -1,6 +1,7 @@
 import { Suspense, lazy } from "react";
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
+import { ChatWorkspace } from "@/components/chat/ChatWorkspace";
 import { AuthGuard } from "@/components/layout/AuthGuard";
 import { ProjectLayout } from "@/components/projects/ProjectLayout";
 import { DashboardPage } from "@/routes/DashboardPage";
@@ -12,7 +13,8 @@ import { TasksListPage } from "@/routes/TasksListPage";
 import { ProjectDocumentsPage } from "@/routes/ProjectDocumentsPage";
 import { DocumentDetailPage } from "@/routes/DocumentDetailPage";
 import { ProjectSettingsPage } from "@/routes/ProjectSettingsPage";
-import { ProjectKnowledgePage } from "@/routes/ProjectKnowledgePage";
+import { ProjectAgentPage } from "@/routes/ProjectAgentPage";
+import { ProjectChatPage } from "@/routes/ProjectChatPage";
 import { ProjectPulsePage } from "@/routes/ProjectPulsePage";
 import { ProjectRisksPage } from "@/routes/ProjectRisksPage";
 import { McpPage } from "@/routes/McpPage";
@@ -75,6 +77,7 @@ function ProjectBoardFallback() {
 function ProtectedApp() {
     return (
         <AuthGuard>
+            <ChatWorkspace>
             <AppShell>
                 <Routes>
                     <Route path="/" element={<DashboardPage />} />
@@ -114,12 +117,15 @@ function ProtectedApp() {
                         />
                         <Route path="docs" element={<ProjectDocumentsPage />} />
                         <Route path="docs/:slug" element={<DocumentDetailPage />} />
-                        <Route path="knowledge" element={<ProjectKnowledgePage />} />
+                        <Route path="agent" element={<ProjectAgentPage />} />
+                        <Route path="chat" element={<ProjectChatPage />} />
+                        <Route path="knowledge" element={<Navigate to="../agent" replace />} />
                         <Route path="settings" element={<ProjectSettingsPage />} />
                     </Route>
                     <Route path="*" element={<NotFoundPage />} />
                 </Routes>
             </AppShell>
+            </ChatWorkspace>
         </AuthGuard>
     );
 }

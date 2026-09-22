@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import Result, func, select
+from sqlalchemy import Result, func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,25 @@ class TaskCommentsRepository:
 
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
+
+    async def update_text(
+        self, comment_id: int, body_md: str, expected_body_md: str
+    ) -> TaskComment | None:
+        """Обновляет только прочитанную версию комментария одним UPDATE RETURNING."""
+        try:
+            result = await self.db_session.execute(
+                update(TaskComment)
+                .where(
+                    TaskComment.id == comment_id,
+                    TaskComment.body_md == expected_body_md,
+                )
+                .values(body_md=body_md)
+                .returning(TaskComment)
+            )
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as error:
+            await self.db_session.rollback()
+            raise TaskCommentsRepositoryError("Не удалось обновить комментарий.") from error
 
     async def get_for_task(self, task_id: int) -> list[TaskComment]:
         """Возвращает комментарии задачи в хронологическом порядке.

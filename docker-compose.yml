@@ -1,5 +1,20 @@
 services:
 
+  # Redis хранит только presence/typing и координирует fan-out; история — в PostgreSQL.
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6381:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "volatile-lru"]
+    networks:
+      - dashboard_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # ── База данных ────────────────────────────────────────────────────────────
   db:
     image: postgres:16-alpine
@@ -38,6 +53,8 @@ services:
       dockerfile: Dockerfile
     container_name: project_dashboard_backend
     env_file: ./backend/.env
+    environment:
+      CHAT_REDIS_URL: redis://redis:6379/0
     restart: always
     command: bash entrypoint.sh
     volumes:
@@ -46,6 +63,8 @@ services:
       - dashboard_network
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       qdrant:
         condition: service_started

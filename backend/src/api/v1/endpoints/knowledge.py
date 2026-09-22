@@ -2,8 +2,9 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from src.agent.tools import AgentToolContext
 from src.dependencies.access import ProjectIdPath, require_project_access
-from src.dependencies.auth import require_write_scope
+from src.dependencies.auth import PrincipalDep, require_write_scope
 from src.dependencies.services import ProjectAgentServiceDep
 from src.exceptions.knowledge import KnowledgeServiceError
 from src.schemas.knowledge import (
@@ -43,6 +44,7 @@ async def ask_project_agent(
     project_id: ProjectIdPath,
     data: KnowledgeAskSchema,
     service: ProjectAgentServiceDep,
+    principal: PrincipalDep,
 ) -> KnowledgeAnswerSchema:
     """Отвечает на вопрос только по данным доступного проекта."""
     try:
@@ -50,6 +52,7 @@ async def ask_project_agent(
             project_id=project_id,
             question=data.question,
             history=data.history,
+            execution=AgentToolContext(project_id=project_id, user_id=principal.user_id),
         )
     except KnowledgeServiceError as error:
         logger.exception("❌ Project Agent проекта id=%s не ответил.", project_id)

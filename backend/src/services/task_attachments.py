@@ -374,6 +374,16 @@ class TaskAttachmentsService:
             raise TaskAttachmentNotFoundError(attachment_id=attachment_id)
         return attachment
 
+    def validate_file(
+        self,
+        *,
+        file_name: str,
+        content_type: str | None,
+        content: bytes,
+    ) -> tuple[str, str, str]:
+        """Проверяет загрузку до выбора задачи, используя общие ограничения файлов."""
+        return self._validate_file(file_name=file_name, content_type=content_type, content=content)
+
     def _validate_file(
         self,
         *,

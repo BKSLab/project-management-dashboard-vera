@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
     ChevronsDownUp,
@@ -45,6 +46,8 @@ type MenuState =
 
 export function StructurePage() {
     const project = useProjectOutlet();
+    const [searchParams] = useSearchParams();
+    const focusNodeId = Number(searchParams.get("wbs")) || null;
     const collapsed = useUiStore((state) => state.collapsedWbsNodes);
     const toggleWbsNode = useUiStore((state) => state.toggleWbsNode);
     const expandWbsNodes = useUiStore((state) => state.expandWbsNodes);
@@ -84,6 +87,16 @@ export function StructurePage() {
     const nodes = useMemo(() => structureQuery.data?.nodes ?? [], [structureQuery.data]);
     const tasks = useMemo(() => structureQuery.data?.tasks ?? [], [structureQuery.data]);
     const tree = useMemo(() => buildWbsTree(nodes, tasks), [nodes, tasks]);
+    useEffect(() => {
+        if (!focusNodeId) return;
+        const ancestors: number[] = [];
+        let node = nodes.find((item) => item.id === focusNodeId);
+        while (node?.parent_id) {
+            ancestors.push(node.parent_id);
+            node = nodes.find((item) => item.id === node!.parent_id);
+        }
+        if (ancestors.length) expandWbsNodes(ancestors);
+    }, [focusNodeId, nodes, expandWbsNodes]);
 
     /**
      * Пока открыт черновик, холст показывает структуру вместе с предложением:
@@ -401,6 +414,7 @@ export function StructurePage() {
                         layoutMode={layoutMode}
                         editingNodeId={editingNodeId}
                         selectedTaskId={selectedTaskId}
+                        focusNodeId={focusNodeId}
                         draggingTask={draggingTask}
                         dependencies={dependenciesQuery.data ?? []}
                         handlers={handlers}

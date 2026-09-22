@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.v1.endpoints.agent_conversations import router as agent_conversations_router
 from src.api.v1.endpoints.analytics import router as analytics_router
 from src.api.v1.endpoints.api_tokens import router as api_tokens_router
 from src.api.v1.endpoints.auth import router as auth_router
@@ -20,6 +21,9 @@ from src.api.v1.endpoints.document_links import router as document_links_router
 from src.api.v1.endpoints.documents import router as documents_router
 from src.api.v1.endpoints.knowledge import router as knowledge_router
 from src.api.v1.endpoints.milestones import router as milestones_router
+from src.api.v1.endpoints.project_chat_ws import router as project_chat_ws_router
+from src.api.v1.endpoints.project_chats import download_router as chat_download_router
+from src.api.v1.endpoints.project_chats import router as project_chats_router
 from src.api.v1.endpoints.project_members import router as project_members_router
 from src.api.v1.endpoints.project_risks import router as project_risks_router
 from src.api.v1.endpoints.project_stages import router as project_stages_router
@@ -44,6 +48,7 @@ from src.core.app_state import (
 from src.core.config_logger import configure_logging
 from src.core.settings import get_settings
 from src.db.session import async_session_factory, engine
+from src.dependencies.services import build_agent_worker
 from src.exceptions.clients import VectorStoreClientError
 from src.knowledge.composition import build_knowledge_worker
 from src.knowledge.runtime import (
@@ -53,6 +58,7 @@ from src.knowledge.runtime import (
     create_qdrant_client,
 )
 from src.mcp_server.server import build_mcp_app, mcp_server
+from src.realtime.runtime import CHAT_RUNTIME_KEY, build_chat_runtime
 from src.utils.check_db import check_db_connection
 
 configure_logging()
@@ -107,7 +113,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, object]]:
             name="project-knowledge-indexer",
         )
         logger.info("✅ Фоновый индексатор базы знаний запущен.")
+    agent_worker = build_agent_worker(
+        session_factory=async_session_factory, settings=settings, runtime=runtime
+    )
+    agent_task = asyncio.create_task(agent_worker.run(worker_stop), name="project-agent-worker")
+    chat_runtime = build_chat_runtime(settings=settings, session_factory=async_session_factory)
     try:
+        await chat_runtime.start()
         # Сессионный менеджер MCP обязан работать всё время жизни приложения:
         # смонтированное ASGI-приложение своего lifespan не получает.
         async with mcp_server.session_manager.run():
@@ -117,9 +129,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, object]]:
                 RUNTIME_STATE_KEY: runtime,
                 SETTINGS_STATE_KEY: settings,
                 SESSION_FACTORY_STATE_KEY: async_session_factory,
+                CHAT_RUNTIME_KEY: chat_runtime,
             }
     finally:
+        await chat_runtime.close()
         worker_stop.set()
+        agent_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await agent_task
         if worker_task is not None:
             worker_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -164,7 +181,7 @@ async def validation_exception_handler(
         "⚠️ Ошибка валидации %s %s. Детали:\n%s",
         request.method,
         request.url.path,
-        pformat(errors),
+        pformat([{"loc": error.get("loc"), "type": error.get("type")} for error in errors]),
     )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -199,6 +216,10 @@ for api_router in (
     task_attachments_router,
     task_documents_router,
     knowledge_router,
+    agent_conversations_router,
+    project_chats_router,
+    chat_download_router,
+    project_chat_ws_router,
 ):
     app.include_router(api_router, prefix=settings.app.api_v1_prefix)
 

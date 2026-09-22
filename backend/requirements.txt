@@ -42,6 +42,7 @@ python-multipart==0.0.22
 PyYAML==6.0.3
 qdrant-client==1.12.1
 referencing==0.37.0
+redis==8.1.0
 rpds-py==2026.6.3
 SQLAlchemy==2.0.46
 sse-starlette==3.4.8

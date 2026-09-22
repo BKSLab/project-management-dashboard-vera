@@ -595,6 +595,7 @@ export type KnowledgeEntityType =
     | "analytics_report";
 
 export interface KnowledgeSource {
+    card?: { key?: string | null; status?: string | null; priority?: string | null; assignee?: string | null; due_date?: string | null; summary?: string | null } | null;
     source_id: string;
     entity_type: KnowledgeEntityType;
     entity_id: number;
@@ -632,6 +633,61 @@ export interface KnowledgeChatMessage {
 export interface KnowledgeAskPayload {
     question: string;
     history: KnowledgeChatMessage[];
+}
+
+export interface AgentConversation {
+    id: number;
+    project_id: number;
+    title: string;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface AgentConversationPage {
+    items: AgentConversation[];
+    next_offset: number | null;
+}
+
+export interface AgentToolRun {
+    id: string;
+    tool_name: string;
+    title: string;
+    arguments: Record<string, unknown>;
+    status: "pending" | "completed" | "rejected" | "failed";
+    result: Record<string, unknown>;
+    created_at: string;
+}
+
+export interface AgentMessage {
+    actions?: AgentToolRun[];
+    files?: AgentFile[];
+    id: number;
+    conversation_id: number;
+    request_id: string;
+    role: "user" | "assistant";
+    content: string;
+    sources: KnowledgeSource[];
+    status: "queued" | "processing" | "completed" | "failed";
+    error: string | null;
+    created_at: string;
+}
+
+export interface AgentFile {
+    id: string;
+    original_name: string;
+    content_type: string;
+    size: number;
+    created_at: string;
+}
+
+export interface AgentMessagePage {
+    items: AgentMessage[];
+    next_before_id: number | null;
+}
+
+export interface AgentMessageAccepted {
+    user_message: AgentMessage;
+    assistant_message: AgentMessage;
 }
 
 export interface DashboardTotals {

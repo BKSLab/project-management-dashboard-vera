@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.knowledge.catalog import SourceType
 
@@ -37,6 +37,17 @@ class KnowledgeAskSchema(BaseModel):
         return normalized
 
 
+class KnowledgeSourceCardSchema(BaseModel):
+    """Компактная карточка из проверенного снимка проекта, а не из текста LLM."""
+
+    key: str | None = None
+    status: str | None = None
+    priority: str | None = None
+    assignee: str | None = None
+    due_date: str | None = None
+    summary: str | None = None
+
+
 class KnowledgeSourceSchema(BaseModel):
     """Проверяемый источник ответа и данные для навигации в UI."""
 
@@ -49,18 +60,25 @@ class KnowledgeSourceSchema(BaseModel):
     task_id: int | None = None
     document_slug: str | None = None
     related_source_ids: list[str] = Field(default_factory=list)
+    card: KnowledgeSourceCardSchema | None = None
 
 
-class KnowledgeReadRequest(BaseModel):
-    """Одинаковое постраничное чтение знаний для чата и MCP."""
+class KnowledgeReadParameters(BaseModel):
+    """Аргументы чтения; проект задаётся только сервером."""
 
-    name: Literal["list_sources", "read_source", "related_sources", "search_sources"]
+    model_config = ConfigDict(extra="forbid")
     entity_type: SourceType | None = None
     source_id: str | None = Field(default=None, max_length=64)
     query: str | None = Field(default=None, max_length=2000)
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=20, ge=1, le=30)
     max_chars: int = Field(default=4000, ge=500, le=8000)
+
+
+class KnowledgeReadRequest(KnowledgeReadParameters):
+    """Одинаковое постраничное чтение знаний для чата и MCP."""
+
+    name: Literal["list_sources", "read_source", "related_sources", "search_sources"]
 
 
 class KnowledgeCoverageSchema(BaseModel):

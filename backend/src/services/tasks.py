@@ -29,6 +29,7 @@ from src.exceptions.tasks import (
     TaskReporterPermissionError,
     TasksRepositoryError,
     TasksServiceError,
+    TaskVersionConflictError,
 )
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.exceptions.wbs_nodes import (
@@ -474,11 +475,14 @@ class TasksService:
             logger.error("❌ Ошибка фиксации baseline задачи id=%s.", task_id, exc_info=True)
             raise TasksServiceError(str(error)) from error
 
-    async def delete_task(self, task_id: int) -> None:
+    async def delete_task(
+        self, task_id: int, *, expected_updated_at: datetime | None = None
+    ) -> None:
         """Удаляет задачу вместе с её файлами.
 
         Args:
             task_id: Идентификатор задачи.
+            expected_updated_at: Прочитанная версия для подтверждённого удаления агентом.
 
         Returns:
             ``None`` после успешного удаления.
@@ -488,7 +492,15 @@ class TasksService:
             TasksServiceError: Если удалить задачу не удалось.
         """
         try:
-            task = await self._get_task(task_id=task_id)
+            task = (
+                await self.tasks_repository.get_for_update(task_id=task_id)
+                if expected_updated_at is not None
+                else await self._get_task(task_id=task_id)
+            )
+            if task is None:
+                raise TaskNotFoundError(task_id)
+            if expected_updated_at is not None and task.updated_at != expected_updated_at:
+                raise TaskVersionConflictError("Версия удаления устарела.")
             project_id = task.project_id
             await self.tasks_repository.delete(task=task)
             await self.knowledge_events.delete(

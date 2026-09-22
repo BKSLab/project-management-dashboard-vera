@@ -1,0 +1,448 @@
+"""Полные проектные инструменты на PostgreSQL, включая реальные commit сервисов."""
+
+# ruff: noqa: F811 -- pytest внедряет импортированные фикстуры по имени параметра.
+
+import asyncio
+from dataclasses import replace
+from uuid import UUID, uuid4
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import select
+
+from src.agent.action_catalog import PROJECT_ACTIONS
+from src.agent.tools import AgentToolContext
+from src.core.settings import get_settings
+from src.db.models import AgentToolRun, Task
+from src.dependencies.scopes import build_agent_project_tool_scope
+from src.exceptions.agent_tools import (
+    AgentToolAccessError,
+    AgentToolConflictError,
+    AgentToolOperationError,
+)
+from src.services.agent_actions import AgentActionsService
+from tests.integration.repositories.test_agent_conversations_repository import (
+    agent_env as agent_env,
+)
+
+
+@pytest_asyncio.fixture
+async def actions_env(agent_env, tmp_path):
+    settings = get_settings().model_copy(deep=True)
+    settings.app.uploads_path = tmp_path
+    service = AgentActionsService(
+        scope=build_agent_project_tool_scope(session_factory=agent_env.factory, settings=settings),
+        actions=PROJECT_ACTIONS,
+    )
+    context = AgentToolContext(project_id=1, user_id=1, can_write=True)
+    agent_env.actions = service
+    agent_env.context = context
+    agent_env.files = tmp_path
+    return agent_env
+
+
+async def invoke(env, name, arguments=None, *, request_id=None, context=None):
+    return await env.actions.execute(
+        context=replace(context or env.context, request_id=request_id or uuid4()),
+        name=name,
+        arguments=arguments or {},
+    )
+
+
+def result(response):
+    return response["action"]["result"] if "action" in response else response
+
+
+async def task(env, title="Проверить окно заказа"):
+    stages = (await invoke(env, "list_stages"))["items"]
+    if not stages:
+        await invoke(env, "create_stage", {"name": "Бэклог", "color": "#334455"})
+    return result(await invoke(env, "create_task", {"title": title}))["task"]
+
+
+async def approve(env, response, *, context=None):
+    action = response["action"]
+    assert action["status"] == "pending"
+    return await env.actions.decide(
+        context=context or env.context, action_id=UUID(action["id"]), decision="approve"
+    )
+
+
+async def test_tasks_assignments_checklist_comments_and_deletion(actions_env):
+    env = actions_env
+    original = await task(env)
+    task_id = original["id"]
+    updated = result(
+        await invoke(
+            env,
+            "update_task",
+            {
+                "task_id": task_id,
+                "changes": {
+                    "title": "Проверка формы",
+                    "executor_id": 2,
+                    "observer_ids": [1],
+                    "start_date": "2026-09-21",
+                    "due_date": "2026-09-25",
+                },
+            },
+        )
+    )["task"]
+    assert updated["title"] == "Проверка формы"
+    assert any(
+        item["user"]["id"] == 2 and item["role"] == "EXECUTOR" for item in updated["participants"]
+    )
+    assert (await invoke(env, "list_tasks", {"search": "Проверка формы"}))["total"] == 1
+    checklist = result(
+        await invoke(
+            env,
+            "set_checklist",
+            {
+                "task_id": task_id,
+                "checklist_revision": 0,
+                "checklist": {"items": [{"text": "Открыть форму"}]},
+            },
+        )
+    )
+    item = checklist["checklist"]["items"][0]
+    item["is_completed"] = True
+    checked = result(
+        await invoke(
+            env,
+            "set_checklist",
+            {
+                "task_id": task_id,
+                "checklist_revision": checklist["checklist_revision"],
+                "checklist": {"items": [item]},
+            },
+        )
+    )
+    assert checked["checklist"]["items"][0]["is_completed"]
+    with pytest.raises(AgentToolOperationError):
+        await invoke(
+            env, "set_checklist", {"task_id": task_id, "checklist_revision": 0, "checklist": None}
+        )
+    stage = result(await invoke(env, "create_stage", {"name": "Готово", "is_done_stage": True}))[
+        "stage"
+    ]
+    moved = result(await invoke(env, "move_task", {"task_id": task_id, "stage_id": stage["id"]}))[
+        "task"
+    ]
+    assert moved["stage_id"] == stage["id"]
+    comment = result(
+        await invoke(env, "add_comment", {"task_id": task_id, "body_md": "Проверено"})
+    )["comment"]
+    edited = result(
+        await invoke(
+            env,
+            "update_comment",
+            {
+                "comment_id": comment["id"],
+                "body_md": "Проверено дважды",
+                "expected_body_md": "Проверено",
+            },
+        )
+    )["comment"]
+    assert (
+        edited["author_name"] == comment["author_name"] and edited["body_md"] == "Проверено дважды"
+    )
+    with pytest.raises(AgentToolOperationError):
+        await invoke(
+            env,
+            "update_comment",
+            {
+                "comment_id": comment["id"],
+                "body_md": "Устаревшая правка",
+                "expected_body_md": "Проверено",
+            },
+        )
+    assert (await invoke(env, "list_comments", {"task_id": task_id}))["total"] == 1
+    await approve(env, await invoke(env, "delete_comment", {"comment_id": comment["id"]}))
+    assert not (await invoke(env, "list_comments", {"task_id": task_id}))["items"]
+    await approve(env, await invoke(env, "fix_task_baseline", {"task_id": task_id}))
+    fresh = (await invoke(env, "get_task", {"task_id": task_id}))["task"]
+    deletion = await invoke(
+        env, "delete_task", {"task_id": task_id, "expected_updated_at": fresh["updated_at"]}
+    )
+    assert (await invoke(env, "get_task", {"task_id": task_id}))["task"]["id"] == task_id
+    done = await approve(env, deletion)
+    assert done.status == "completed"
+    assert await approve(env, deletion) == done
+    assert not (await invoke(env, "list_tasks"))["items"]
+
+
+async def test_project_team_stickers_and_roles(actions_env):
+    env = actions_env
+    assert (await invoke(env, "get_project"))["project"]["id"] == 1
+    assert (
+        result(await invoke(env, "update_project", {"name": "Пилот"}))["project"]["name"] == "Пилот"
+    )
+    member = replace(env.context, user_id=2)
+    with pytest.raises(AgentToolAccessError):
+        await invoke(env, "update_project", {"name": "Запрещено"}, context=member)
+    original = await task(env)
+    sticker = result(
+        await invoke(env, "create_sticker", {"body": "Проверить UX", "task_ids": [original["id"]]})
+    )["sticker"]
+    revised = result(
+        await invoke(
+            env,
+            "update_sticker",
+            {
+                "sticker_id": sticker["id"],
+                "changes": {"revision": sticker["revision"], "body": "Обсудить UX"},
+            },
+        )
+    )["sticker"]
+    assert revised["body"] == "Обсудить UX"
+    await invoke(
+        env,
+        "move_sticker",
+        {"sticker_id": sticker["id"], "position": {"canvas_x": 150, "canvas_y": 200}},
+    )
+    current = (await invoke(env, "list_stickers"))["items"][0]
+    assert current["canvas_x"] == 150
+    await approve(
+        env,
+        await invoke(
+            env, "delete_sticker", {"sticker_id": current["id"], "revision": current["revision"]}
+        ),
+    )
+    assert not (await invoke(env, "list_stickers"))["items"]
+    await approve(env, await invoke(env, "remove_member", {"user_id": 2}))
+    assert (await invoke(env, "list_members"))["total"] == 1
+    await invoke(env, "add_member", {"username": "user2"})
+    transfer = await invoke(env, "transfer_project_ownership", {"user_id": 2})
+    with pytest.raises(AgentToolAccessError):
+        await approve(env, transfer, context=member)
+    await approve(env, transfer)
+    assert (await invoke(env, "get_project"))["project"]["owner_id"] == 2
+    with pytest.raises(AgentToolAccessError):
+        await invoke(env, "remove_member", {"user_id": 2})
+
+
+async def test_documents_links_and_binary_attachment_copy(actions_env):
+    env = actions_env
+    first, second = await task(env, "Первая"), await task(env, "Вторая")
+    document = result(
+        await invoke(env, "create_document", {"title": "Приёмка", "content_md": "Исходный план"})
+    )["document"]
+    document_id = document["id"]
+    await invoke(
+        env,
+        "update_document",
+        {"document_id": document_id, "changes": {"content_md": "Проверить форму заказа"}},
+    )
+    assert (await invoke(env, "list_documents"))["total"] == 1
+    link = result(
+        await invoke(env, "link_document", {"document_id": document_id, "task_id": first["id"]})
+    )["link"]
+    read = await invoke(env, "get_document", {"document_id": document_id})
+    assert read["document"]["content_md"] == "Проверить форму заказа" and len(read["tasks"]) == 1
+    await invoke(env, "unlink_document", {"link_id": link["id"]})
+    assert not (await invoke(env, "get_document", {"document_id": document_id}))["tasks"]
+    attached = result(
+        await invoke(
+            env,
+            "create_text_attachment",
+            {"task_id": first["id"], "file_name": "plan.md", "content": "Проверить форму заказа"},
+        )
+    )["attachment"]
+    copied = result(
+        await invoke(
+            env,
+            "copy_attachment",
+            {
+                "task_id": first["id"],
+                "attachment_id": attached["id"],
+                "target_task_id": second["id"],
+            },
+        )
+    )["attachment"]
+    assert copied["id"] != attached["id"] and copied["size"] == attached["size"]
+    assert len((await invoke(env, "list_attachments", {"task_id": second["id"]}))["items"]) == 1
+    await approve(
+        env,
+        await invoke(
+            env, "delete_attachment", {"task_id": first["id"], "attachment_id": attached["id"]}
+        ),
+    )
+    assert not (await invoke(env, "list_attachments", {"task_id": first["id"]}))["items"]
+    assert len(list(env.files.rglob("*.md"))) == 1
+    await approve(env, await invoke(env, "delete_document", {"document_id": document_id}))
+    assert not (await invoke(env, "list_documents"))["items"]
+
+
+async def test_wbs_milestones_dependencies_calendar_and_stages(actions_env):
+    env = actions_env
+    first, second = await task(env, "Спроектировать"), await task(env, "Проверить")
+    stage = result(await invoke(env, "create_stage", {"name": "Проверка"}))["stage"]
+    await invoke(env, "update_stage", {"stage_id": stage["id"], "changes": {"name": "Приёмка"}})
+    root = result(await invoke(env, "create_wbs_node", {"title": "Заказы"}))["node"]
+    child = result(
+        await invoke(env, "create_wbs_node", {"title": "Интерфейс", "parent_id": root["id"]})
+    )["node"]
+    await invoke(env, "update_wbs_node", {"node_id": child["id"], "title": "Форма"})
+    await invoke(env, "move_wbs_node", {"node_id": child["id"], "parent_id": None})
+    await invoke(env, "place_task", {"task_id": first["id"], "wbs_node_id": child["id"]})
+    structure = await invoke(env, "get_structure")
+    assert len(structure["nodes"]) == 2 and structure["stats"]["assigned_tasks"] == 1
+    milestone = result(
+        await invoke(
+            env,
+            "create_milestone",
+            {"title": "Демо", "due_date": "2026-09-30", "wbs_node_id": child["id"]},
+        )
+    )["milestone"]
+    await invoke(
+        env,
+        "update_milestone",
+        {"milestone_id": milestone["id"], "changes": {"title": "Демо формы"}},
+    )
+    assert (await invoke(env, "list_milestones"))["total"] == 1
+    dependency = result(
+        await invoke(
+            env,
+            "create_dependency",
+            {"predecessor_task_id": first["id"], "successor_task_id": second["id"]},
+        )
+    )["dependency"]
+    assert (await invoke(env, "list_dependencies"))["total"] == 1
+    changes = [{"task_id": first["id"], "start_date": "2026-09-21", "due_date": "2026-09-25"}]
+    preview = await invoke(env, "preview_schedule_change", {"changes": changes})
+    assert preview
+    fresh = (await invoke(env, "get_task", {"task_id": first["id"]}))["task"]
+    await approve(
+        env,
+        await invoke(
+            env,
+            "apply_schedule_change",
+            {"changes": [{**changes[0], "expected_updated_at": fresh["updated_at"]}]},
+        ),
+    )
+    assert (await invoke(env, "get_task", {"task_id": first["id"]}))["task"][
+        "due_date"
+    ] == "2026-09-25"
+    assert await invoke(env, "get_calendar", {"date_from": "2026-09-01", "date_to": "2026-10-31"})
+    await approve(env, await invoke(env, "delete_dependency", {"dependency_id": dependency["id"]}))
+    await approve(env, await invoke(env, "delete_milestone", {"milestone_id": milestone["id"]}))
+    await approve(env, await invoke(env, "delete_wbs_node", {"node_id": child["id"]}))
+    assert (await invoke(env, "get_structure"))["stats"]["assigned_tasks"] == 0
+    await approve(env, await invoke(env, "delete_stage", {"stage_id": stage["id"]}))
+
+
+async def test_risks_cross_project_isolation_and_stale_deletion(actions_env):
+    env = actions_env
+    original = await task(env)
+    foreign_ctx = replace(env.context, project_id=2)
+    await invoke(env, "create_stage", {"name": "Чужой бэклог"}, context=foreign_ctx)
+    foreign = result(
+        await invoke(env, "create_task", {"title": "Чужая задача"}, context=foreign_ctx)
+    )["task"]
+    for name, arguments in [
+        ("get_task", {"task_id": foreign["id"]}),
+        ("update_task", {"task_id": foreign["id"], "changes": {"title": "Нельзя"}}),
+        ("add_comment", {"task_id": foreign["id"], "body_md": "Нельзя"}),
+        ("delete_task", {"task_id": foreign["id"], "expected_updated_at": foreign["updated_at"]}),
+    ]:
+        with pytest.raises(AgentToolAccessError):
+            await invoke(env, name, arguments)
+    risk = result(
+        await invoke(
+            env,
+            "create_risk",
+            {
+                "title": "Срыв проверки",
+                "description": "Не хватает времени на проверку",
+                "probability": "HIGH",
+                "impact": "HIGH",
+                "response_strategy": "MITIGATE",
+                "task_id": original["id"],
+                "owner_user_id": 2,
+            },
+        )
+    )["risk"]
+    assert (await invoke(env, "get_risk", {"risk_id": risk["id"]}))["risk"]["task_id"] == original[
+        "id"
+    ]
+    await invoke(
+        env,
+        "update_risk",
+        {"risk_id": risk["id"], "changes": {"status": "CLOSED", "mitigation_plan": "Проверено"}},
+    )
+    assert not (await invoke(env, "list_risks", {"active_only": True}))["items"]
+    await approve(env, await invoke(env, "delete_risk", {"risk_id": risk["id"]}))
+    deletion = await invoke(
+        env,
+        "delete_task",
+        {"task_id": original["id"], "expected_updated_at": original["updated_at"]},
+    )
+    await invoke(
+        env, "update_task", {"task_id": original["id"], "changes": {"title": "Уже изменена"}}
+    )
+    with pytest.raises((AgentToolConflictError, AgentToolOperationError)):
+        await approve(env, deletion)
+    rejected = await env.actions.decide(
+        context=env.context, action_id=UUID(deletion["action"]["id"]), decision="reject"
+    )
+    assert rejected.status == "rejected"
+    assert (await invoke(env, "get_task", {"task_id": original["id"]}))["task"][
+        "title"
+    ] == "Уже изменена"
+
+
+async def test_action_commit_and_result_are_atomic_and_concurrent_retry_creates_one_task(
+    actions_env,
+):
+    env = actions_env
+    await invoke(env, "create_stage", {"name": "Бэклог", "color": "#334455"})
+    request_id = uuid4()
+    first, duplicate = await asyncio.gather(
+        invoke(env, "create_task", {"title": "Одна задача"}, request_id=request_id),
+        invoke(env, "create_task", {"title": "Одна задача"}, request_id=request_id),
+    )
+    assert first == duplicate
+    async with env.factory() as session:
+        assert len((await session.scalars(select(Task))).all()) == 1
+        assert (
+            len(
+                (
+                    await session.scalars(
+                        select(AgentToolRun).where(AgentToolRun.tool_name == "create_task")
+                    )
+                ).all()
+            )
+            == 1
+        )
+    with pytest.raises(AgentToolConflictError):
+        await invoke(env, "create_task", {"title": "Другой текст"}, request_id=request_id)
+    with pytest.raises(AgentToolAccessError):
+        await invoke(
+            env,
+            "create_task",
+            {"title": "Запрещено"},
+            context=replace(env.context, can_write=False),
+        )
+
+
+async def test_failed_result_write_rolls_back_domain_commits_and_new_file(actions_env, monkeypatch):
+    env = actions_env
+    original = await task(env)
+    from src.exceptions.agent_tools import AgentToolRunsRepositoryError, AgentToolsServiceError
+    from src.repositories.agent_tool_runs import AgentToolRunsRepository
+
+    async def fail(self, data):
+        raise AgentToolRunsRepositoryError("Ошибка журнала после доменного commit")
+
+    monkeypatch.setattr(AgentToolRunsRepository, "save", fail)
+    with pytest.raises(AgentToolsServiceError):
+        await invoke(env, "create_task", {"title": "Не должна сохраниться"})
+    with pytest.raises(AgentToolsServiceError):
+        await invoke(
+            env,
+            "create_text_attachment",
+            {"task_id": original["id"], "file_name": "test.txt", "content": "Тест"},
+        )
+    async with env.factory() as session:
+        assert len((await session.scalars(select(Task))).all()) == 1
+    assert not list(env.files.rglob("*.txt"))

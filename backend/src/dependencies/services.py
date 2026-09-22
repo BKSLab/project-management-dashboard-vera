@@ -9,10 +9,14 @@
 значения и клиентов через конструктор и о конфигурации приложения не знает.
 """
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends
+from pydantic import BaseModel
 
+from src.agent.action_catalog import PROJECT_ACTIONS
+from src.agent.tools import AgentTool, AgentToolContext, AgentToolExecutor, AgentToolHandler
+from src.agent.worker import AgentWorker
 from src.core.settings import Settings
 from src.dependencies.clients import (
     EmbeddingClientDep,
@@ -43,17 +47,31 @@ from src.dependencies.repositories import (
     WbsNodesRepositoryDep,
 )
 from src.dependencies.scopes import (
+    AgentConversationScopeDep,
+    AgentProjectToolScopeDep,
     AnalyticsScopeDep,
     ChecklistSuggestionScopeDep,
     ProjectAgentScopeDep,
+    ProjectKnowledgeQueryScopeDep,
     RiskSuggestionScopeDep,
+    SessionFactory,
     TaskDescriptionScopeDep,
     TaskDocumentImportScopeDep,
     WbsSuggestionScopeDep,
+    build_agent_conversation_scope,
+    build_agent_project_tool_scope,
+    build_project_agent_scope,
+    build_project_knowledge_query_scope,
 )
 from src.dependencies.settings import SettingsDep
 from src.dependencies.storage import AvatarStorageDep, TaskAttachmentStorageDep
+from src.knowledge.runtime import KnowledgeRuntime
+from src.schemas.knowledge import KnowledgeReadParameters, KnowledgeReadRequest
+from src.schemas.project_tool_inputs import ToolSchemasInput
 from src.services.access import AccessService
+from src.services.agent_actions import AgentActionsService
+from src.services.agent_conversations import AgentConversationConfig, AgentConversationsService
+from src.services.agent_files import AgentFilesService
 from src.services.analytics import AnalyticsService
 from src.services.api_tokens import ApiTokensService
 from src.services.auth import AuthService
@@ -66,6 +84,7 @@ from src.services.knowledge_events import KnowledgeEvents
 from src.services.milestones import MilestonesService
 from src.services.project_agent import ProjectAgentConfig, ProjectAgentService
 from src.services.project_members import ProjectMembersService
+from src.services.project_query import ProjectQueryService
 from src.services.project_risks import ProjectRiskService
 from src.services.project_stages import ProjectStagesService
 from src.services.project_stickers import ProjectStickersService
@@ -527,7 +546,102 @@ def build_project_agent_config(settings: Settings) -> ProjectAgentConfig:
         score_threshold=settings.knowledge.qdrant_score_threshold,
         chunk_target_chars=settings.knowledge.knowledge_chunk_target_chars,
         chunk_overlap_chars=settings.knowledge.knowledge_chunk_overlap_chars,
+        tool_rounds=settings.agent.agent_tool_rounds,
     )
+
+
+def build_knowledge_tool_executor(query: ProjectQueryService) -> AgentToolExecutor:
+    """Регистрирует первый набор инструментов; новые возможности добавляются здесь."""
+    descriptions = {
+        "list_sources": "Перечень текущих источников проекта с постраничным продолжением.",
+        "read_source": "Полный текст известного источника по страницам символов.",
+        "related_sources": "Связи источника с другими объектами текущего проекта.",
+        "search_sources": "Полнотекстовый поиск по всем типам источников проекта.",
+    }
+
+    def bind(name: str) -> AgentToolHandler:
+        async def read(context: AgentToolContext, parameters: BaseModel) -> dict[str, Any]:
+            request = KnowledgeReadRequest(name=name, **parameters.model_dump())
+            return await query.read_knowledge(project_id=context.project_id, request=request)
+
+        return read
+
+    return AgentToolExecutor(
+        [
+            AgentTool(name, description, KnowledgeReadParameters, bind(name))
+            for name, description in descriptions.items()
+        ]
+    )
+
+
+def get_agent_actions_service(scope: AgentProjectToolScopeDep) -> AgentActionsService:
+    """Собирает общий сценарий проектных инструментов для чата и MCP."""
+    return AgentActionsService(scope=scope, actions=PROJECT_ACTIONS)
+
+
+AgentActionsServiceDep = Annotated[AgentActionsService, Depends(get_agent_actions_service)]
+
+
+def get_agent_files_service(scope: AgentProjectToolScopeDep) -> AgentFilesService:
+    """Собирает сценарии приватных загрузок в чат."""
+    return AgentFilesService(scope=scope)
+
+
+AgentFilesServiceDep = Annotated[AgentFilesService, Depends(get_agent_files_service)]
+
+
+def build_project_tool_executor(
+    query: ProjectQueryService, actions: AgentActionsService
+) -> AgentToolExecutor:
+    """Регистрирует общий полный набор без дублирования доменных обработчиков."""
+    registered = list(build_knowledge_tool_executor(query).tools.values())
+
+    def bind(name: str) -> AgentToolHandler:
+        async def execute(context: AgentToolContext, parameters: BaseModel) -> dict[str, Any]:
+            return await actions.execute(
+                context=context,
+                name=name,
+                arguments=parameters.model_dump(mode="json", exclude_unset=True),
+            )
+
+        return execute
+
+    registered.extend(
+        AgentTool(
+            definition.name,
+            definition.description,
+            definition.parameters,
+            bind(definition.name),
+            definition.mutating,
+            definition.requires_confirmation,
+        )
+        for definition in actions.actions.values()
+    )
+
+    async def schemas(context: AgentToolContext, parameters: ToolSchemasInput) -> dict[str, Any]:
+        """Отдаёт точные схемы выбранных инструментов без раздувания каждого шага."""
+        return {"tools": [item for item in executor.describe() if item["name"] in parameters.names]}
+
+    registered.append(
+        AgentTool(
+            "get_tool_schemas",
+            "Получить точные схемы аргументов перед вызовом выбранных инструментов.",
+            ToolSchemasInput,
+            schemas,
+        )
+    )
+    executor = AgentToolExecutor(registered)
+    return executor
+
+
+def get_agent_tool_executor(
+    scope: ProjectKnowledgeQueryScopeDep, actions: AgentActionsServiceDep
+) -> AgentToolExecutor:
+    """Внедряет чтение знаний через общий исполнитель инструментов."""
+    return build_project_tool_executor(ProjectQueryService(scope=scope), actions)
+
+
+AgentToolExecutorDep = Annotated[AgentToolExecutor, Depends(get_agent_tool_executor)]
 
 
 def get_project_agent_service(
@@ -536,6 +650,7 @@ def get_project_agent_service(
     embedding_client: EmbeddingClientDep,
     qdrant_client: QdrantClientDep,
     settings: SettingsDep,
+    tools: AgentToolExecutorDep,
 ) -> ProjectAgentService:
     """Создаёт Project Agent.
 
@@ -548,10 +663,76 @@ def get_project_agent_service(
         embedding_client=embedding_client,
         qdrant_client=qdrant_client,
         config=build_project_agent_config(settings),
+        tools=tools,
     )
 
 
 ProjectAgentServiceDep = Annotated[ProjectAgentService, Depends(get_project_agent_service)]
+
+
+def build_agent_conversation_config(settings: Settings) -> AgentConversationConfig:
+    """Передаёт диалогам только используемые бюджеты исполнения и памяти."""
+    return AgentConversationConfig(
+        turn_timeout_seconds=settings.agent.agent_turn_timeout_seconds,
+        history_messages=settings.agent.agent_history_messages,
+        summary_batch_size=settings.agent.agent_summary_batch_size,
+    )
+
+
+def get_agent_conversations_service(
+    scope: AgentConversationScopeDep,
+    agent: ProjectAgentServiceDep,
+    llm_client: LlmClientDep,
+    settings: SettingsDep,
+) -> AgentConversationsService:
+    """Собирает сценарии постоянных диалогов из явных зависимостей."""
+    return AgentConversationsService(
+        scope=scope,
+        agent=agent,
+        llm_client=llm_client,
+        config=build_agent_conversation_config(settings),
+    )
+
+
+AgentConversationsServiceDep = Annotated[
+    AgentConversationsService, Depends(get_agent_conversations_service)
+]
+
+
+def build_agent_worker(
+    *, session_factory: SessionFactory, settings: Settings, runtime: KnowledgeRuntime
+) -> AgentWorker:
+    """Собирает фоновое исполнение с теми же сервисами и клиентами, что HTTP."""
+    tools = build_project_tool_executor(
+        ProjectQueryService(
+            scope=build_project_knowledge_query_scope(session_factory=session_factory)
+        ),
+        AgentActionsService(
+            scope=build_agent_project_tool_scope(
+                session_factory=session_factory, settings=settings
+            ),
+            actions=PROJECT_ACTIONS,
+        ),
+    )
+    agent = ProjectAgentService(
+        scope=build_project_agent_scope(session_factory=session_factory, settings=settings),
+        llm_client=runtime.llm_client,
+        embedding_client=runtime.embedding_client,
+        qdrant_client=runtime.qdrant_client,
+        config=build_project_agent_config(settings),
+        tools=tools,
+    )
+    service = AgentConversationsService(
+        scope=build_agent_conversation_scope(session_factory=session_factory),
+        agent=agent,
+        llm_client=runtime.llm_client,
+        config=build_agent_conversation_config(settings),
+    )
+    return AgentWorker(
+        service=service,
+        poll_seconds=settings.agent.agent_poll_seconds,
+        concurrency=settings.agent.agent_concurrency,
+    )
 
 
 def get_document_links_service(

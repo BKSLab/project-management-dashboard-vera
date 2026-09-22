@@ -3,14 +3,15 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from enum import StrEnum
 from time import perf_counter
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from src.agent.tools import AgentToolContext, AgentToolExecutor, AgentToolRequest
 from src.clients.embedding import EmbeddingClient
 from src.clients.llm import LlmClient
 from src.clients.qdrant import KnowledgeSearchHit, ProjectQdrantClient
@@ -58,6 +59,7 @@ from src.schemas.project_risks import (
     ProjectRiskSchema,
     ProjectRiskSummarySchema,
 )
+from src.services.agent_cards import source_card
 from src.services.calendar import MAX_CALENDAR_RANGE_DAYS
 from src.services.db_scope import ProjectAgentScope, ProjectAgentScopeFactory
 from src.services.project_risks import build_risk_summary
@@ -106,6 +108,10 @@ class AgentToolCall(BaseModel):
 
 
 class AgentToolPlan(BaseModel):
+    write_intent: bool = Field(
+        default=False,
+        description="Пользователь явно поручил изменить проект или подтвердил обсуждённое изменение; вопросы о состоянии не разрешают запись.",
+    )
     """План SQL-инструментов и retrieval для текущего вопроса."""
 
     calls: list[AgentToolCall] = Field(default_factory=list, max_length=7)
@@ -119,6 +125,13 @@ class AgentOutput(BaseModel):
     answer: str = Field(default="", max_length=20000)
     source_ids: list[str] = Field(default_factory=list, max_length=20)
     reads: list[KnowledgeReadRequest] = Field(default_factory=list, max_length=8)
+    tool_calls: list[AgentToolRequest] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def limit_calls(self) -> AgentOutput:
+        if len(self.reads) + len(self.tool_calls) > 8:
+            raise ValueError("За один шаг допускается не более восьми инструментов.")
+        return self
 
 
 @dataclass(slots=True)
@@ -192,6 +205,7 @@ class ProjectAgentConfig:
     score_threshold: float
     chunk_target_chars: int = 2200
     chunk_overlap_chars: int = 300
+    tool_rounds: int = 4
 
 
 class ProjectAgentService:
@@ -205,6 +219,7 @@ class ProjectAgentService:
         embedding_client: EmbeddingClient,
         qdrant_client: ProjectQdrantClient,
         config: ProjectAgentConfig,
+        tools: AgentToolExecutor,
     ) -> None:
         """Создаёт Project Agent.
 
@@ -215,12 +230,14 @@ class ProjectAgentService:
             embedding_client: Клиент API эмбеддингов.
             qdrant_client: Клиент векторного индекса.
             config: Настройки семантического поиска.
+            tools: Исполнитель зарегистрированных инструментов проекта.
         """
         self.scope = scope
         self.llm_client = llm_client
         self.embedding_client = embedding_client
         self.qdrant_client = qdrant_client
         self.config = config
+        self.tools = tools
 
     async def ask(
         self,
@@ -228,8 +245,28 @@ class ProjectAgentService:
         project_id: int,
         question: str,
         history: list[KnowledgeChatMessageSchema],
+        memory: str = "",
+        actor: dict[str, Any] | None = None,
+        execution: AgentToolContext | None = None,
+        action_history: list[dict[str, Any]] | None = None,
+        uploaded_files: list[dict[str, Any]] | None = None,
     ) -> KnowledgeAnswerSchema:
-        """Ищет по всем источникам и позволяет модели дочитать текст и связи."""
+        """Ищет по всем источникам и позволяет модели дочитать текст и связи.
+
+        Args:
+            project_id: Проверенный вызывающим сервисом проект.
+            question: Текущий вопрос участника.
+            history: Недавние реплики для понимания продолжения разговора.
+            memory: Краткая память раннего обсуждения, отдельно от фактов проекта.
+            actor: Участник из серверного контекста; для прежнего API может отсутствовать.
+            execution: Доверенная область инструментов и текущая попытка очереди.
+            action_history: Сохранённые результаты действий и решений участника.
+        Returns:
+            Ответ с источниками, проверенными в текущем проекте.
+        Raises:
+            ProjectAgentError: При ошибке чтения данных проекта.
+            KnowledgeProviderError: Если модель не смогла подготовить ответ.
+        """
         started = perf_counter()
         phases = {name: None for name in ("planner", "ranked_fts", "embedding", "qdrant", "llm")}
         question = question.strip()
@@ -237,13 +274,19 @@ class ProjectAgentService:
             await self._require_project(db, project_id=project_id)
         phase = perf_counter()
         try:
-            plan = await self._select_tools(question=question, history=history)
+            plan = await self._select_tools(question=question, history=history, memory=memory)
         except KnowledgeProviderError:
             plan = AgentToolPlan(
                 calls=[AgentToolCall(name=StructuredToolName.PROJECT_STATISTICS)],
                 search_query=question,
             )
         phases["planner"] = self._elapsed_ms(phase)
+        tool_context = execution or AgentToolContext(
+            project_id=project_id, user_id=(actor or {}).get("user_id")
+        )
+        if tool_context.project_id != project_id:
+            raise ProjectAgentError("Область инструментов не совпадает с проектом вопроса.")
+        tool_context = replace(tool_context, can_write=tool_context.can_write and plan.write_intent)
         query = (plan.search_query or question).strip()
         semantic_hits = []
         semantic_available = False
@@ -320,6 +363,8 @@ class ProjectAgentService:
             "question": question,
             "retrieval_query": query,
             "dialog_history": [message.model_dump() for message in history[-10:]],
+            "dialog_memory": memory,
+            "current_participant": actor,
             "current_postgres_state": postgres,
             "catalog": {
                 "counts": catalog.counts,
@@ -334,14 +379,26 @@ class ProjectAgentService:
             "retrieval_context": retrieved,
             "related_context": neighbors,
             "read_results": [],
+            "available_tools": [
+                item
+                for item in self.tools.describe(include_parameters=False)
+                if tool_context.can_write or not item["mutating"]
+            ],
+            "tool_schema_lookup": {
+                "name": "get_tool_schemas",
+                "arguments": {"names": ["имя нужного инструмента"]},
+            },
+            "writes_allowed": tool_context.can_write,
+            "previous_actions": action_history or [],
+            "uploaded_files": uploaded_files or [],
         }
         self._limit_initial_context(content)
         self._register_views(content, catalog, registry)
         phase = perf_counter()
         output = AgentOutput()
         try:
-            for round_index in range(5):
-                content["remaining_read_rounds"] = 4 - round_index
+            for round_index in range(self.config.tool_rounds + 1):
+                content["remaining_read_rounds"] = self.config.tool_rounds - round_index
                 serialized = json.dumps(content, ensure_ascii=False, default=str)
                 output = await self.llm_client.get_structured_response(
                     system_prompt=PROJECT_AGENT_SYSTEM_PROMPT,
@@ -349,35 +406,45 @@ class ProjectAgentService:
                     schema=AgentOutput,
                     max_completion_tokens=4000,
                 )
-                if not output.reads or round_index == 4:
+                calls = output.tool_calls + [
+                    AgentToolRequest(
+                        name=request.name,
+                        arguments=request.model_dump(mode="json", exclude={"name"}),
+                    )
+                    for request in output.reads
+                ]
+                if not calls or round_index == self.config.tool_rounds:
                     break
+                results = [
+                    (request, await self.tools.execute(tool_context, request)) for request in calls
+                ]
                 async with self.scope() as db:
                     await self._require_project(db, project_id=project_id)
                     catalog = build_catalog(
                         project_id, await db.sources.get_project_rows(project_id)
                     )
-                    for request in output.reads:
-                        hits = (
-                            await db.sources.search(
-                                project_id,
-                                request.query or "",
-                                entity_type=request.entity_type,
-                                limit=request.limit + 1,
-                                offset=request.offset,
-                            )
-                            if request.name == "search_sources"
-                            else None
-                        )
-                        result = read_catalog(catalog, request, search_hits=hits)
+                    for request, result in results:
                         # Не обрываем JSON/источник без явного сообщения о лимите.
                         if (
                             len(serialized)
                             + len(json.dumps(result, ensure_ascii=False, default=str))
                             > 180000
                         ):
-                            result = {
-                                "error": "Лимит контекста ответа достигнут. Укажи, что удалось проверить и что осталось непрочитанным."
-                            }
+                            if "action" in result:
+                                # Успешное изменение нельзя превращать в ошибку чтения:
+                                # иначе модель повторит уже выполненную операцию.
+                                action = result["action"]
+                                result = {
+                                    "action": {
+                                        key: action[key]
+                                        for key in ("id", "tool_name", "title", "status")
+                                    },
+                                    "message": "Полные параметры и результат сохранены в карточке действия.",
+                                }
+                            else:
+                                result = {
+                                    "error": "Лимит контекста ответа достигнут. Укажи, что удалось проверить и что осталось непрочитанным."
+                                }
                         self._register_views(result, catalog, registry)
                         entry = {"request": request.model_dump(mode="json"), "result": result}
                         content["read_results"].append(entry)
@@ -391,13 +458,22 @@ class ProjectAgentService:
                     and source.source_id in catalog.sources
                     and source.source_id not in seen_sources
                 ):
-                    selected.append(source)
+                    current_source = catalog.sources[source.source_id]
+                    selected.append(
+                        source.model_copy(
+                            update={
+                                "title": current_source.title,
+                                "card": source_card(current_source, catalog),
+                            }
+                        )
+                    )
                     seen_sources.add(source.source_id)
-            answer = (
-                output.answer.strip()
-                or "Не удалось завершить проверку источников. Уточните вопрос или сузьте перечень объектов."
+            answer = output.answer.strip() or (
+                ""
+                if selected and not (output.reads or output.tool_calls)
+                else "Не удалось завершить проверку источников. Уточните вопрос или сузьте перечень объектов."
             )
-            if output.reads and output.answer.strip():
+            if (output.reads or output.tool_calls) and output.answer.strip():
                 answer += "\n\nПроверка контекста неполная: часть запрошенных источников осталась непрочитанной."
             return KnowledgeAnswerSchema(answer=answer, sources=selected)
         except ClientError as error:
@@ -450,7 +526,9 @@ class ProjectAgentService:
     @staticmethod
     def _register_views(value, catalog, registry) -> None:
         if isinstance(value, dict):
-            if value.get("entity_type") and value.get("source_id") in catalog.sources:
+            # Результаты доменных инструментов тоже содержат серверный source_id,
+            # хотя их компактный ответ может не дублировать entity_type.
+            if value.get("source_id") in catalog.sources:
                 source = catalog.sources[value["source_id"]]
                 excerpt = (value.get("matching_chunks") or [{}])[0].get("text") or value.get(
                     "text", ""
@@ -550,11 +628,13 @@ class ProjectAgentService:
         *,
         question: str,
         history: list[KnowledgeChatMessageSchema],
+        memory: str = "",
     ) -> AgentToolPlan:
         """Просит модель выбрать только необходимые structured tools."""
         content = json.dumps(
             {
                 "question": question,
+                "dialog_memory": memory,
                 "history": [
                     {"role": message.role, "content": message.content[:TEXT_FRAGMENT_LIMIT]}
                     for message in history[-10:]

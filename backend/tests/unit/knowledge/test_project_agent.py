@@ -11,6 +11,7 @@ from src.db.models.documents import Document
 from src.db.models.project_stages import ProjectStage
 from src.db.models.projects import Project, ProjectStatus
 from src.db.models.tasks import Task, TaskPriority
+from src.dependencies.services import build_knowledge_tool_executor
 from src.exceptions.clients import (
     EmbeddingClientError,
     LlmClientError,
@@ -55,6 +56,7 @@ from src.services.project_agent import (
     ProjectAgentService,
     StructuredToolName,
 )
+from src.services.project_query import ProjectQueryService
 
 
 def build_service(*, semantic_available: bool = True):
@@ -217,6 +219,7 @@ def build_service(*, semantic_available: bool = True):
 
     service = ProjectAgentService(
         scope=scope,
+        tools=build_knowledge_tool_executor(ProjectQueryService(scope=scope)),
         llm_client=llm_client,
         embedding_client=embedding_client,
         qdrant_client=qdrant_client,
@@ -235,6 +238,43 @@ def extract_ask_metrics(info: Mock) -> dict:
     message, payload = info.call_args.args
     assert message == "Метрики Project Agent: %s"
     return json.loads(payload)
+
+
+@pytest.mark.asyncio
+async def test_card_only_answer_uses_verified_fields_and_keeps_conversation_context():
+    from src.db.models.agent_messages import AgentMessage
+    from src.services.agent_conversations import AgentConversationsService
+
+    service, project, runtime, _db = build_service()
+
+    async def show_card(*, schema, content, **_kwargs):
+        if schema is AgentToolPlan:
+            return AgentToolPlan()
+        candidate = next(
+            item
+            for item in json.loads(content)["retrieval_context"]
+            if item["entity_type"] == "task"
+        )
+        return AgentOutput(answer="", source_ids=[candidate["source_handle"], "task:999999"])
+
+    runtime.llm_client.get_structured_response.side_effect = show_card
+    answer = await service.ask(project_id=project.id, question="Покажи задачу", history=[])
+    assert answer.answer == ""
+    assert len(answer.sources) == 1
+    card = answer.sources[0].card
+    assert card.key == "PROJ-12"
+    assert card.status == "В работе"
+    assert card.priority == "HIGH"
+    assert card.summary == "Согласовать владельцев рисков"
+    history = AgentConversationsService._history(
+        AgentMessage(
+            role="assistant",
+            content="",
+            sources=[source.model_dump(mode="json") for source in answer.sources],
+        )
+    )
+    assert "task:7" in history.content
+    assert "Подготовить паспорт рисков" in history.content
 
 
 @pytest.mark.asyncio
@@ -774,8 +814,8 @@ async def test_agent_bounds_the_context_it_sends_to_the_model() -> None:
 
 
 async def test_agent_reads_full_source_and_links_without_holding_database_scope():
+    from src.agent.tools import AgentToolRequest
     from src.knowledge.catalog import build_catalog
-    from src.schemas.knowledge import KnowledgeReadRequest
     from tests.unit.knowledge.test_knowledge_index import base_rows
 
     service, project, runtime, db = build_service()
@@ -804,15 +844,24 @@ async def test_agent_reads_full_source_and_links_without_holding_database_scope(
     async def answer(*, schema, content, **kwargs):
         assert not active
         if schema is AgentToolPlan:
+            assert json.loads(content)["dialog_memory"] == "Обсуждали резервного поставщика."
             return AgentToolPlan()
         payload = json.loads(content)
+        assert payload["dialog_memory"] == "Обсуждали резервного поставщика."
+        assert payload["current_participant"]["user_id"] == 4
+        assert {tool["name"] for tool in payload["available_tools"]} >= {
+            "read_source",
+            "related_sources",
+        }
         if not payload["read_results"]:
             assert "Скрытое решение" not in content
             return AgentOutput(
-                reads=[
-                    KnowledgeReadRequest(name="read_source", source_id="document:9", offset=offset),
-                    KnowledgeReadRequest(name="related_sources", source_id="task:7"),
-                    KnowledgeReadRequest(name="read_source", source_id="document:999"),
+                tool_calls=[
+                    AgentToolRequest(
+                        name="read_source", arguments={"source_id": "document:9", "offset": offset}
+                    ),
+                    AgentToolRequest(name="related_sources", arguments={"source_id": "task:7"}),
+                    AgentToolRequest(name="read_source", arguments={"source_id": "document:999"}),
                 ]
             )
         page, links, missing = [entry["result"] for entry in payload["read_results"]]
@@ -826,7 +875,13 @@ async def test_agent_reads_full_source_and_links_without_holding_database_scope(
         return AgentOutput(answer="Есть резервный поставщик.", source_ids=[page["source_handle"]])
 
     runtime.llm_client.get_structured_response.side_effect = answer
-    result = await service.ask(project_id=1, question="Что известно по задаче?", history=[])
+    result = await service.ask(
+        project_id=1,
+        question="Что известно по задаче?",
+        history=[],
+        memory="Обсуждали резервного поставщика.",
+        actor={"user_id": 4},
+    )
     assert result.sources[0].source_id == "document:9"
     assert runtime.llm_client.get_structured_response.await_count == 3
 

@@ -1,11 +1,11 @@
 import logging
 
-from sqlalchemy import Result, and_, select
+from sqlalchemy import Result, and_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from src.db.models.project_members import ProjectMember
+from src.db.models.project_members import ProjectMember, ProjectRole
 from src.exceptions.projects import (
     ProjectMemberAlreadyExistsRepositoryError,
     ProjectsRepositoryError,
@@ -21,6 +21,21 @@ class ProjectMembersRepository:
 
     def __init__(self, db_session: AsyncSession):
         self.db_session = db_session
+
+    async def set_role(self, project_id: int, user_id: int, role: ProjectRole) -> None:
+        """Меняет роль одного участника в транзакции передачи владения."""
+        try:
+            await self.db_session.execute(
+                update(ProjectMember)
+                .where(
+                    ProjectMember.project_id == project_id,
+                    ProjectMember.user_id == user_id,
+                )
+                .values(role=role)
+            )
+        except SQLAlchemyError as error:
+            await self.db_session.rollback()
+            raise ProjectsRepositoryError("Не удалось изменить роль участника.") from error
 
     async def get(
         self, project_id: int, user_id: int, *, for_update: bool = False

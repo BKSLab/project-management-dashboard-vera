@@ -175,6 +175,41 @@ class DBSettings(SettingsBase):
         )
 
 
+class AgentSettings(SettingsBase):
+    """Ресурсные пределы постоянных диалогов проектного агента."""
+
+    # Ограничиваем число одновременно готовящихся ответов на процесс backend.
+    agent_concurrency: int = Field(default=2, ge=1, le=8)
+    agent_poll_seconds: float = Field(default=1.0, gt=0)
+    # Общий срок включает планирование, поиск, память и все дочитывания модели.
+    agent_turn_timeout_seconds: float = Field(default=600.0, gt=0)
+    agent_history_messages: int = Field(default=10, ge=2, le=10)
+    agent_summary_batch_size: int = Field(default=10, ge=1, le=10)
+    agent_tool_rounds: int = Field(default=8, ge=1, le=16)
+
+
+class ChatSettings(SettingsBase):
+    """Явные пределы соединений и фоновой доставки общего чата."""
+
+    chat_redis_url: str = "redis://localhost:6381/0"
+    chat_redis_max_connections: int = Field(default=30, ge=4)
+    chat_redis_timeout: float = Field(default=3.0, gt=0)
+    chat_queue_size: int = Field(default=128, ge=8, le=1024)
+    chat_max_connections: int = Field(default=2000, ge=1)
+    chat_socket_send_timeout: float = Field(default=5.0, gt=0)
+    chat_heartbeat_seconds: float = Field(default=20.0, ge=2)
+    chat_presence_ttl_seconds: int = Field(default=60, ge=10)
+    chat_typing_ttl_seconds: int = Field(default=5, ge=2)
+    chat_ephemeral_sweep_seconds: float = Field(default=2.0, gt=0)
+    chat_outbox_poll_seconds: float = Field(default=0.25, gt=0)
+    chat_outbox_batch_size: int = Field(default=100, ge=1, le=500)
+    chat_send_per_minute: int = Field(default=30, ge=1)
+    chat_actions_per_minute: int = Field(default=120, ge=1)
+    chat_draft_retention_hours: int = Field(default=24, ge=1)
+    chat_cleanup_seconds: float = Field(default=3600.0, ge=10)
+    chat_max_frame_bytes: int = Field(default=65536, ge=8192, le=262144)
+
+
 class Settings(BaseSettings):
     """Агрегатор настроек приложения по доменам."""
 
@@ -185,6 +220,8 @@ class Settings(BaseSettings):
     llm: LlmSettings = Field(default_factory=LlmSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
+    agent: AgentSettings = Field(default_factory=AgentSettings)
+    chat: ChatSettings = Field(default_factory=ChatSettings)
 
 
 @lru_cache
