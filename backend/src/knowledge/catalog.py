@@ -22,6 +22,7 @@ SCHEMA_VERSION = 2
 class SourceType(StrEnum):
     PROJECT = "project"
     TASK = "task"
+    TASK_REPORT = "task_report"
     DOCUMENT = "document"
     COMMENT = "comment"
     ATTACHMENT = "attachment"
@@ -64,6 +65,9 @@ def policy(
 
 
 POLICIES = (
+    policy("task_reports", "task", SourceType.TASK_REPORT, "Отчёт по задаче",
+        "id task_id revision body_md author_name source_comment_id source_comment_original_id source_author_name created_at",
+        "body_md author_name"),
     policy(
         "projects",
         "self",
@@ -78,7 +82,7 @@ POLICIES = (
         "project",
         SourceType.TASK,
         "Задача",
-        "id project_id stage_id wbs_node_id number title description_md checklist checklist_revision priority role assignee start_date due_date baseline_start_date baseline_due_date completed_at position wbs_position created_at updated_at",
+        "id project_id stage_id status wbs_node_id number title description_md checklist checklist_revision priority role assignee start_date due_date baseline_start_date baseline_due_date completed_at position wbs_position created_at updated_at",
         "description_md checklist",
     ),
     policy(
@@ -144,7 +148,7 @@ POLICIES = (
         "project",
         SourceType.STICKER,
         "Стикер",
-        "id project_id body color created_by_user_id created_by_username_snapshot created_by_display_name_snapshot revision created_at updated_at",
+        "id project_id board_id body color created_by_user_id created_by_username_snapshot created_by_display_name_snapshot revision created_at updated_at",
         "body created_by_display_name_snapshot",
         "body",
     ),
@@ -161,7 +165,7 @@ POLICIES = (
         "task",
         SourceType.ACTIVITY,
         "История задачи",
-        "id task_id event_type from_value to_value created_at",
+        "id task_id event_type from_value to_value actor_user_id actor_name via_api_key_label created_at",
         "event_type from_value to_value",
         "event_type",
     ),
@@ -198,7 +202,7 @@ POLICIES = (
         "task",
         None,
         "Назначение участника",
-        "id task_id project_member_id role created_at updated_at",
+        "id task_id project_member_id user_id role created_at updated_at",
     ),
     # Только проектная публичная идентичность. Контакты, пароли и токены сюда не попадают.
     policy(
@@ -229,6 +233,13 @@ POLICIES = (
 POLICY_BY_TABLE = {item.table: item for item in POLICIES}
 POLICY_BY_TYPE = {item.kind: item for item in POLICIES if item.kind}
 EXCLUDED_TABLES = {
+    "api_keys": "Учётные данные локальных пользователей.",
+    "api_key_usage": "Технический журнал доступа.",
+    "project_boards": "Сцена доски доступна через доменные инструменты.",
+    "board_shapes": "Геометрия сцены доступна через инструменты доски.",
+    "task_views": "Персональное состояние просмотра, не знания проекта.",
+    "chat_agent_turns": "Состояние выполнения ходов агента в чате.",
+    "calendar_feed_tokens": "Секреты подписки календаря.",
     "project_chats": "Общая переписка будет подключена к знаниям отдельным pipeline.",
     "chat_messages": "Сообщения не индексируются синхронно и не являются проверенными фактами.",
     "chat_message_entities": "Ссылки переписки; исходные объекты индексируются самостоятельно.",
@@ -245,19 +256,23 @@ EXCLUDED_TABLES = {
     "knowledge_index_jobs": "Служебная очередь синхронизации.",
 }
 EXCLUDED_FIELDS = {
+    "task_reports": {"author_id": "Технический ID автора; снимок имени включён."},
     "analytics_reports": {"duration_ms": "Техническая длительность генерации."},
     "documents": {"search_vector": "Производный FTS-индекс."},
-    "task_comments": {"search_vector": "Производный FTS-индекс."},
+    "task_comments": {
+        "search_vector": "Производный FTS-индекс.",
+        "author_id": "Связь с учётной записью; публичное имя автора включено.",
+    },
     "project_stickers": {
-        key: "Визуальная геометрия доски." for key in ("canvas_x", "canvas_y", "height", "width")
+        key: "Визуальная геометрия доски." for key in ("canvas_x", "canvas_y", "height", "width", "z_index")
     },
     "projects": {
         key: "Оформление/сортировка либо производный индекс."
-        for key in ("color", "icon", "order_index", "search_vector")
+        for key in ("color", "icon", "icon_image_key", "icon_image_content_type", "order_index", "search_vector")
     },
     "tasks": {
         key: "Визуальная геометрия либо производный индекс."
-        for key in ("canvas_x", "canvas_y", "search_vector")
+        for key in ("canvas_x", "canvas_y", "search_vector", "attention_revision", "attention_deadline_revision")
     },
     "users": {
         key: "Данные учётной записи вне публичной проектной идентичности."
@@ -462,6 +477,8 @@ def build_catalog(project_id: int, rows: dict[str, list[dict]]) -> ProjectCatalo
                 title = f"{project['key']} · {title}"
             elif rule.kind is SourceType.TASK:
                 title = f"{task_keys[row['id']]} · {title}"
+            elif rule.kind is SourceType.TASK_REPORT:
+                title = f"{task_keys.get(row['task_id'], row['task_id'])} · Отчёт, версия {row['revision']}"
             elif rule.kind is SourceType.RISK:
                 title = f"RISK-{row['id']} · {title}"
             text_parts = [f"Тип: {rule.label}", f"Проект: {project['key']}", f"# {title}"]

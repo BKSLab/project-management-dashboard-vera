@@ -24,6 +24,7 @@ def sticker_schema(*, revision: int = 1) -> ProjectStickerSchema:
     return ProjectStickerSchema(
         id=4,
         project_id=1,
+        board_id=3,
         body="Согласовать API",
         color=ProjectStickerColor.YELLOW,
         canvas_x=40.0,

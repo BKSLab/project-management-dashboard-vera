@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import enum
+import hashlib
 from datetime import date
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,7 @@ from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .documents import Document
+    from .project_boards import ProjectBoard
     from .project_members import ProjectMember
     from .project_milestones import ProjectMilestone
     from .project_risks import ProjectRisk
@@ -96,10 +98,22 @@ class Project(Base, TimestampMixin):
         comment="HEX-цвет, которым проект обозначается в интерфейсе.",
     )
     icon: Mapped[str | None] = mapped_column(
-        String(length=8),
+        String(length=64),
         nullable=True,
         doc="Эмодзи-иконка проекта.",
         comment="Необязательная эмодзи-иконка проекта.",
+    )
+    icon_image_key: Mapped[str | None] = mapped_column(
+        String(length=2048),
+        nullable=True,
+        doc="Ключ своей картинки проекта в хранилище; важнее icon.",
+        comment="Локальный ключ картинки проекта в uploads; наружу не отдаётся.",
+    )
+    icon_image_content_type: Mapped[str | None] = mapped_column(
+        String(length=50),
+        nullable=True,
+        doc="MIME-тип своей картинки проекта.",
+        comment="Проверенный MIME-тип картинки проекта: png, jpeg или webp.",
     )
     start_date: Mapped[date | None] = mapped_column(
         Date,
@@ -135,6 +149,10 @@ class Project(Base, TimestampMixin):
         nullable=False,
         doc="Вычисляемый FTS-вектор проекта.",
         comment="Взвешенный FTS-вектор названия и описания проекта.",
+    )
+
+    boards: Mapped[list[ProjectBoard]] = relationship(
+        "ProjectBoard", back_populates="project", cascade="all, delete-orphan", passive_deletes=True,
     )
 
     owner: Mapped[User] = relationship("User", back_populates="owned_projects")
@@ -195,3 +213,10 @@ class Project(Base, TimestampMixin):
 
     def __repr__(self) -> str:
         return f"<Project(id={self.id}, key={self.key!r}, name={self.name!r})>"
+
+    @property
+    def icon_image_version(self) -> str | None:
+        """Версия своей картинки для URL с кешем; сама ссылка наружу не уходит."""
+        if not self.icon_image_key:
+            return None
+        return hashlib.sha256(self.icon_image_key.encode()).hexdigest()[:16]

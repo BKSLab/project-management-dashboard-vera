@@ -34,6 +34,7 @@ from src.schemas.calendar import (
     CalendarWbsNodeSchema,
     UnscheduledTasksPageSchema,
 )
+from src.services.critical_path import checklist_progress, critical_path
 from src.services.tasks import build_task_key
 from src.utils.deadlines import DUE_SOON_DAYS, is_task_due_soon, is_task_overdue
 
@@ -145,6 +146,16 @@ class CalendarService:
                 project_due_date=project.due_date,
                 milestones=milestones,
             )
+            latest_open_end = await self.tasks_repository.get_latest_open_end_date(
+                project_id=project_id
+            )
+            critical = critical_path(
+                tasks={**related_tasks, **{task.id: task for task in tasks}},
+                dependencies=dependencies,
+                done_stage_ids=done_stage_ids,
+                project_due_date=project.due_date,
+                latest_open_due_date=latest_open_end,
+            )
             result = CalendarResponseSchema(
                 range=CalendarRangeSchema(date_from=date_from, date_to=date_to, today=today),
                 project=CalendarProjectSchema(
@@ -158,6 +169,7 @@ class CalendarService:
                         is_done=task.stage_id in done_stage_ids,
                         today=today,
                         extra_risks=dependency_risks.get(task.id, []),
+                        is_critical=task.id in critical.task_ids,
                     )
                     for task in tasks
                 ],
@@ -225,9 +237,13 @@ class CalendarService:
                     else []
                 ),
                 dependencies=[
-                    CalendarDependencySchema.model_validate(
-                        dependency,
-                        from_attributes=True,
+                    CalendarDependencySchema(
+                        id=dependency.id,
+                        predecessor_task_id=dependency.predecessor_task_id,
+                        successor_task_id=dependency.successor_task_id,
+                        dependency_type=dependency.dependency_type,
+                        lag_days=dependency.lag_days,
+                        is_critical=dependency.id in critical.dependency_ids,
                     )
                     for dependency in dependencies
                 ],
@@ -351,8 +367,14 @@ def _to_calendar_task(
     is_done: bool,
     today: date,
     extra_risks: list[CalendarRiskReasonSchema] | None = None,
+    schema: type[CalendarTaskSchema] = CalendarTaskSchema,
+    **extra_fields,
 ) -> CalendarTaskSchema:
-    """Преобразует задачу в компактный календарный контракт."""
+    """Преобразует задачу в компактный календарный контракт.
+
+    ``schema`` и ``extra_fields`` нужны личному календарю: его задача —
+    наследник календарной с источником и состоянием.
+    """
     due_date = task.due_date
     risk_level, risk_reasons = _task_risk(
         due_date=due_date,
@@ -362,12 +384,13 @@ def _to_calendar_task(
     )
     extra_risks = extra_risks or []
     risk_reasons.extend(extra_risks)
+    progress = checklist_progress(task, is_done=is_done)
     if any(reason.code in {"NEGATIVE_SLACK", "MILESTONE_AT_RISK"} for reason in extra_risks):
         risk_level = "high"
     elif extra_risks and risk_level not in {"high", "medium"}:
         risk_level = "medium"
     if due_date is None:
-        return CalendarTaskSchema(
+        return schema(
             id=task.id,
             key=build_task_key(project_key=project_key, number=task.number),
             title=task.title,
@@ -386,8 +409,10 @@ def _to_calendar_task(
             risk_level=risk_level,
             risk_reasons=risk_reasons,
             updated_at=task.updated_at,
+            progress=progress,
+            **extra_fields,
         )
-    return CalendarTaskSchema(
+    return schema(
         id=task.id,
         key=build_task_key(project_key=project_key, number=task.number),
         title=task.title,
@@ -413,6 +438,8 @@ def _to_calendar_task(
         risk_level=risk_level,
         risk_reasons=risk_reasons,
         updated_at=task.updated_at,
+        progress=progress,
+        **extra_fields,
     )
 
 
@@ -554,3 +581,20 @@ def _dependency_risks(
                 ),
             )
     return result
+
+
+def validate_calendar_range(*, date_from: date, date_to: date) -> None:
+    """Проверяет порядок и максимальную длину диапазона любого календаря.
+
+    Raises:
+        CalendarRangeError: Если конец раньше начала или диапазон длиннее предела.
+    """
+    if date_to < date_from:
+        raise CalendarRangeError("Конец диапазона не может быть раньше начала.")
+    if (date_to - date_from).days > MAX_CALENDAR_RANGE_DAYS:
+        raise CalendarRangeError(
+            f"Диапазон календаря не может превышать {MAX_CALENDAR_RANGE_DAYS + 1} день."
+        )
+
+
+to_calendar_task = _to_calendar_task

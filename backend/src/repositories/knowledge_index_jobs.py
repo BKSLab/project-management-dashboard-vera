@@ -184,7 +184,9 @@ class KnowledgeIndexJobsRepository:
                     select(candidate)
                     .where(
                         candidate.status == KnowledgeIndexStatus.PENDING,
-                        candidate.available_at <= now,
+                        # Outbox задаёт available_at по часам PostgreSQL.
+                        # Процесс и сервер БД могут немного расходиться во времени.
+                        candidate.available_at <= func.now(),
                         ~blocked,
                     )
                     .order_by(candidate.id)
@@ -222,7 +224,7 @@ class KnowledgeIndexJobsRepository:
                         .where(
                             KnowledgeIndexJob.project_id == first.project_id,
                             KnowledgeIndexJob.status == KnowledgeIndexStatus.PENDING,
-                            KnowledgeIndexJob.available_at <= now,
+                            KnowledgeIndexJob.available_at <= func.now(),
                         )
                         .order_by(KnowledgeIndexJob.id)
                         .with_for_update(skip_locked=True)

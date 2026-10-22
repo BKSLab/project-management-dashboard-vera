@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown, Loader2, MessageSquare } from "lucide-react";
-import type { ChatMessage } from "@/lib/projectChat";
+import { chatAuthorName, isAgentThinking, type ChatMessage } from "@/lib/projectChat";
 import { useProjectChat } from "@/lib/useProjectChat";
 import { ChatMessage as MessageRow } from "@/components/chat/ChatMessage";
 import { Button } from "@/components/ui/Button";
@@ -114,10 +114,10 @@ export function ChatMessageList({ messages, hasMore, loadOlder, initialReadSeq, 
     };
     const unreadIndex = messages.findIndex((message) => !message.delivery && !message.deleted_at && message.author?.id !== userId && message.seq > initialReadSeq);
     const newCount = messages.filter((message) => !message.delivery && message.seq > seenTail).length;
-    const latestIncoming = messages.filter((message) => !message.delivery && !message.deleted_at && message.author?.id !== userId).at(-1);
+    const latestIncoming = messages.filter((message) => !message.delivery && !message.deleted_at && !isAgentThinking(message) && message.author?.id !== userId).at(-1);
     const day = (value: string) => new Date(value).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
     return <div className="relative min-h-0 flex-1">
-        <span className="sr-only" aria-live="polite" aria-atomic="true">{latestIncoming && `${latestIncoming.author?.display_name ?? "Участник"}: ${latestIncoming.content.slice(0, 160) || "Вложение"}`}</span>
+        <span className="sr-only" aria-live="polite" aria-atomic="true">{latestIncoming && `${chatAuthorName(latestIncoming)}: ${latestIncoming.content.slice(0, 160) || "Вложение"}`}</span>
         <div ref={viewport} onScroll={scroll} aria-label="История сообщений проекта" className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]">
             <div ref={content} className="mx-auto max-w-4xl px-2 pt-2 pb-6 sm:px-4">
                 <div ref={top} className="flex min-h-5 justify-center">{hasMore && <Button variant="ghost" size="sm" disabled={loadingOlder} onClick={() => void older()} icon={loadingOlder ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" /> : undefined}>{loadingOlder ? "Загрузка…" : "Ранние сообщения"}</Button>}</div>

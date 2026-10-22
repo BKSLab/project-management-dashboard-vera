@@ -1,9 +1,42 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyChatMessage, mergeChatMessages, type ChatEvent, type ChatMessage } from "@/lib/projectChat";
+import { applyChatMessage, chatAuthorName, isTaskMove, mergeChatMessages, taskMoveText, type ChatEvent, type ChatMessage, type ChatTaskMove } from "@/lib/projectChat";
 import { ProjectChatTransport } from "@/lib/projectChatTransport";
 
 const row = (patch: Partial<ChatMessage> = {}): ChatMessage => ({
     id: 1, chat_id: 1, project_id: 1, seq: 1, author_type: "USER", author: { id: 1, username: "anna", display_name: "Анна" }, client_message_id: "a", content: "Сообщение", revision: 1, created_at: "2026-09-21T10:00:00Z", edited_at: null, deleted_at: null, reply: null, mentions: [], entities: [], attachments: [], reactions: [], ...patch,
+});
+
+describe("переносы и авторы чата", () => {
+    const move: ChatTaskMove = { task_id: 8, from_key: "DEMO-8", user_id: 2, direction: "out", target_kind: "PROJECT", target_name: null, to_key: null };
+
+    it("называет входящий, исходящий и личный перенос без раскрытия чужого проекта", () => {
+        const members = [{ id: 2, username: "oleg", display_name: "Олег" }];
+        expect(taskMoveText(move, members)).toBe("Задача DEMO-8 перенесена в другой проект — Олег");
+        expect(taskMoveText({ ...move, target_kind: "PERSONAL", to_key: "PERSONAL-3" }, members)).toBe("Задача DEMO-8 перенесена в разовые задачи (PERSONAL-3) — Олег");
+        expect(taskMoveText({ ...move, direction: "in", to_key: "DEMO-9" }, [])).toBe("Задача DEMO-8 перенесена в этот проект: теперь DEMO-9");
+        expect(taskMoveText(move, [{ ...members[0], display_name: " " }])).toContain("— oleg");
+    });
+
+    it("пропускает неполные и неподдерживаемые данные переноса", () => {
+        expect(isTaskMove(move)).toBe(true);
+        expect(isTaskMove({ task_id: 8, from_key: "DEMO-8", direction: "out" })).toBe(false);
+        expect(isTaskMove({ ...move, task_id: NaN })).toBe(false);
+        expect(isTaskMove({ ...move, target_kind: "FLOW" } as unknown as ChatEvent["data"])).toBe(false);
+    });
+
+    it("подписывает Веры, локального пользователя и старый ответ с отсутствующим автором", () => {
+        expect(chatAuthorName({ author_type: "AGENT", author: null })).toBe("Вера");
+        expect(chatAuthorName({ author: row().author })).toBe("Анна");
+        expect(chatAuthorName({ author: { id: 1, username: "anna", display_name: " " } })).toBe("anna");
+        expect(chatAuthorName({ author: null }, "Удалённый пользователь")).toBe("Удалённый пользователь");
+    });
+
+    it("сохраняет тип автора Веры в preview после обновления исходного сообщения", () => {
+        const original = row({ author_type: "AGENT", author: null });
+        const reply = row({ id: 2, seq: 2, client_message_id: "reply", reply: { id: 1, seq: 1, author: null, content: "", deleted: false } });
+        const history = applyChatMessage({ messages: [reply], has_more: false, event_cursor: 0 }, original);
+        expect(chatAuthorName(history.messages.find((message) => message.id === 2)!.reply!)).toBe("Вера");
+    });
 });
 
 describe("единый кэш чата", () => {

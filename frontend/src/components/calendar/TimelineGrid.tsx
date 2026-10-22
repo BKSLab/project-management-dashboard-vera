@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { dataColor } from "@/lib/dataColor";
 import { useDroppable } from "@dnd-kit/core";
-import { CalendarDays, ChevronDown, ChevronRight, FolderTree } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronRight } from "lucide-react";
 import {
-    calendarDateDropId,
+    timelineDateDropId,
     calendarDaysBetween,
     timelineBarGeometry,
     timelineDependencyGeometry,
@@ -11,41 +12,79 @@ import {
     type TimelineScale,
 } from "@/lib/calendar";
 import { cn } from "@/lib/cn";
-import { buildTimelineWbsRows } from "@/lib/timelineWbs";
+import { criticalState } from "@/lib/ganttSchedule";
+import {
+    assigneeGroupKey,
+    buildTimelineAssigneeRows,
+    buildTimelineStageRows,
+    buildTimelineWbsGroupRows,
+    type TimelineGroupBy,
+    type TimelineGroupKey,
+} from "@/lib/timelineGroups";
+import { workloadSummary, workloadSummaryText, type WorkloadPerson } from "@/lib/workload";
 import type {
     CalendarMilestone,
     CalendarStage,
-    CalendarTask,
     CalendarWbsNode,
+    CalendarTask,
     ScenarioNormalizedChange,
     TaskDependency,
 } from "@/lib/types";
 import { TimelineTaskBar } from "@/components/calendar/TimelineTaskBar";
+import { StageSpanBracket } from "@/components/calendar/gantt/StageSpanBracket";
+import { useCtrlWheelZoom } from "@/components/calendar/gantt/useCtrlWheelZoom";
+import { WorkloadStrip } from "@/components/calendar/TimelineWorkload";
 import { IconButton } from "@/components/ui/Button";
+import { taskColor, type ColorMode } from "@/lib/calendarGrid";
+import {
+    GANTT_COLUMNS,
+    LABEL_WIDTH_DEFAULT,
+    assigneeInitials,
+    clampLabelWidth,
+    ganttCellValue,
+    ganttColumnsWidth,
+    TIMELINE_DAY_WIDTH,
+    type GanttColumn,
+} from "@/lib/ganttView";
 
-const TIMELINE_DAY_WIDTH: Record<TimelineScale, number> = {
-    week: 104,
-    month: 38,
-    quarter: 20,
-};
+const MONTH_SHORT = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"];
+
+/** Месяцы видимого периода с шириной в днях — подписи шапки для квартала и года. */
+function monthBands(days: CalendarDayModel[]) {
+    const bands: { key: string; label: string; first: string; count: number }[] = [];
+    for (const day of days) {
+        const key = day.date.slice(0, 7);
+        const last = bands.at(-1);
+        if (last && last.key === key) last.count += 1;
+        else bands.push({ key, label: `${MONTH_SHORT[Number(day.date.slice(5, 7)) - 1]} ${day.date.slice(0, 4)}`, first: day.date, count: 1 });
+    }
+    return bands;
+}
 
 function TimelineDropColumn({
     day,
     width,
     height,
+    scale,
 }: {
     day: CalendarDayModel;
     width: number;
     height: number;
+    scale: TimelineScale;
 }) {
-    const { isOver, setNodeRef } = useDroppable({ id: calendarDateDropId(day.date) });
+    const { isOver, setNodeRef } = useDroppable({ id: timelineDateDropId(day.date) });
+    // На годовой шкале деление — неделя: граница только перед понедельником, затеняются праздники,
+    // а обычные выходные не рисуются (при 4 px на день они сливаются в штриховку).
+    const isSunday = new Date(`${day.date}T00:00:00`).getDay() === 0;
+    const shaded = scale === "year" ? day.isOff && day.holidayTitle !== null : day.isOff;
     return (
         <div
             ref={setNodeRef}
             aria-hidden="true"
+            title={day.holidayTitle ?? undefined}
             className={cn(
-                "border-r border-line-subtle",
-                day.isWeekend && "bg-surface-2/35",
+                scale !== "year" || isSunday ? "border-r border-line-subtle" : undefined,
+                shaded && "bg-surface-2/60",
                 isOver && "bg-accent/15 ring-1 ring-inset ring-accent",
             )}
             style={{ width, height }}
@@ -58,16 +97,40 @@ interface TimelineGridProps {
     range: TimelineRange;
     scale: TimelineScale;
     tasks: CalendarTask[];
-    wbsNodes: CalendarWbsNode[];
+    wbsNodes?: CalendarWbsNode[];
     stagesById: Map<number, CalendarStage>;
     milestones: CalendarMilestone[];
     dependencies: TaskDependency[];
     scenarioChanges: ScenarioNormalizedChange[];
     selectedDate: string;
-    onSelectDate: (date: string) => void;
+    /** Клик по дню шапки — «day», по месяцу — «month»: открыть этот период в сетке. */
+    onSelectDate: (date: string, scale: "day" | "month") => void;
     onOpenTask: (taskId: number) => void;
     onScheduleTask: (task: CalendarTask) => void;
     onResizeTask: (task: CalendarTask, edge: "start" | "end", deltaDays: number) => void;
+    /** «Цвет по» — как в сетке; нет — полосы нейтральные. */
+    colorMode?: ColorMode;
+    /** Ширина колонки названий (180–480) и её смена перетаскиванием правой границы в шапке. */
+    labelWidth?: number;
+    onLabelWidthChange?: (width: number) => void;
+    /** Дополнительные колонки слева: исполнитель, начало, срок, длительность. */
+    columns?: GanttColumn[];
+    /** День, к которому прокрутить шкалу (общая дата в «Рядом»); нет — к сегодняшнему. */
+    focusDate?: string;
+    /** Ctrl+колесо над шкалой: +1 — мельче, −1 — крупнее. */
+    onZoom?: (direction: number) => void;
+    /** Своя ширина дня (режим показа растягивает шкалу на экран); нет — по масштабу. */
+    dayWidth?: number;
+    /** Лист для показа и выгрузки: без своей прокрутки, ручек и кнопок — в натуральную ширину. */
+    staticLayout?: boolean;
+    /** Режим «Критический путь»: подсветить критические полосы и стрелки. */
+    criticalMode?: boolean;
+    /** Связь протягиванием от ручки полосы; нет — ручек нет. */
+    onLinkTasks?: (predecessorId: number, successorId: number) => void;
+    /** Строки по WBS, стадиям или по исполнителям с тепловой полосой загрузки. */
+    groupBy?: TimelineGroupBy;
+    /** Загрузка людей по подписи исполнителя (ответ /calendar/workload). */
+    workload?: ReadonlyMap<string, WorkloadPerson>;
 }
 
 export function TimelineGrid({
@@ -75,7 +138,7 @@ export function TimelineGrid({
     range,
     scale,
     tasks,
-    wbsNodes,
+    wbsNodes = [],
     stagesById,
     milestones,
     dependencies,
@@ -85,13 +148,36 @@ export function TimelineGrid({
     onOpenTask,
     onScheduleTask,
     onResizeTask,
+    colorMode,
+    labelWidth = LABEL_WIDTH_DEFAULT,
+    onLabelWidthChange,
+    columns = [],
+    focusDate,
+    onZoom,
+    staticLayout = false,
+    dayWidth: dayWidthOverride,
+    criticalMode = false,
+    onLinkTasks,
+    groupBy = "stage",
+    workload,
 }: TimelineGridProps) {
-    const [collapsedIds, setCollapsedIds] = useState<Set<number | "unassigned">>(new Set());
+    const [dragLabelWidth, setDragLabelWidth] = useState<number | null>(null);
+    const titleWidth = dragLabelWidth ?? labelWidth;
+    const visibleColumns = GANTT_COLUMNS.filter((column) => columns.includes(column.id));
+    const leftWidth = titleWidth + ganttColumnsWidth(columns);
+    const [collapsedIds, setCollapsedIds] = useState<Set<TimelineGroupKey>>(new Set());
+    const stages = useMemo(() => [...stagesById.values()], [stagesById]);
+    // Строки сгруппированы по стадиям проекта (шкала читается так же, как канбан)
+    // или по исполнителям — тогда в заголовке человека тепловая полоса загрузки.
     const rows = useMemo(
-        () => buildTimelineWbsRows(wbsNodes, tasks, collapsedIds),
-        [collapsedIds, tasks, wbsNodes],
+        () =>
+            groupBy === "assignee"
+                ? buildTimelineAssigneeRows(tasks, collapsedIds, workload ? [...workload.keys()] : [])
+                : groupBy === "wbs" ? buildTimelineWbsGroupRows(wbsNodes, tasks, collapsedIds) : buildTimelineStageRows(stages, tasks, collapsedIds),
+        [collapsedIds, groupBy, tasks, stages, wbsNodes, workload],
     );
-    const dayWidth = TIMELINE_DAY_WIDTH[scale];
+    const dayWidth = dayWidthOverride ?? TIMELINE_DAY_WIDTH[scale];
+    const showInitials = scale === "week" || scale === "month";
     const timelineWidth = days.length * dayWidth;
     const rowHeight = scale === "week" ? 48 : 42;
     const headerHeight = 42;
@@ -138,7 +224,37 @@ export function TimelineGrid({
         });
     }, [dayWidth, dependencies, range, rowHeight, rows, tasks]);
 
-    function toggleRow(id: number | "unassigned") {
+    // Широкая шкала (квартал, год) открывается так, чтобы «сегодня» было в поле зрения.
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const todayIndex = days.findIndex((day) => day.isToday);
+    const focusIndex = focusDate ? days.findIndex((day) => day.date === focusDate) : -1;
+    const scrollIndex = focusIndex >= 0 ? focusIndex : todayIndex;
+    useEffect(() => {
+        const element = scrollRef.current;
+        if (!element || staticLayout) return;
+        element.scrollLeft = scrollIndex < 0 ? 0 : Math.max(0, scrollIndex * dayWidth - (element.clientWidth - leftWidth) / 3);
+        // leftWidth не в зависимостях: смена ширины колонки не должна дёргать шкалу.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dayWidth, range.dateFrom, scrollIndex, staticLayout]);
+    useCtrlWheelZoom(scrollRef, staticLayout ? undefined : onZoom);
+
+    function startLabelResize(event: ReactPointerEvent<HTMLSpanElement>) {
+        if (!onLabelWidthChange) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const startX = event.clientX;
+        const startWidth = labelWidth;
+        const move = (moveEvent: PointerEvent) => setDragLabelWidth(clampLabelWidth(startWidth + moveEvent.clientX - startX));
+        const finish = (upEvent: PointerEvent) => {
+            window.removeEventListener("pointermove", move);
+            setDragLabelWidth(null);
+            onLabelWidthChange(clampLabelWidth(startWidth + upEvent.clientX - startX));
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", finish, { once: true });
+    }
+
+    function toggleRow(id: TimelineGroupKey) {
         setCollapsedIds((current) => {
             const next = new Set(current);
             if (next.has(id)) next.delete(id);
@@ -148,30 +264,88 @@ export function TimelineGrid({
     }
 
     return (
-        <section className="instrument-surface overflow-hidden rounded-[var(--radius-panel)] border-line-subtle">
-            <div className="scrollbar-thin overflow-x-auto">
-                <div className="relative min-w-max" style={{ width: 210 + timelineWidth }}>
+        <section
+            className={cn(
+                "instrument-surface flex flex-col rounded-[var(--radius-panel)] border-line-subtle",
+                staticLayout ? "w-max" : "h-full min-h-0 overflow-hidden",
+            )}
+        >
+            <div ref={scrollRef} className={staticLayout ? undefined : "scrollbar-thin min-h-0 flex-1 overflow-auto"} data-timeline-scroll="">
+                <div className="relative min-w-max" style={{ width: leftWidth + timelineWidth }}>
                     <div
                         className="sticky top-0 z-30 grid border-b border-line bg-surface-2/95 backdrop-blur-sm"
-                        style={{ gridTemplateColumns: `210px ${timelineWidth}px`, height: headerHeight }}
+                        style={{ gridTemplateColumns: `${leftWidth}px ${timelineWidth}px`, height: headerHeight }}
                     >
-                        <div className="sticky left-0 z-40 flex items-center gap-2 border-r border-line bg-surface-2 px-3 text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">
-                            <CalendarDays size={13} /> Работа
+                        <div className="sticky left-0 z-40 flex items-center border-r border-line bg-surface-2 text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">
+                            <span className="flex min-w-0 flex-1 items-center gap-2 px-3">
+                                <CalendarDays size={13} className="shrink-0" /> Работа
+                            </span>
+                            {visibleColumns.map((column) => (
+                                <span key={column.id} className="shrink-0 truncate border-l border-line-subtle px-1 text-[9px]" style={{ width: column.width }} title={column.label}>
+                                    {column.header}
+                                </span>
+                            ))}
+                            {onLabelWidthChange && !staticLayout && (
+                                <span
+                                    role="separator"
+                                    aria-orientation="vertical"
+                                    aria-label="Ширина колонки задач"
+                                    title="Потяните, чтобы изменить ширину колонки с задачами"
+                                    onPointerDown={startLabelResize}
+                                    className="absolute inset-y-0 z-50 w-1.5 cursor-col-resize hover:bg-accent/40"
+                                    style={{ left: titleWidth - 3 }}
+                                    data-label-resize=""
+                                />
+                            )}
                         </div>
-                        <div className="flex">
+                        <div className="relative flex">
+                            {(scale === "year" || scale === "quarter") && (
+                                <div className="absolute inset-x-0 top-0 z-10 flex h-[18px] border-b border-line-subtle bg-surface-2">
+                                    {monthBands(days).map((band) => (
+                                        <button
+                                            key={band.key}
+                                            type="button"
+                                            onClick={() => onSelectDate(band.first, "month")}
+                                            title={`${band.label} — открыть месяц в сетке`}
+                                            className="shrink-0 truncate border-r border-line px-1 text-left text-[10px] font-semibold text-secondary hover:bg-hover hover:text-primary"
+                                            style={{ width: band.count * dayWidth }}
+                                        >
+                                            {band.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                            {scale === "year" && (
+                                <div className="absolute inset-x-0 bottom-0 flex h-[24px]" aria-hidden="true">
+                                    {days.map((day) => (
+                                        <span
+                                            key={day.date}
+                                            className={cn(
+                                                "shrink-0",
+                                                new Date(`${day.date}T00:00:00`).getDay() === 0 && "border-r border-line-subtle",
+                                                day.isOff && day.holidayTitle !== null && "bg-surface-2",
+                                            )}
+                                            style={{ width: dayWidth }}
+                                        />
+                                    ))}
+                                </div>
+                            )}
                             {days.map((day, index) => {
+                                if (scale === "year") return null;
                                 const showLabel =
                                     scale !== "quarter" || day.dayNumber === 1 || index % 7 === 0;
+                                const label = [day.date, day.holidayTitle, "Открыть день в сетке"].filter(Boolean).join("\n");
                                 return (
                                     <button
                                         key={day.date}
                                         type="button"
-                                        title={day.date}
-                                        aria-label={`Открыть agenda за ${day.date}`}
-                                        onClick={() => onSelectDate(day.date)}
+                                        title={label}
+                                        aria-label={`Открыть день ${day.date} в сетке`}
+                                        onClick={() => onSelectDate(day.date, "day")}
                                         className={cn(
                                             "shrink-0 border-r border-line-subtle text-[10px] text-muted hover:bg-hover hover:text-primary",
-                                            day.isWeekend && "bg-surface-2",
+                                            scale === "quarter" && "pt-[18px]",
+                                            day.isOff && "bg-surface-2",
                                             day.isToday && "text-accent",
                                             selectedDate === day.date && "bg-accent/10 text-accent",
                                         )}
@@ -194,13 +368,26 @@ export function TimelineGrid({
                                     </button>
                                 );
                             })}
+                            {days.map(
+                                (day, index) =>
+                                    day.isToday && (
+                                        <span
+                                            key={`today-label-${day.date}`}
+                                            className="pointer-events-none absolute bottom-0 z-20 -translate-x-1/2 rounded-t-[3px] bg-accent px-1 text-[9px] leading-[13px] font-semibold text-on-accent"
+                                            style={{ left: index * dayWidth + dayWidth / 2 }}
+                                            title="Сегодня"
+                                        >
+                                            сегодня
+                                        </span>
+                                    ),
+                            )}
                         </div>
                     </div>
 
                     <div className="relative" style={{ minHeight: bodyHeight }}>
                         <div
-                            className="pointer-events-none absolute top-0 left-[210px] z-0 flex"
-                            style={{ width: timelineWidth, height: bodyHeight }}
+                            className="pointer-events-none absolute top-0 z-0 flex"
+                            style={{ left: leftWidth, width: timelineWidth, height: bodyHeight }}
                         >
                             {days.map((day) => (
                                 <TimelineDropColumn
@@ -208,6 +395,7 @@ export function TimelineGrid({
                                     day={day}
                                     width={dayWidth}
                                     height={bodyHeight}
+                                    scale={scale}
                                 />
                             ))}
                         </div>
@@ -217,9 +405,9 @@ export function TimelineGrid({
                                     <div
                                         key={`today-${day.date}`}
                                         aria-label="Сегодня"
-                                        className="pointer-events-none absolute top-0 z-20 w-px bg-accent/80"
+                                        className="pointer-events-none absolute top-0 z-20 w-0.5 bg-accent"
                                         style={{
-                                            left: 210 + index * dayWidth + dayWidth / 2,
+                                            left: leftWidth + index * dayWidth + dayWidth / 2,
                                             height: bodyHeight,
                                         }}
                                     />
@@ -238,7 +426,7 @@ export function TimelineGrid({
                                             ? "border-success"
                                             : "border-purple",
                                     )}
-                                    style={{ left: 210 + offset, height: bodyHeight }}
+                                    style={{ left: leftWidth + offset, height: bodyHeight }}
                                     title={`${milestone.title} · ${milestone.due_date}`}
                                 >
                                     <span
@@ -258,7 +446,8 @@ export function TimelineGrid({
                         {dependencyPaths.length > 0 && (
                             <svg
                                 aria-label="Зависимости задач Finish-to-Start"
-                                className="pointer-events-none absolute top-0 left-[210px] z-[5] overflow-visible text-accent"
+                                className="pointer-events-none absolute top-0 z-[5] overflow-visible text-accent"
+                                style={{ left: leftWidth }}
                                 width={timelineWidth}
                                 height={bodyHeight}
                                 viewBox={`0 0 ${timelineWidth} ${bodyHeight}`}
@@ -274,6 +463,16 @@ export function TimelineGrid({
                                     >
                                         <path d="M 0 0 L 6 3 L 0 6 z" fill="currentColor" />
                                     </marker>
+                                    <marker
+                                        id="timeline-dependency-arrow-critical"
+                                        markerWidth="6"
+                                        markerHeight="6"
+                                        refX="5"
+                                        refY="3"
+                                        orient="auto"
+                                    >
+                                        <path d="M 0 0 L 6 3 L 0 6 z" fill="var(--color-danger)" />
+                                    </marker>
                                 </defs>
                                 {dependencyPaths.map(
                                     ({ dependency, geometry, predecessor, successor }) => (
@@ -281,13 +480,14 @@ export function TimelineGrid({
                                             key={dependency.id}
                                             d={geometry.path}
                                             fill="none"
-                                            stroke="currentColor"
-                                            strokeWidth="1.25"
+                                            stroke={criticalMode && dependency.is_critical ? "var(--color-danger)" : "currentColor"}
+                                            strokeWidth={criticalMode && dependency.is_critical ? "2" : "1.25"}
+                                            data-critical={criticalMode ? (dependency.is_critical ? "critical" : "dimmed") : undefined}
                                             strokeDasharray={
                                                 dependency.lag_days > 0 ? "4 3" : undefined
                                             }
-                                            markerEnd="url(#timeline-dependency-arrow)"
-                                            opacity="0.62"
+                                            markerEnd={criticalMode && dependency.is_critical ? "url(#timeline-dependency-arrow-critical)" : "url(#timeline-dependency-arrow)"}
+                                            opacity={criticalMode ? (dependency.is_critical ? "0.95" : "0.18") : "0.62"}
                                         >
                                             <title>
                                                 {predecessor.key} → {successor.key}
@@ -321,48 +521,71 @@ export function TimelineGrid({
                                         ? (calendarDaysBetween(visibleStart, visibleEnd) + 1) *
                                           dayWidth
                                         : 0;
-                                const collapseKey = row.nodeId ?? "unassigned";
+                                const isPerson = row.assignee !== undefined;
+                                const collapseKey: TimelineGroupKey = isPerson
+                                    ? assigneeGroupKey(row.assignee ?? null)
+                                    : (row.groupKey ?? row.stageId ?? "other");
+                                const person = isPerson && row.assignee ? workload?.get(row.assignee) : undefined;
+                                const personSummary = isPerson
+                                    ? workloadSummaryText(workloadSummary(person, row.aggregate.total))
+                                    : null;
                                 return (
                                     <div
                                         key={row.id}
                                         className="relative grid border-b border-line bg-surface-2/55"
                                         style={{
-                                            gridTemplateColumns: `210px ${timelineWidth}px`,
+                                            gridTemplateColumns: `${leftWidth}px ${timelineWidth}px`,
                                             height: rowHeight,
                                         }}
                                     >
                                         <button
                                             type="button"
-                                            disabled={!row.hasChildren}
-                                            aria-expanded={row.hasChildren ? !row.collapsed : undefined}
-                                            onClick={() => row.hasChildren && toggleRow(collapseKey)}
-                                            className="sticky left-0 z-20 flex min-w-0 items-center gap-1.5 border-r border-line bg-surface-2 px-2 text-left disabled:cursor-default"
-                                            style={{ paddingLeft: 8 + row.depth * 14 }}
+                                            aria-expanded={!row.collapsed}
+                                            onClick={() => toggleRow(collapseKey)}
+                                            title={
+                                                personSummary
+                                                    ? `${row.title}\n${personSummary.title}\n${row.collapsed ? "Показать задачи" : "Свернуть задачи"}`
+                                                    : row.collapsed
+                                                      ? "Показать задачи группы"
+                                                      : "Свернуть задачи группы"
+                                            }
+                                            className="sticky left-0 z-20 flex min-w-0 items-center gap-1.5 border-r border-line bg-surface-2 px-2 text-left"
+                                            style={{ paddingLeft: 8 + (row.depth ?? 0) * 14 }}
                                         >
-                                            {row.hasChildren ? (
-                                                row.collapsed ? (
-                                                    <ChevronRight size={13} className="shrink-0" />
-                                                ) : (
-                                                    <ChevronDown size={13} className="shrink-0" />
-                                                )
+                                            {row.collapsed ? (
+                                                <ChevronRight size={13} className="shrink-0" />
                                             ) : (
-                                                <FolderTree size={12} className="shrink-0 text-muted" />
+                                                <ChevronDown size={13} className="shrink-0" />
                                             )}
+                                            <span
+                                                aria-hidden="true"
+                                                className="size-2 shrink-0 rounded-full"
+                                                style={{ background: dataColor(row.color) ?? "var(--color-text-muted)" }}
+                                            />
                                             <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-primary">
-                                                {row.number && (
-                                                    <span className="mr-1 font-mono text-[10px] text-muted">
-                                                        {row.number}
-                                                    </span>
-                                                )}
                                                 {row.title}
                                             </span>
                                             <span className="shrink-0 font-mono text-[9px] text-muted">
-                                                {row.aggregate.total} · {row.aggregate.progress}% ·{" "}
-                                                {row.aggregate.risks} риск.
+                                                {personSummary ? (
+                                                    personSummary.short
+                                                ) : (
+                                                    <>
+                                                        {row.aggregate.total} · {row.aggregate.progress}% ·{" "}
+                                                        {row.aggregate.risks} риск.
+                                                    </>
+                                                )}
                                             </span>
                                         </button>
                                         <div className="relative" style={{ width: timelineWidth }}>
-                                            {row.collapsed && width > 0 && (
+                                            {person && (
+                                                <WorkloadStrip
+                                                    person={person}
+                                                    range={range}
+                                                    dayWidth={dayWidth}
+                                                    height={rowHeight}
+                                                />
+                                            )}
+                                            {!isPerson && row.collapsed && width > 0 && (
                                                 <div
                                                     className="absolute top-2 h-5 rounded border border-accent-border/60 bg-accent/15 px-2 text-[9px] leading-5 text-accent shadow-card"
                                                     style={{ left, width }}
@@ -373,6 +596,14 @@ export function TimelineGrid({
                                                         {row.aggregate.progress}%
                                                     </span>
                                                 </div>
+                                            )}
+                                            {!row.collapsed && (
+                                                <StageSpanBracket
+                                                    left={left}
+                                                    width={width}
+                                                    tone={dataColor(row.color) ?? "var(--color-text-muted)"}
+                                                    title={`${row.title}: от ${aggregateStart ?? "—"} до ${aggregateEnd ?? "—"}, ${row.aggregate.total} задач, ${row.aggregate.progress}% завершено`}
+                                                />
                                             )}
                                         </div>
                                     </div>
@@ -408,13 +639,13 @@ export function TimelineGrid({
                                     key={row.id}
                                     className="relative grid border-b border-line-subtle last:border-b-0"
                                     style={{
-                                        gridTemplateColumns: `210px ${timelineWidth}px`,
+                                        gridTemplateColumns: `${leftWidth}px ${timelineWidth}px`,
                                         height: rowHeight,
                                     }}
                                 >
                                     <div
                                         className="sticky left-0 z-20 flex min-w-0 items-center gap-1 border-r border-line bg-surface px-2"
-                                        style={{ paddingLeft: 8 + row.depth * 14 }}
+                                        style={{ paddingLeft: 22 + (row.depth ?? 0) * 14 }}
                                     >
                                         <button
                                             type="button"
@@ -441,13 +672,26 @@ export function TimelineGrid({
                                                 {task.drift_days}д
                                             </span>
                                         )}
-                                        <IconButton
-                                            size="sm"
-                                            label={`Изменить даты ${task.key}`}
-                                            onClick={() => onScheduleTask(task)}
-                                        >
-                                            <CalendarDays size={11} />
-                                        </IconButton>
+                                        {!staticLayout && (
+                                            <IconButton
+                                                size="sm"
+                                                label={`Изменить даты ${task.key}`}
+                                                onClick={() => onScheduleTask(task)}
+                                            >
+                                                <CalendarDays size={11} />
+                                            </IconButton>
+                                        )}
+                                        {visibleColumns.map((column) => (
+                                            <span
+                                                key={column.id}
+                                                className="shrink-0 truncate px-1 font-mono text-[10px] text-muted"
+                                                style={{ width: column.width }}
+                                                title={`${column.label}: ${ganttCellValue(task, column.id)}`}
+                                                data-gantt-cell={column.id}
+                                            >
+                                                {ganttCellValue(task, column.id)}
+                                            </span>
+                                        ))}
                                     </div>
                                     <div className="relative" style={{ width: timelineWidth }}>
                                         {baselineGeometry && (
@@ -470,6 +714,11 @@ export function TimelineGrid({
                                                 scale={scale}
                                                 onOpen={onOpenTask}
                                                 onResize={onResizeTask}
+                                                color={colorMode ? taskColor(task, colorMode, stagesById) : undefined}
+                                                initials={showInitials ? assigneeInitials(task.assignee) : null}
+                                                readOnly={staticLayout}
+                                                critical={criticalState(task.is_critical, criticalMode)}
+                                                onLink={onLinkTasks}
                                             />
                                         )}
                                         {scenarioGeometry && scenarioChange && (
@@ -492,7 +741,7 @@ export function TimelineGrid({
                             );
                         })}
                         {rows.length === 0 && (
-                            <div className="absolute inset-0 left-[210px] flex items-center justify-center text-[12px] text-muted">
+                            <div className="absolute inset-0 flex items-center justify-center text-[12px] text-muted" style={{ left: leftWidth }}>
                                 В этом диапазоне нет запланированных задач
                             </div>
                         )}

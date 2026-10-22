@@ -10,22 +10,39 @@ from .base import Base, TimestampMixin
 
 
 class AgentToolRun(TimestampMixin, Base):
-    """Один вызов изменяющего инструмента от имени участника проекта."""
+    """Один вызов изменяющего инструмента от имени пользователя.
+
+    Проектное действие несёт ``project_id``; личное действие Тима в виджете
+    (разовая задача) — ``project_id IS NULL``. Ответ, в котором
+    действие предложено: ``message_id`` (виджет) либо ``chat_turn_id`` (чат
+    проекта); у MCP-вызова обе ссылки пусты.
+    """
 
     __tablename__ = "agent_tool_runs"
     __table_args__ = (
         UniqueConstraint("project_id", "user_id", "request_id", name="uq_agent_tool_request"),
+        Index(
+            "uq_agent_tool_personal_request",
+            "user_id",
+            "request_id",
+            unique=True,
+            postgresql_where=text("project_id IS NULL"),
+        ),
         CheckConstraint(
             "status IN ('pending', 'completed', 'rejected', 'failed')", name="ck_agent_tool_status"
         ),
+        CheckConstraint(
+            "message_id IS NULL OR chat_turn_id IS NULL", name="ck_agent_tool_single_origin"
+        ),
         Index("ix_agent_tool_message", "message_id", "created_at"),
+        Index("ix_agent_tool_chat_turn", "chat_turn_id", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, doc="ID действия.", comment="ID действия.")
-    project_id: Mapped[int] = mapped_column(
+    project_id: Mapped[int | None] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"),
-        doc="Проект действия.",
-        comment="Проект действия.",
+        doc="Проект действия; null — личное действие вне проекта.",
+        comment="Проект действия; null — личное действие вне проекта.",
     )
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -34,8 +51,13 @@ class AgentToolRun(TimestampMixin, Base):
     )
     message_id: Mapped[int | None] = mapped_column(
         ForeignKey("agent_messages.id", ondelete="CASCADE"),
-        doc="Ответ чата; null для MCP.",
-        comment="Ответ чата; null для MCP.",
+        doc="Ответ Тима в виджете; null для чата проекта и MCP.",
+        comment="Ответ Тима в виджете; null для чата проекта и MCP.",
+    )
+    chat_turn_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_agent_turns.id", ondelete="CASCADE"),
+        doc="Ответ Тима в чате проекта; null для виджета и MCP.",
+        comment="Ответ Тима в чате проекта; null для виджета и MCP.",
     )
     request_id: Mapped[UUID] = mapped_column(
         doc="Ключ идемпотентного вызова.", comment="Ключ идемпотентного вызова."

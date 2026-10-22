@@ -12,12 +12,14 @@
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
+from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.agent.action_catalog import PROJECT_ACTIONS
+from src.agent.action_catalog import PERSONAL_ACTIONS, PROJECT_ACTIONS
 from src.core.settings import Settings
-from src.dependencies.scopes import build_agent_project_tool_scope
+from src.dependencies.scopes import build_agent_conversation_scope, build_agent_project_tool_scope
+from src.repositories.api_keys import ApiKeysRepository
 from src.repositories.api_tokens import ApiTokensRepository
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
@@ -29,24 +31,34 @@ from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.task_activity import TaskActivityRepository
+from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.task_dependencies import TaskDependenciesRepository
+from src.repositories.task_moves import TaskMovesRepository
 from src.repositories.task_participants import TaskParticipantsRepository
+from src.repositories.task_reports import TaskReportsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
 from src.repositories.users import UsersRepository
 from src.repositories.wbs_nodes import WbsNodesRepository
 from src.services.access import AccessService
 from src.services.agent_actions import AgentActionsService
+from src.services.agent_requests import AgentRequestsService, RequestLinks
 from src.services.auth import AuthService
 from src.services.calendar import CalendarService
 from src.services.db_scope import ProjectQueryScope
 from src.services.knowledge_events import KnowledgeEvents
+from src.services.knowledge_search import KnowledgeSearchService
 from src.services.milestones import MilestonesService
 from src.services.project_members import ProjectMembersService
 from src.services.project_query import ProjectQueryService
 from src.services.project_risks import ProjectRiskService
+from src.services.project_stages import ProjectStagesService
+from src.services.task_activity import TaskActivityService
+from src.services.task_attachments import TaskAttachmentsService
 from src.services.task_comments import TaskCommentsService
+from src.services.task_dependencies import TaskDependenciesService
+from src.services.task_moves import TaskMovesService
 from src.services.tasks import TasksService
 from src.services.users import UsersService
 from src.storage.task_attachments import TaskAttachmentStorage
@@ -72,6 +84,12 @@ class ToolServices:
     members: ProjectMembersService
     risks: ProjectRiskService
     actions: AgentActionsService
+    stages: ProjectStagesService | None = None
+    activity: TaskActivityService | None = None
+    attachments: TaskAttachmentsService | None = None
+    dependencies: TaskDependenciesService | None = None
+    moves: TaskMovesService | None = None
+    requests: AgentRequestsService | None = None
 
 
 def build_project_query_scope(
@@ -113,6 +131,7 @@ def build_auth_service(session: AsyncSession, settings: Settings) -> AuthService
     return AuthService(
         users_repository=UsersRepository(session),
         tokens_repository=ApiTokensRepository(session),
+        api_keys_repository=ApiKeysRepository(session),
         invite_code=settings.auth.registration_invite_code.get_secret_value(),
     )
 
@@ -150,6 +169,8 @@ def build_tasks_service(session: AsyncSession, settings: Settings) -> TasksServi
     """Создаёт сервис задач со всеми доменными зависимостями."""
     return TasksService(
         tasks_repository=TasksRepository(session),
+        users_repository=UsersRepository(session),
+        reports_repository=TaskReportsRepository(session),
         members_repository=ProjectMembersRepository(session),
         participants_repository=TaskParticipantsRepository(session),
         projects_repository=ProjectsRepository(session),
@@ -211,6 +232,78 @@ def build_risks_service(session: AsyncSession, settings: Settings) -> ProjectRis
     )
 
 
+def build_stages_service(session: AsyncSession) -> ProjectStagesService:
+    """Создаёт сервис стадий проекта (чтение списка стадий)."""
+    return ProjectStagesService(
+        stages_repository=ProjectStagesRepository(session),
+        projects_repository=ProjectsRepository(session),
+        tasks_repository=TasksRepository(session),
+        unit_of_work=UnitOfWork(session),
+    )
+
+
+def build_activity_service(session: AsyncSession) -> TaskActivityService:
+    """Создаёт сервис истории задачи."""
+    return TaskActivityService(
+        activity_repository=TaskActivityRepository(session),
+        tasks_repository=TasksRepository(session),
+    )
+
+
+def build_dependencies_service(session: AsyncSession) -> TaskDependenciesService:
+    """Создаёт сервис графа зависимостей проекта."""
+    return TaskDependenciesService(
+        dependencies_repository=TaskDependenciesRepository(session),
+        projects_repository=ProjectsRepository(session),
+        tasks_repository=TasksRepository(session),
+        unit_of_work=UnitOfWork(session),
+    )
+
+
+def build_moves_service(session: AsyncSession, settings: Settings) -> TaskMovesService:
+    """Создаёт сервис переноса задачи в другой проект — тот же, что у REST."""
+    return TaskMovesService(
+        tasks_repository=TasksRepository(session),
+        task_moves_repository=TaskMovesRepository(session),
+        participants_repository=TaskParticipantsRepository(session),
+        members_repository=ProjectMembersRepository(session),
+        projects_repository=ProjectsRepository(session),
+        stages_repository=ProjectStagesRepository(session),
+        users_repository=UsersRepository(session),
+        activity_repository=TaskActivityRepository(session),
+        knowledge_events=build_knowledge_events(session, settings),
+        access_service=build_access_service(session),
+        unit_of_work=UnitOfWork(session),
+    )
+
+
+def build_knowledge_search(
+    query: ProjectQueryService, runtime, settings: Settings
+) -> KnowledgeSearchService:
+    """Собирает смысловой поиск по знаниям — тот же сервис, что у REST."""
+    config = settings.knowledge
+    return KnowledgeSearchService(
+        query=query,
+        embedding_client=runtime.embedding_client,
+        qdrant_client=runtime.qdrant_client,
+        enabled=config.knowledge_enabled,
+        score_threshold=config.qdrant_score_threshold,
+        target_chars=config.knowledge_chunk_target_chars,
+        overlap_chars=config.knowledge_chunk_overlap_chars,
+    )
+
+
+def build_attachments_service(session: AsyncSession, settings: Settings) -> TaskAttachmentsService:
+    """Общая локальная реализация вложений задач."""
+    return TaskAttachmentsService(
+        attachments_repository=TaskAttachmentsRepository(session),
+        tasks_repository=TasksRepository(session),
+        unit_of_work=UnitOfWork(session),
+        storage=TaskAttachmentStorage(settings.app.uploads_path),
+        knowledge_events=build_knowledge_events(session, settings),
+    )
+
+
 def build_tool_services(
     *,
     session: AsyncSession,
@@ -241,10 +334,17 @@ def build_tool_services(
         calendar=build_calendar_service(session),
         members=build_members_service(session, settings),
         risks=build_risks_service(session, settings),
+        stages=build_stages_service(session),
+        activity=build_activity_service(session),
+        attachments=build_attachments_service(session, settings),
+        dependencies=build_dependencies_service(session),
+        moves=build_moves_service(session, settings),
+        requests=AgentRequestsService(scope=build_agent_conversation_scope(session_factory=session_factory), links=RequestLinks(settings.app.app_public_url)),
         actions=AgentActionsService(
             scope=build_agent_project_tool_scope(
                 session_factory=session_factory, settings=settings
             ),
-            actions=PROJECT_ACTIONS,
+            actions=PROJECT_ACTIONS + PERSONAL_ACTIONS,
+            confirm_ttl=timedelta(hours=settings.agent.agent_action_confirm_ttl_hours),
         ),
     )

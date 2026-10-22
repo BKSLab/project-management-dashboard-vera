@@ -10,10 +10,24 @@ from mcp.shared.exceptions import MCPError
 from pydantic import BaseModel, Field
 
 from src.agent.action_catalog import PROJECT_ACTIONS
+from src.agent.action_scopes import ACTION_SCOPES
 from src.agent.tools import AgentToolContext
 from src.exceptions.agent_tools import AgentToolsServiceError
 from src.mcp_server.context import resolve_project, tool_context
-from src.mcp_server.server import mcp_server
+from src.mcp_server.registry import tt_tool
+from src.utils.api_scopes import SCOPE_PROJECTS_READ
+
+ACTION_CLOSED_FOR_KEYS = (
+    "Это действие недоступно по сервисному API-ключу: его выполняют люди из интерфейса."
+)
+
+
+def action_allowed(principal, name: str) -> bool:
+    """Открыто ли действие каталога предъявленным учётным данным."""
+    scope = ACTION_SCOPES.get(name)
+    if principal.api_key is None:
+        return True
+    return scope is not None and principal.allows(scope)
 
 
 class ActionApproval(BaseModel):
@@ -22,10 +36,11 @@ class ActionApproval(BaseModel):
     approve: bool = Field(description="Выполнить указанное действие с показанными параметрами?")
 
 
-@mcp_server.tool(
-    name="list_project_tools",
+@tt_tool(
+    name="tt_list_project_tools",
+    scope=SCOPE_PROJECTS_READ,
     title="Каталог действий проекта",
-    description="Все операции проектного агента. Без names возвращает краткий каталог; names раскрывает до 8 точных схем. Числовые ID берутся из ответов этих инструментов.",
+    description="Все операции проектного агента. Без names возвращает краткий каталог; names раскрывает до 8 точных схем. Числовые ID берутся из ответов этих инструментов. Сервисному ключу видны только действия, на которые у него есть права.",
 )
 async def list_project_tools(
     context: Context,
@@ -37,6 +52,8 @@ async def list_project_tools(
     """Возвращает общий реестр с учётом прав токена."""
     async with tool_context(context) as tools:
         await resolve_project(tools, project_key)
+        # Запись закрыта и токеном «только чтение», и ролью VIEWER в проекте.
+        writable = tools.principal.can_write and tools.grant is not None and tools.grant.can_write
         definitions = {item.name: item for item in PROJECT_ACTIONS}
         if names and any(name not in definitions for name in names):
             raise ToolError("Неизвестное имя инструмента.")
@@ -53,13 +70,16 @@ async def list_project_tools(
                 }
                 for item in PROJECT_ACTIONS
                 if (not names or item.name in names)
-                and (tools.principal.can_write or not item.mutating)
+                and (writable or not item.mutating)
+                and action_allowed(tools.principal, item.name)
             ]
         }
 
 
-@mcp_server.tool(
-    name="execute_project_tool",
+@tt_tool(
+    name="tt_execute_project_tool",
+    scope=SCOPE_PROJECTS_READ,
+    write=False,
     title="Выполнить действие проекта",
     description="Исполняет операцию из list_project_tools с общей проверкой проекта и прав. Для записи передавайте стабильный UUID request_id и повторяйте его при сетевом сбое. Удаления и массовые действия запрашивают решение участника через MCP elicitation; параметра самоподтверждения нет.",
 )
@@ -74,6 +94,14 @@ async def execute_project_tool(
         UUID | None,
         Field(description="Стабильный ключ повторной записи; обязателен для изменений."),
     ] = None,
+    actor: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Логин текущего пользователя; действие выполняется с правами владельца ключа."
+            )
+        ),
+    ] = None,
 ) -> dict:
     """Применяет то же атомарное действие, что проектный чат."""
     definition = next((item for item in PROJECT_ACTIONS if item.name == name), None)
@@ -81,6 +109,8 @@ async def execute_project_tool(
         raise ToolError("Неизвестное имя инструмента.")
     # Закрываем область аутентификации до ожидания решения человека.
     async with tool_context(context, require_write=definition.mutating) as tools:
+        if not action_allowed(tools.principal, name):
+            raise ToolError(ACTION_CLOSED_FOR_KEYS)
         project_id = await resolve_project(tools, project_key)
         actor = AgentToolContext(
             project_id=project_id,
@@ -116,6 +146,8 @@ async def execute_project_tool(
                 await resolve_project(current, project_key)
                 if current.principal.user_id != actor.user_id:
                     raise ToolError("Пользователь вызова изменился.")
+                if not action_allowed(current.principal, name):
+                    raise ToolError(ACTION_CLOSED_FOR_KEYS)
             decided = await actions.decide(
                 context=actor, action_id=UUID(action["id"]), decision=decision
             )

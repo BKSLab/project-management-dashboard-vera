@@ -239,3 +239,29 @@ class ProjectStagesRepository:
             await self.db_session.rollback()
             logger.error("❌ Не удалось удалить стадию id=%s.", stage.id, exc_info=True)
             raise ProjectStagesRepositoryError(f"Ошибка удаления стадии id={stage.id}.") from error
+
+    async def get_by_project_ids(self, project_ids: set[int]) -> list[ProjectStage]:
+        """Возвращает стадии набора проектов в порядке отображения.
+
+        Args:
+            project_ids: Идентификаторы проектов.
+
+        Returns:
+            Стадии проектов.
+
+        Raises:
+            ProjectStagesRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        if not project_ids:
+            return []
+        try:
+            result: Result = await self.db_session.execute(
+                select(ProjectStage)
+                .where(ProjectStage.project_id.in_(project_ids))
+                .order_by(ProjectStage.project_id, ProjectStage.order_index, ProjectStage.id)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить стадии набора проектов.", exc_info=True)
+            raise ProjectStagesRepositoryError("Ошибка получения стадий проектов.") from error

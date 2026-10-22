@@ -136,5 +136,5 @@ _PROJECT_INSTRUCTIONS = f"""Сейчас ты разбираешь один пр
 Ограничения: findings — не больше 8, progress — не больше 6, recommendations — не больше 6,
 task_keys — не больше 6 в одном пункте."""
 
-ANALYTICS_PORTFOLIO_SYSTEM_PROMPT = build_system_prompt(_PORTFOLIO_INSTRUCTIONS + "\n" + CHECKLIST_ANALYSIS_RULES)
+ANALYTICS_PORTFOLIO_SYSTEM_PROMPT = build_system_prompt(_PORTFOLIO_INSTRUCTIONS + "\n" + CHECKLIST_ANALYSIS_RULES + "\nВ outside_projects переданы открытые разовые задачи пользователя: учитывай их сроки и назначения рядом с проектами. Не приписывай их проектам и не изменяй проектные счётчики. Ссылки на них имеют номер T-….")
 ANALYTICS_PROJECT_SYSTEM_PROMPT = build_system_prompt(_PROJECT_INSTRUCTIONS + "\n" + CHECKLIST_ANALYSIS_RULES)

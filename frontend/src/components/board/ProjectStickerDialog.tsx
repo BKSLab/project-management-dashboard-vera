@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search, X } from "lucide-react";
 import { api, endpoints, queryKeys } from "@/lib/api";
@@ -8,11 +8,13 @@ import {
     mergeStickerTaskResults,
     normalizeStickerInput,
     searchStickerTasks,
-    STICKER_COLOR_OPTIONS,
+    DEFAULT_STICKER_COLOR,
+    normalizeStickerColor,
+    STICKER_COLOR_PRESETS,
     STICKER_TASK_RESULTS_LIMIT,
+    stickerSurface,
     stickerHasChanges,
     type ProjectSticker,
-    type ProjectStickerColor,
     type ProjectStickerInput,
     STICKER_SIZE_PRESETS,
     type ProjectStickerSize,
@@ -20,13 +22,15 @@ import {
 import type { Task } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { Field, Input, Textarea } from "@/components/ui/Field";
+import { Skeleton } from "@/components/ui/States";
 import { Modal } from "@/components/ui/Modal";
 
 const MAX_BODY_LENGTH = 2000;
 const MAX_LINKED_TASKS = 20;
 
 interface ProjectStickerDialogProps {
-    projectId: number;
+    /** null — свободная доска: проекта нет, связь с задачами недоступна. */
+    projectId: number | null;
     sticker: ProjectSticker | null;
     tasks: Task[];
     tasksLoading: boolean;
@@ -47,7 +51,8 @@ export function ProjectStickerDialog({
     onSave,
 }: ProjectStickerDialogProps) {
     const [body, setBody] = useState(sticker?.body ?? "");
-    const [color, setColor] = useState<ProjectStickerColor>(sticker?.color ?? "yellow");
+    const [color, setColor] = useState<string>(normalizeStickerColor(sticker?.color ?? DEFAULT_STICKER_COLOR));
+    const colorIsPreset = STICKER_COLOR_PRESETS.some((option) => option.value === color);
     const [taskIds, setTaskIds] = useState<number[]>(sticker?.task_ids ?? []);
     const initialSize: ProjectStickerSize = sticker && (sticker.width ?? 230) <= 200 ? "small" : sticker && (sticker.width ?? 230) >= 300 ? "large" : "medium";
     const [size, setSize] = useState<ProjectStickerSize>(initialSize);
@@ -65,11 +70,11 @@ export function ProjectStickerDialog({
 
     const serverSearchEnabled = debouncedTaskSearch.length >= 3;
     const taskSearchQuery = useQuery({
-        queryKey: queryKeys.tasks(projectId, debouncedTaskSearch),
+        queryKey: queryKeys.tasks(projectId ?? 0, debouncedTaskSearch),
         queryFn: () => api.get<Task[]>(
-            `${endpoints.projectTasks(projectId)}?search=${encodeURIComponent(debouncedTaskSearch)}`,
+            `${endpoints.projectTasks(projectId!)}?search=${encodeURIComponent(debouncedTaskSearch)}`,
         ),
-        enabled: serverSearchEnabled,
+        enabled: serverSearchEnabled && projectId !== null,
         retry: 1,
     });
     const normalized = normalizeStickerInput({ body, color, task_ids: taskIds, ...dimensions });
@@ -169,23 +174,37 @@ export function ProjectStickerDialog({
 
                 <fieldset className="flex flex-col gap-2">
                     <legend className="text-[11px] font-medium text-secondary">Цвет</legend>
-                    <div className="flex flex-wrap gap-2">
-                        {STICKER_COLOR_OPTIONS.map((option) => (
+                    <div className="flex flex-wrap items-center gap-2">
+                        {STICKER_COLOR_PRESETS.map((option) => (
                             <button
                                 key={option.value}
                                 type="button"
                                 aria-pressed={color === option.value}
-                                className={cn(
-                                    "project-sticker-color",
-                                    `project-sticker-color--${option.value}`,
-                                )}
+                                aria-label={option.label}
+                                title={option.label}
+                                className="project-sticker-color"
+                                style={{ "--sticker-choice": stickerSurface(option.value) } as CSSProperties}
                                 onClick={() => setColor(option.value)}
                             >
                                 <span aria-hidden="true" />
-                                {option.label}
                             </button>
                         ))}
+                        <label
+                            className={cn("project-sticker-color-custom", !colorIsPreset && "project-sticker-color-custom--active")}
+                            title="Любой цвет: нажмите, чтобы открыть палитру"
+                        >
+                            <input
+                                type="color"
+                                aria-label="Свой цвет стикера"
+                                value={color}
+                                onChange={(event) => setColor(normalizeStickerColor(event.target.value))}
+                            />
+                            {colorIsPreset ? "Свой цвет" : <code>{color}</code>}
+                        </label>
                     </div>
+                    <p className="text-[11px] text-muted">
+                        На доске цвет смягчается под светлую или тёмную тему, чтобы текст на стикере читался.
+                    </p>
                 </fieldset>
 
                 {!sticker && <fieldset className="flex flex-col gap-2">
@@ -202,7 +221,11 @@ export function ProjectStickerDialog({
                     <p className="text-[11px] text-muted">После размещения размер можно изменить прямо на холсте.</p>
                 </fieldset>}
 
-                <fieldset className="flex min-h-0 flex-col gap-2">
+                {projectId === null ? (
+                    <p className="text-[11px] text-muted">
+                        Это личная доска без проекта, поэтому стикер нельзя связать с задачами. Связи доступны на досках внутри проекта.
+                    </p>
+                ) : <fieldset className="flex min-h-0 flex-col gap-2">
                     <legend className="text-[11px] font-medium text-secondary">
                         Связанные задачи · {taskIds.length}/{MAX_LINKED_TASKS}
                     </legend>
@@ -251,9 +274,7 @@ export function ProjectStickerDialog({
                     </div>
                     <div className="project-sticker-task-picker scrollbar-thin">
                         {resultsLoading && (
-                            <p className="px-3 py-4 text-xs text-muted">
-                                {searchIsActive ? "Ищем задачи…" : "Загрузка задач…"}
-                            </p>
+                            <div role="status" aria-label={searchIsActive ? "Поиск задач" : "Загрузка задач"}><Skeleton className="h-10 w-full" /></div>
                         )}
                         {!resultsLoading && resultsError && (
                             <div className="flex items-center justify-between gap-3 px-3 py-3">
@@ -323,7 +344,7 @@ export function ProjectStickerDialog({
                                 Уточните поиск, чтобы сузить список.
                             </p>
                         )}
-                </fieldset>
+                </fieldset>}
 
                 {error && <p role="alert" className="text-[12px] text-danger">{error}</p>}
             </form>

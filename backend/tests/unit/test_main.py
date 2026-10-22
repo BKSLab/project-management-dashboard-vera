@@ -117,6 +117,10 @@ def composition(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         "build_chat_runtime",
         lambda **kwargs: SimpleNamespace(start=AsyncMock(), close=AsyncMock()),
     )
+    attention_runtime = SimpleNamespace(start=AsyncMock(), close=AsyncMock())
+    monkeypatch.setattr(
+        main_module, "build_task_attention_runtime", lambda **kwargs: attention_runtime
+    )
 
     # Настоящий session manager MCP запускается один раз на экземпляр, а
     # тестов lifespan несколько: подменяем его на новый контекст в каждом.
@@ -141,6 +145,7 @@ def composition(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         check_db=check_db,
         worker_started=worker_started,
         worker_built=worker_built,
+        attention_runtime=attention_runtime,
     )
 
 
@@ -157,6 +162,8 @@ async def test_lifespan_creates_and_closes_resources_exactly_once(
     composition.check_db.assert_awaited_once_with(db_session=composition.db_session)
     composition.close_runtime.assert_awaited_once_with(composition.runtime)
     composition.dispose_engine.assert_awaited_once_with()
+    composition.attention_runtime.start.assert_awaited_once_with()
+    composition.attention_runtime.close.assert_awaited_once_with()
 
 
 async def test_lifespan_gives_the_worker_its_dependencies_explicitly(
@@ -182,6 +189,7 @@ async def test_lifespan_publishes_resources_in_request_state(
     async with main_module.lifespan(FastAPI()) as state:
         assert state[RUNTIME_STATE_KEY] is composition.runtime
         assert state[SETTINGS_STATE_KEY] is composition.settings
+        assert state["task_attention_runtime"] is composition.attention_runtime
 
 
 async def test_lifespan_starts_application_when_qdrant_is_unavailable(

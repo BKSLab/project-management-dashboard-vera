@@ -73,6 +73,21 @@ class CalendarTaskSchema(BaseModel):
     risk_reasons: list[CalendarRiskReasonSchema]
     updated_at: datetime
 
+    progress: int | None = Field(
+        None,
+        ge=0,
+        le=100,
+        description=(
+            "Процент выполнения: 100 у выполненной задачи, иначе доля отмеченных пунктов "
+            "чек-листа; null — чек-листа нет, прогресс неизвестен."
+        ),
+    )
+
+    is_critical: bool = Field(
+        False,
+        description="Задача на критическом пути проекта: запас по цепочке FS не больше нуля.",
+    )
+
 
 class CalendarDateChangeSchema(BaseModel):
     """Недавнее изменение дедлайна задачи."""
@@ -106,6 +121,11 @@ class CalendarDependencySchema(BaseModel):
     successor_task_id: int
     dependency_type: TaskDependencyType
     lag_days: int
+
+    is_critical: bool = Field(
+        False,
+        description="Связь критического пути: обе задачи критичны и у связи нет запаса.",
+    )
 
 
 class CalendarSummarySchema(BaseModel):

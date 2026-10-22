@@ -30,6 +30,7 @@ interface CreateTaskDialogProps {
     stages: ProjectStage[];
     /** Раздел ИСР, если задача создаётся прямо в структуре. */
     wbsNodeId?: number | null;
+    initialDueDate?: string;
     isOpen: boolean;
     onClose: () => void;
     onCreated?: (task: Task) => void;
@@ -44,6 +45,7 @@ export function CreateTaskDialog({
     projectId,
     stages,
     wbsNodeId = null,
+    initialDueDate,
     isOpen,
     onClose,
     onCreated,
@@ -57,7 +59,7 @@ export function CreateTaskDialog({
     const [priority, setPriority] = useState<TaskPriority>("MEDIUM");
     const [stageId, setStageId] = useState<string>("");
     const [startDate, setStartDate] = useState("");
-    const [dueDate, setDueDate] = useState("");
+    const [dueDate, setDueDate] = useState(initialDueDate ?? "");
     const [executorId, setExecutorId] = useState<number | null>(null);
     const [reporterId, setReporterId] = useState<number | null | undefined>(undefined);
     const [observerIds, setObserverIds] = useState<number[]>([]);
@@ -93,7 +95,7 @@ export function CreateTaskDialog({
         setPriority("MEDIUM");
         setStageId("");
         setStartDate("");
-        setDueDate("");
+        setDueDate(initialDueDate ?? "");
         setExecutorId(null);
         setReporterId(undefined);
         setObserverIds([]);

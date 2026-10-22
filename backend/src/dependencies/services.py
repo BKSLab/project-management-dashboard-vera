@@ -9,14 +9,18 @@
 значения и клиентов через конструктор и о конфигурации приложения не знает.
 """
 
+from dataclasses import replace
+from datetime import timedelta
 from typing import Annotated, Any
 
 from fastapi import Depends
 from pydantic import BaseModel
 
-from src.agent.action_catalog import PROJECT_ACTIONS
+from src.agent.action_catalog import PERSONAL_ACTIONS, PROJECT_ACTIONS
+from src.agent.tim import PROJECT_MODES, WIDGET_MODES
 from src.agent.tools import AgentTool, AgentToolContext, AgentToolExecutor, AgentToolHandler
 from src.agent.worker import AgentWorker
+from src.clients.agent_model import build_agent_model
 from src.core.settings import Settings
 from src.dependencies.clients import (
     EmbeddingClientDep,
@@ -24,12 +28,18 @@ from src.dependencies.clients import (
     QdrantClientDep,
     VisionCapabilityDep,
 )
+from src.dependencies.db_session import DbSessionDep
 from src.dependencies.repositories import (
+    ApiKeysRepositoryDep,
+    ApiKeyUsageRepositoryDep,
     ApiTokensRepositoryDep,
+    BoardShapesRepositoryDep,
+    CalendarFeedTokensRepositoryDep,
     DocumentLinksRepositoryDep,
     DocumentsRepositoryDep,
     KnowledgeIndexJobsRepositoryDep,
     MilestonesRepositoryDep,
+    ProjectBoardsRepositoryDep,
     ProjectDeadlineChangesRepositoryDep,
     ProjectMembersRepositoryDep,
     ProjectRiskRepositoryDep,
@@ -38,9 +48,12 @@ from src.dependencies.repositories import (
     ProjectStickersRepositoryDep,
     TaskActivityRepositoryDep,
     TaskAttachmentsRepositoryDep,
+    TaskAttentionRepositoryDep,
     TaskCommentsRepositoryDep,
     TaskDependenciesRepositoryDep,
+    TaskMovesRepositoryDep,
     TaskParticipantsRepositoryDep,
+    TaskReportsRepositoryDep,
     TasksRepositoryDep,
     UnitOfWorkDep,
     UsersRepositoryDep,
@@ -62,27 +75,39 @@ from src.dependencies.scopes import (
     build_agent_project_tool_scope,
     build_project_agent_scope,
     build_project_knowledge_query_scope,
+    build_tim_chat_scope,
 )
 from src.dependencies.settings import SettingsDep
 from src.dependencies.storage import AvatarStorageDep, TaskAttachmentStorageDep
+from src.exceptions.base import ServiceError
 from src.knowledge.runtime import KnowledgeRuntime
+from src.repositories.board_editor import BoardEditorRepository
 from src.schemas.knowledge import KnowledgeReadParameters, KnowledgeReadRequest
-from src.schemas.project_tool_inputs import ToolSchemasInput
+from src.schemas.project_tool_inputs import ProjectActionInput, ToolSchemasInput
 from src.services.access import AccessService
 from src.services.agent_actions import AgentActionsService
 from src.services.agent_conversations import AgentConversationConfig, AgentConversationsService
 from src.services.agent_files import AgentFilesService
+from src.services.agent_requests import AgentRequestsService, RequestLinks
 from src.services.analytics import AnalyticsService
+from src.services.api_key_usage import ApiKeyUsageService
+from src.services.api_keys import ApiKeysService
 from src.services.api_tokens import ApiTokensService
 from src.services.auth import AuthService
+from src.services.board_shapes import BoardShapesService
 from src.services.calendar import CalendarService
+from src.services.calendar_feed import CalendarFeedService
 from src.services.calendar_scenarios import CalendarScenarioService
+from src.services.calendar_workload import CalendarWorkloadService
 from src.services.dashboard import DashboardService
 from src.services.document_links import DocumentLinksService
 from src.services.documents import DocumentsService
 from src.services.knowledge_events import KnowledgeEvents
 from src.services.milestones import MilestonesService
+from src.services.personal_calendar import PersonalCalendarService
 from src.services.project_agent import ProjectAgentConfig, ProjectAgentService
+from src.services.project_boards import ProjectBoardsService
+from src.services.project_icons import ProjectIconsService
 from src.services.project_members import ProjectMembersService
 from src.services.project_query import ProjectQueryService
 from src.services.project_risks import ProjectRiskService
@@ -93,12 +118,17 @@ from src.services.risk_formulation import RiskFormulationService
 from src.services.risk_suggestions import RiskSuggestionService
 from src.services.task_activity import TaskActivityService
 from src.services.task_attachments import TaskAttachmentsService
+from src.services.task_attention import TaskAttentionService
 from src.services.task_checklist_suggestions import TaskChecklistSuggestionService
 from src.services.task_comments import TaskCommentsService
 from src.services.task_dependencies import TaskDependenciesService
 from src.services.task_descriptions import TaskDescriptionService
 from src.services.task_documents import TaskDocumentImportService
+from src.services.task_moves import TaskMovesService
+from src.services.task_reports import TaskReportsService
 from src.services.tasks import TasksService
+from src.services.tim_chat import TimChatConfig, TimChatService
+from src.services.tracker_agent import TrackerAgentService
 from src.services.users import UsersService
 from src.services.wbs_nodes import WbsNodesService
 from src.services.wbs_suggestion import WbsSuggestionService
@@ -118,7 +148,15 @@ def get_knowledge_events(
 KnowledgeEventsDep = Annotated[KnowledgeEvents, Depends(get_knowledge_events)]
 
 
+def get_project_query_service(scope: ProjectKnowledgeQueryScopeDep) -> ProjectQueryService:
+    return ProjectQueryService(scope=scope)
+
+
+ProjectQueryServiceDep = Annotated[ProjectQueryService, Depends(get_project_query_service)]
+
+
 def get_auth_service(
+    api_keys_repository: ApiKeysRepositoryDep,
     users_repository: UsersRepositoryDep,
     tokens_repository: ApiTokensRepositoryDep,
     settings: SettingsDep,
@@ -127,6 +165,7 @@ def get_auth_service(
     return AuthService(
         users_repository=users_repository,
         tokens_repository=tokens_repository,
+        api_keys_repository=api_keys_repository,
         invite_code=settings.auth.registration_invite_code.get_secret_value(),
     )
 
@@ -226,6 +265,7 @@ UsersServiceDep = Annotated[UsersService, Depends(get_users_service)]
 
 
 def get_projects_service(
+    boards_repository: ProjectBoardsRepositoryDep,
     projects_repository: ProjectsRepositoryDep,
     members_repository: ProjectMembersRepositoryDep,
     stages_repository: ProjectStagesRepositoryDep,
@@ -239,6 +279,7 @@ def get_projects_service(
     """Создаёт сервис проектов."""
     return ProjectsService(
         projects_repository=projects_repository,
+        boards_repository=boards_repository,
         members_repository=members_repository,
         stages_repository=stages_repository,
         tasks_repository=tasks_repository,
@@ -285,12 +326,17 @@ ProjectMembersServiceDep = Annotated[
 def get_project_stickers_service(
     stickers_repository: ProjectStickersRepositoryDep,
     tasks_repository: TasksRepositoryDep,
+    boards_repository: ProjectBoardsRepositoryDep,
+    shapes_repository: BoardShapesRepositoryDep,
     unit_of_work: UnitOfWorkDep,
+    session: DbSessionDep,
 ) -> ProjectStickersService:
-    """Создаёт сервис стикеров Project Board."""
     return ProjectStickersService(
         stickers_repository=stickers_repository,
         tasks_repository=tasks_repository,
+        boards_repository=boards_repository,
+        shapes_repository=shapes_repository,
+        editor_repository=BoardEditorRepository(session),
         unit_of_work=unit_of_work,
     )
 
@@ -323,6 +369,8 @@ ProjectStagesServiceDep = Annotated[
 
 
 def get_tasks_service(
+    users_repository: UsersRepositoryDep,
+    reports_repository: TaskReportsRepositoryDep,
     tasks_repository: TasksRepositoryDep,
     members_repository: ProjectMembersRepositoryDep,
     participants_repository: TaskParticipantsRepositoryDep,
@@ -338,6 +386,8 @@ def get_tasks_service(
     """Создаёт сервис задач со всеми доменными зависимостями."""
     return TasksService(
         tasks_repository=tasks_repository,
+        users_repository=users_repository,
+        reports_repository=reports_repository,
         members_repository=members_repository,
         participants_repository=participants_repository,
         projects_repository=projects_repository,
@@ -550,7 +600,11 @@ def build_project_agent_config(settings: Settings) -> ProjectAgentConfig:
         context_tokens=settings.agent.agent_context_tokens,
         retrieval_limit=settings.agent.agent_retrieval_limit,
         history_tokens=settings.agent.agent_history_tokens,
+        app_public_url=settings.app.app_public_url,
     )
+
+
+TIM_ACTIONS = PROJECT_ACTIONS + PERSONAL_ACTIONS
 
 
 def build_knowledge_tool_executor(query: ProjectQueryService) -> AgentToolExecutor:
@@ -571,15 +625,21 @@ def build_knowledge_tool_executor(query: ProjectQueryService) -> AgentToolExecut
 
     return AgentToolExecutor(
         [
-            AgentTool(name, description, KnowledgeReadParameters, bind(name))
+            AgentTool(name, description, KnowledgeReadParameters, bind(name), modes=PROJECT_MODES)
             for name, description in descriptions.items()
         ]
     )
 
 
-def get_agent_actions_service(scope: AgentProjectToolScopeDep) -> AgentActionsService:
+def get_agent_actions_service(
+    scope: AgentProjectToolScopeDep, settings: SettingsDep
+) -> AgentActionsService:
     """Собирает общий сценарий проектных инструментов для чата и MCP."""
-    return AgentActionsService(scope=scope, actions=PROJECT_ACTIONS)
+    return AgentActionsService(
+        scope=scope,
+        actions=TIM_ACTIONS,
+        confirm_ttl=timedelta(hours=settings.agent.agent_action_confirm_ttl_hours),
+    )
 
 
 AgentActionsServiceDep = Annotated[AgentActionsService, Depends(get_agent_actions_service)]
@@ -617,13 +677,68 @@ def build_project_tool_executor(
             bind(definition.name),
             definition.mutating,
             definition.requires_confirmation,
+            definition.modes,
         )
         for definition in actions.actions.values()
     )
 
+    async def project_action(
+        context: AgentToolContext, parameters: ProjectActionInput
+    ) -> dict[str, Any]:
+        """Проектное действие в проекте по ключу — из личного виджета Веры."""
+        definition = actions.actions.get(parameters.name)
+        if definition is None or not definition.needs_project:
+            return {
+                "error": "Такого проектного действия нет. Имена и схемы — через get_tool_schemas."
+            }
+        # Обёртка не изменяющая, а действие внутри может менять проект: право
+        # записи вопроса и права ключа проверяются здесь, как у прямого вызова.
+        if definition.mutating and not (context.can_write and context.allows(definition.name)):
+            return {"error": "Текущий запрос не разрешает изменения проекта."}
+        if definition.name == "attach_uploaded_file":
+            return {"error": "Файл прикрепляется только в проекте страницы."}
+        try:
+            project_id = await query.resolve_project_id(project_key=parameters.project_key)
+        except ServiceError:
+            return {"error": "Проект с таким ключом недоступен."}
+        # Права на проект проверит сам сценарий действия от имени пользователя.
+        return await actions.execute(
+            context=replace(context, project_id=project_id),
+            name=definition.name,
+            arguments=parameters.arguments,
+        )
+
+    registered.append(
+        AgentTool(
+            "run_project_action",
+            "Выполнить проектное действие (list_tasks, create_task, get_project и др.) в проекте "
+            "по его ключу; схему действия получи через get_tool_schemas.",
+            ProjectActionInput,
+            project_action,
+            modes=WIDGET_MODES,
+        )
+    )
+
     async def schemas(context: AgentToolContext, parameters: ToolSchemasInput) -> dict[str, Any]:
         """Отдаёт точные схемы выбранных инструментов без раздувания каждого шага."""
-        return {"tools": [item for item in executor.describe() if item["name"] in parameters.names]}
+        wanted = set(parameters.names)
+        return {
+            "tools": [
+                item
+                for item in executor.describe()
+                if item["name"] in wanted
+                and (not item["mutating"] or (context.can_write and context.allows(item["name"])))
+                # Схема проектного действия нужна и для run_project_action вне проекта.
+                and (
+                    context.mode in executor.tools[item["name"]].modes
+                    or (
+                        context.mode in WIDGET_MODES
+                        and item["name"] in actions.actions
+                        and actions.actions[item["name"]].needs_project
+                    )
+                )
+            ]
+        }
 
     registered.append(
         AgentTool(
@@ -667,6 +782,7 @@ def get_project_agent_service(
         qdrant_client=qdrant_client,
         config=build_project_agent_config(settings),
         tools=tools,
+        agent_model=build_agent_model(settings.llm, llm_client.http_client),
     )
 
 
@@ -682,7 +798,26 @@ def build_agent_conversation_config(settings: Settings) -> AgentConversationConf
     )
 
 
+def get_tracker_agent_service(
+    scope: AgentProjectToolScopeDep,
+    agent: ProjectAgentServiceDep,
+    llm_client: LlmClientDep,
+    settings: SettingsDep,
+) -> TrackerAgentService:
+    return TrackerAgentService(
+        scope=scope,
+        agent=agent,
+        llm_client=llm_client,
+        context_tokens=settings.agent.agent_context_tokens,
+        history_tokens=settings.agent.agent_history_tokens,
+    )
+
+
+TrackerAgentServiceDep = Annotated[TrackerAgentService, Depends(get_tracker_agent_service)]
+
+
 def get_agent_conversations_service(
+    tracker: TrackerAgentServiceDep,
     scope: AgentConversationScopeDep,
     agent: ProjectAgentServiceDep,
     llm_client: LlmClientDep,
@@ -691,6 +826,7 @@ def get_agent_conversations_service(
     """Собирает сценарии постоянных диалогов из явных зависимостей."""
     return AgentConversationsService(
         scope=scope,
+        tracker=tracker,
         agent=agent,
         llm_client=llm_client,
         config=build_agent_conversation_config(settings),
@@ -714,7 +850,8 @@ def build_agent_worker(
             scope=build_agent_project_tool_scope(
                 session_factory=session_factory, settings=settings
             ),
-            actions=PROJECT_ACTIONS,
+            actions=TIM_ACTIONS,
+            confirm_ttl=timedelta(hours=settings.agent.agent_action_confirm_ttl_hours),
         ),
     )
     agent = ProjectAgentService(
@@ -724,6 +861,7 @@ def build_agent_worker(
         qdrant_client=runtime.qdrant_client,
         config=build_project_agent_config(settings),
         tools=tools,
+        agent_model=build_agent_model(settings.llm, runtime.http_client),
     )
     service = AgentConversationsService(
         scope=build_agent_conversation_scope(session_factory=session_factory),
@@ -731,8 +869,21 @@ def build_agent_worker(
         llm_client=runtime.llm_client,
         config=build_agent_conversation_config(settings),
     )
+    tracker = TrackerAgentService(
+        scope=build_agent_project_tool_scope(session_factory=session_factory, settings=settings),
+        agent=agent,
+        llm_client=runtime.llm_client,
+        context_tokens=settings.agent.agent_context_tokens,
+        history_tokens=settings.agent.agent_history_tokens,
+    )
+    service.tracker = tracker
+    chat = TimChatService(
+        scope=build_tim_chat_scope(session_factory=session_factory),
+        agent=agent,
+        config=TimChatConfig(turn_timeout_seconds=settings.agent.agent_turn_timeout_seconds),
+    )
     return AgentWorker(
-        service=service,
+        services=[service, chat],
         poll_seconds=settings.agent.agent_poll_seconds,
         concurrency=settings.agent.agent_concurrency,
     )
@@ -896,3 +1047,200 @@ TaskDocumentImportServiceDep = Annotated[
     TaskDocumentImportService,
     Depends(get_task_document_import_service),
 ]
+
+
+def get_project_boards_service(
+    boards_repository: ProjectBoardsRepositoryDep,
+    stickers_repository: ProjectStickersRepositoryDep,
+    shapes_repository: BoardShapesRepositoryDep,
+    unit_of_work: UnitOfWorkDep,
+) -> ProjectBoardsService:
+    return ProjectBoardsService(
+        boards_repository=boards_repository,
+        stickers_repository=stickers_repository,
+        shapes_repository=shapes_repository,
+        unit_of_work=unit_of_work,
+    )
+
+
+ProjectBoardsServiceDep = Annotated[ProjectBoardsService, Depends(get_project_boards_service)]
+
+
+def get_board_shapes_service(
+    boards_repository: ProjectBoardsRepositoryDep,
+    shapes_repository: BoardShapesRepositoryDep,
+    stickers_repository: ProjectStickersRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    unit_of_work: UnitOfWorkDep,
+    session: DbSessionDep,
+) -> BoardShapesService:
+    return BoardShapesService(
+        boards_repository=boards_repository,
+        shapes_repository=shapes_repository,
+        stickers_repository=stickers_repository,
+        tasks_repository=tasks_repository,
+        unit_of_work=unit_of_work,
+        editor_repository=BoardEditorRepository(session),
+    )
+
+
+BoardShapesServiceDep = Annotated[BoardShapesService, Depends(get_board_shapes_service)]
+
+
+def get_task_reports_service(
+    reports: TaskReportsRepositoryDep,
+    tasks: TasksRepositoryDep,
+    comments: TaskCommentsRepositoryDep,
+    access: AccessServiceDep,
+    unit_of_work: UnitOfWorkDep,
+    projects: ProjectsRepositoryDep,
+) -> TaskReportsService:
+    return TaskReportsService(
+        reports=reports,
+        tasks=tasks,
+        comments=comments,
+        access=access,
+        unit_of_work=unit_of_work,
+        projects=projects,
+    )
+
+
+TaskReportsServiceDep = Annotated[TaskReportsService, Depends(get_task_reports_service)]
+
+
+def get_task_attention_service(
+    repository: TaskAttentionRepositoryDep, unit_of_work: UnitOfWorkDep
+) -> TaskAttentionService:
+    return TaskAttentionService(repository, unit_of_work)
+
+
+TaskAttentionServiceDep = Annotated[TaskAttentionService, Depends(get_task_attention_service)]
+
+
+def get_task_moves_service(
+    tasks_repository: TasksRepositoryDep,
+    task_moves_repository: TaskMovesRepositoryDep,
+    participants_repository: TaskParticipantsRepositoryDep,
+    members_repository: ProjectMembersRepositoryDep,
+    projects_repository: ProjectsRepositoryDep,
+    stages_repository: ProjectStagesRepositoryDep,
+    users_repository: UsersRepositoryDep,
+    activity_repository: TaskActivityRepositoryDep,
+    knowledge_events: KnowledgeEventsDep,
+    access_service: AccessServiceDep,
+    unit_of_work: UnitOfWorkDep,
+) -> TaskMovesService:
+    return TaskMovesService(
+        tasks_repository=tasks_repository,
+        task_moves_repository=task_moves_repository,
+        participants_repository=participants_repository,
+        members_repository=members_repository,
+        projects_repository=projects_repository,
+        stages_repository=stages_repository,
+        users_repository=users_repository,
+        activity_repository=activity_repository,
+        knowledge_events=knowledge_events,
+        access_service=access_service,
+        unit_of_work=unit_of_work,
+    )
+
+
+TaskMovesServiceDep = Annotated[TaskMovesService, Depends(get_task_moves_service)]
+
+
+def get_project_icons_service(
+    projects_repository: ProjectsRepositoryDep,
+    unit_of_work: UnitOfWorkDep,
+    storage: TaskAttachmentStorageDep,
+) -> ProjectIconsService:
+    return ProjectIconsService(
+        projects_repository=projects_repository, unit_of_work=unit_of_work, storage=storage
+    )
+
+
+ProjectIconsServiceDep = Annotated[ProjectIconsService, Depends(get_project_icons_service)]
+
+
+def get_api_keys_service(
+    keys_repository: ApiKeysRepositoryDep, users_repository: UsersRepositoryDep
+) -> ApiKeysService:
+    return ApiKeysService(keys_repository, users_repository)
+
+
+ApiKeysServiceDep = Annotated[ApiKeysService, Depends(get_api_keys_service)]
+
+
+def get_api_key_usage_service(usage_repository: ApiKeyUsageRepositoryDep) -> ApiKeyUsageService:
+    return ApiKeyUsageService(usage_repository)
+
+
+ApiKeyUsageServiceDep = Annotated[ApiKeyUsageService, Depends(get_api_key_usage_service)]
+
+
+def get_personal_calendar_service(
+    users_repository: UsersRepositoryDep,
+    members_repository: ProjectMembersRepositoryDep,
+    projects_repository: ProjectsRepositoryDep,
+    stages_repository: ProjectStagesRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+    milestones_repository: MilestonesRepositoryDep,
+) -> PersonalCalendarService:
+    return PersonalCalendarService(
+        users_repository=users_repository,
+        members_repository=members_repository,
+        projects_repository=projects_repository,
+        stages_repository=stages_repository,
+        tasks_repository=tasks_repository,
+        milestones_repository=milestones_repository,
+    )
+
+
+PersonalCalendarServiceDep = Annotated[
+    PersonalCalendarService, Depends(get_personal_calendar_service)
+]
+
+
+def get_calendar_workload_service(
+    projects_repository: ProjectsRepositoryDep,
+    members_repository: ProjectMembersRepositoryDep,
+    users_repository: UsersRepositoryDep,
+    tasks_repository: TasksRepositoryDep,
+) -> CalendarWorkloadService:
+    return CalendarWorkloadService(
+        projects_repository=projects_repository,
+        members_repository=members_repository,
+        users_repository=users_repository,
+        tasks_repository=tasks_repository,
+    )
+
+
+CalendarWorkloadServiceDep = Annotated[
+    CalendarWorkloadService, Depends(get_calendar_workload_service)
+]
+
+
+def get_calendar_feed_service(
+    tokens_repository: CalendarFeedTokensRepositoryDep,
+    users_repository: UsersRepositoryDep,
+    calendar_service: PersonalCalendarServiceDep,
+) -> CalendarFeedService:
+    return CalendarFeedService(
+        tokens_repository=tokens_repository,
+        users_repository=users_repository,
+        calendar_service=calendar_service,
+    )
+
+
+CalendarFeedServiceDep = Annotated[CalendarFeedService, Depends(get_calendar_feed_service)]
+
+
+TimWidgetServiceDep = AgentConversationsServiceDep
+
+
+def get_agent_requests_service(
+    scope: AgentConversationScopeDep, settings: SettingsDep
+) -> AgentRequestsService:
+    return AgentRequestsService(scope=scope, links=RequestLinks(settings.app.app_public_url))
+
+
+AgentRequestsServiceDep = Annotated[AgentRequestsService, Depends(get_agent_requests_service)]

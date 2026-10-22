@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowDown, Search, Users, Wifi, WifiOff } from "lucide-react";
+import { ArrowDown, ArrowRightLeft, Search, Users, Wifi, WifiOff, X } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { useProjectChat } from "@/lib/useProjectChat";
 import { useChatMessages } from "@/lib/useChatMessages";
@@ -53,7 +53,7 @@ function ProjectChatContent({ compact }: { compact: boolean }) {
     };
     const reply = (message: ChatMessage) => {
         setEditing(null);
-        updateDraft(draftKey, { reply: { id: message.id, seq: message.seq, author: message.author, content: message.content.slice(0, 240), deleted: Boolean(message.deleted_at) }, clientMessageId: crypto.randomUUID() });
+        updateDraft(draftKey, { reply: { id: message.id, seq: message.seq, author_type: message.author_type, author: message.author, content: message.content.slice(0, 240), deleted: Boolean(message.deleted_at) }, clientMessageId: crypto.randomUUID() });
         requestAnimationFrame(() => document.getElementById("project-chat-composer")?.focus());
     };
     const quote = (text: string) => {
@@ -72,6 +72,10 @@ function ProjectChatContent({ compact }: { compact: boolean }) {
             <IconButton label="Поиск в чате" onClick={() => setSearching((value) => !value)}><Search size={16} /></IconButton>
         </header>
         <div className={cn("flex min-h-6 shrink-0 items-center justify-center gap-1.5 px-3 text-[10px]", chat.state === "connected" ? "text-muted" : "bg-warning/5 text-warning")} role="status" aria-live="polite">{chat.state === "connected" ? <Wifi size={11} aria-hidden="true" /> : <WifiOff size={11} aria-hidden="true" />}{STATUS[chat.state]}{chat.state === "reconnecting" && " Черновик сохранён."}</div>
+        {chat.taskMoves.length > 0 && <ul aria-label="Переносы задач" aria-live="polite" className="shrink-0 border-b border-line-subtle bg-surface px-5 py-1.5">{chat.taskMoves.map((move) => <li key={move.seq} className="flex items-center gap-2 py-0.5 text-[11px] text-secondary">
+            <ArrowRightLeft size={12} className="shrink-0 text-muted" aria-hidden="true" /><span className="min-w-0 flex-1">{move.text}</span>
+            <IconButton label="Скрыть уведомление о переносе" size="sm" onClick={() => chat.dismissTaskMove(move.seq)}><X size={12} aria-hidden="true" /></IconButton>
+        </li>)}</ul>}
         <div className="relative flex min-h-0 flex-1">
             <div className="flex min-w-0 flex-1 flex-col">
                 {around && <div className="flex items-center justify-between border-b border-line-subtle px-5 py-1.5 text-xs text-secondary"><span>Контекст сообщения</span><Button size="sm" variant="ghost" icon={<ArrowDown size={12} />} onClick={() => showMessage()}>К последним сообщениям</Button></div>}

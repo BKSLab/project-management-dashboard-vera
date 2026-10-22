@@ -17,7 +17,7 @@ class KnowledgeEvents:
         self.enabled = enabled
 
     async def reindex_project(self, project_id: int) -> None:
-        if not self.enabled:
+        if not self.enabled or project_id is None:
             return
         try:
             await self.repository.add_project_change(project_id)

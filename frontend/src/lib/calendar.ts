@@ -1,5 +1,8 @@
 import { formatDateOnly, parseDateOnly } from "@/lib/dates";
-import type { CalendarRiskReason, CalendarTask } from "@/lib/types";
+import type { CalendarHoliday, CalendarRiskReason, CalendarTask } from "@/lib/types";
+
+/** Плановые даты задачи — всё, что нужно для раскладки по дням. */
+export type DatedTask = Pick<CalendarTask, "start_date" | "due_date">;
 
 export interface CalendarDayModel {
     date: string;
@@ -7,9 +10,43 @@ export interface CalendarDayModel {
     inCurrentMonth: boolean;
     isWeekend: boolean;
     isToday: boolean;
+    /** Нерабочий день: сб/вс или праздник по производственному календарю, кроме рабочих суббот. */
+    isOff: boolean;
+    /** Название праздника/сокращённого дня для подсказки. */
+    holidayTitle: string | null;
 }
 
-export type TimelineScale = "week" | "month" | "quarter";
+export type TimelineScale = "week" | "month" | "quarter" | "year";
+
+/** Отклонения от обычной недели по дате (ответ /calendar/holidays). */
+export type HolidayMap = ReadonlyMap<string, CalendarHoliday>;
+
+/** Выходной ли день с учётом праздников и перенесённых рабочих суббот. */
+export function dayOffInfo(date: string, holidays?: HolidayMap): { isOff: boolean; title: string | null } {
+    const parsed = parseDateOnly(date);
+    const dayOfWeek = parsed?.getDay() ?? 1;
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    const holiday = holidays?.get(date);
+    if (holiday === undefined) return { isOff: isWeekend, title: null };
+    if (holiday.kind === "WORKING_DAY") return { isOff: false, title: holiday.title ?? "Рабочий день (перенос)" };
+    if (holiday.kind === "SHORT_DAY") return { isOff: false, title: holiday.title ?? "Сокращённый день" };
+    return { isOff: true, title: holiday.title ?? (holiday.kind === "HOLIDAY" ? "Праздник" : "Выходной") };
+}
+
+function dayModel(date: string, today: string, inCurrentMonth: boolean, holidays?: HolidayMap): CalendarDayModel {
+    const parsed = parseDateOnly(date);
+    const dayOfWeek = parsed?.getDay() ?? 1;
+    const off = dayOffInfo(date, holidays);
+    return {
+        date,
+        dayNumber: parsed?.getDate() ?? 0,
+        inCurrentMonth,
+        isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
+        isToday: date === today,
+        isOff: off.isOff,
+        holidayTitle: off.title,
+    };
+}
 
 export interface TimelineRange {
     dateFrom: string;
@@ -78,7 +115,11 @@ export function dayTitle(value: string): string {
     return parsed === null ? value : DAY_TITLE.format(parsed);
 }
 
-export function buildMonthGrid(month: string, today = localToday()): CalendarDayModel[] {
+export function buildMonthGrid(
+    month: string,
+    today = localToday(),
+    holidays?: HolidayMap,
+): CalendarDayModel[] {
     const [year, monthNumber] = month.split("-").map(Number);
     const first = new Date(year, monthNumber - 1, 1);
     const mondayOffset = (first.getDay() + 6) % 7;
@@ -89,20 +130,12 @@ export function buildMonthGrid(month: string, today = localToday()): CalendarDay
             gridStart.getMonth(),
             gridStart.getDate() + index,
         );
-        const date = formatDateOnly(current);
-        const dayOfWeek = current.getDay();
-        return {
-            date,
-            dayNumber: current.getDate(),
-            inCurrentMonth: current.getMonth() === monthNumber - 1,
-            isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
-            isToday: date === today,
-        };
+        return dayModel(formatDateOnly(current), today, current.getMonth() === monthNumber - 1, holidays);
     });
 }
 
-export function tasksByDate(tasks: CalendarTask[]): Map<string, CalendarTask[]> {
-    const grouped = new Map<string, CalendarTask[]>();
+export function tasksByDate<T extends DatedTask>(tasks: T[]): Map<string, T[]> {
+    const grouped = new Map<string, T[]>();
     for (const task of tasks) {
         const date = task.due_date ?? task.start_date;
         if (date === null) continue;
@@ -184,7 +217,7 @@ export function rescheduleCalendarTask(
 }
 
 export function normalizeScale(value: string | null): TimelineScale {
-    return value === "week" || value === "quarter" ? value : "month";
+    return value === "week" || value === "quarter" || value === "year" ? value : "month";
 }
 
 export function normalizeDate(value: string | null, fallback = localToday()): string {
@@ -215,6 +248,9 @@ export function timelineRange(anchor: string, scale: TimelineScale): TimelineRan
         const mondayOffset = (parsed.getDay() + 6) % 7;
         first = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate() - mondayOffset);
         last = new Date(first.getFullYear(), first.getMonth(), first.getDate() + 6);
+    } else if (scale === "year") {
+        first = new Date(parsed.getFullYear(), 0, 1);
+        last = new Date(parsed.getFullYear(), 11, 31);
     } else if (scale === "quarter") {
         const quarterMonth = Math.floor(parsed.getMonth() / 3) * 3;
         first = new Date(parsed.getFullYear(), quarterMonth, 1);
@@ -233,7 +269,14 @@ export function shiftTimelineAnchor(
 ): string {
     const parsed = parseDateOnly(anchor) ?? new Date();
     if (scale === "week") parsed.setDate(parsed.getDate() + delta * 7);
-    else parsed.setMonth(parsed.getMonth() + delta * (scale === "quarter" ? 3 : 1));
+    else {
+        // С 31-го числа setMonth перескакивает через короткий месяц — число прижимаем к концу месяца.
+        const months = delta * (scale === "year" ? 12 : scale === "quarter" ? 3 : 1);
+        const target = new Date(parsed.getFullYear(), parsed.getMonth() + months, 1);
+        const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+        target.setDate(Math.min(parsed.getDate(), lastDay));
+        return formatDateOnly(target);
+    }
     return formatDateOnly(parsed);
 }
 
@@ -242,6 +285,7 @@ export function timelineTitle(range: TimelineRange, scale: TimelineScale): strin
     const first = parseDateOnly(range.dateFrom);
     const last = parseDateOnly(range.dateTo);
     if (first === null || last === null) return `${range.dateFrom} — ${range.dateTo}`;
+    if (scale === "year") return `${first.getFullYear()} год`;
     if (scale === "quarter") {
         const quarter = Math.floor(first.getMonth() / 3) + 1;
         return `${quarter} квартал ${first.getFullYear()}`;
@@ -249,23 +293,18 @@ export function timelineTitle(range: TimelineRange, scale: TimelineScale): strin
     return `${RANGE_TITLE.format(first)} — ${RANGE_TITLE.format(last)}`;
 }
 
-export function buildTimelineDays(range: TimelineRange, today = localToday()): CalendarDayModel[] {
+export function buildTimelineDays(
+    range: TimelineRange,
+    today = localToday(),
+    holidays?: HolidayMap,
+): CalendarDayModel[] {
     const count = calendarDaysBetween(range.dateFrom, range.dateTo) + 1;
-    return Array.from({ length: Math.max(count, 0) }, (_, index) => {
-        const date = addDateDays(range.dateFrom, index);
-        const parsed = parseDateOnly(date);
-        const dayOfWeek = parsed?.getDay() ?? 1;
-        return {
-            date,
-            dayNumber: parsed?.getDate() ?? 0,
-            inCurrentMonth: true,
-            isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
-            isToday: date === today,
-        };
-    });
+    return Array.from({ length: Math.max(count, 0) }, (_, index) =>
+        dayModel(addDateDays(range.dateFrom, index), today, true, holidays),
+    );
 }
 
-export function taskInterval(task: CalendarTask): TaskInterval | null {
+export function taskInterval(task: DatedTask): TaskInterval | null {
     const startDate = task.start_date ?? task.due_date;
     const dueDate = task.due_date ?? task.start_date;
     if (startDate === null || dueDate === null) return null;
@@ -277,7 +316,7 @@ export function taskInterval(task: CalendarTask): TaskInterval | null {
     };
 }
 
-export function moveTaskInterval(task: CalendarTask, targetStart: string) {
+export function moveTaskInterval(task: DatedTask, targetStart: string) {
     const interval = taskInterval(task);
     if (interval === null) return { startDate: targetStart, dueDate: targetStart };
     if (interval.openEnd) return { startDate: targetStart, dueDate: null };
@@ -289,7 +328,7 @@ export function moveTaskInterval(task: CalendarTask, targetStart: string) {
 }
 
 export function resizeTaskInterval(
-    task: CalendarTask,
+    task: DatedTask,
     edge: "start" | "end",
     deltaDays: number,
 ) {
@@ -309,7 +348,7 @@ export function resizeTaskInterval(
 }
 
 export function timelineBarGeometry(
-    task: CalendarTask,
+    task: DatedTask,
     range: TimelineRange,
     dayWidth: number,
 ): TimelineBarGeometry | null {
@@ -357,8 +396,17 @@ export function calendarDateDropId(date: string): string {
     return `calendar-day:${date}`;
 }
 
+/** День на шкале: свой id, чтобы в виде «Рядом» не совпасть с тем же днём сетки. */
+export function timelineDateDropId(date: string): string {
+    return `calendar-day:tl:${date}`;
+}
+
+export function isTimelineDropId(value: string | number): boolean {
+    return String(value).startsWith("calendar-day:tl:");
+}
+
 export function dateFromDropId(value: string | number): string | null {
-    const match = /^calendar-day:(\d{4}-\d{2}-\d{2})$/.exec(String(value));
+    const match = /^calendar-day:(?:tl:)?(\d{4}-\d{2}-\d{2})$/.exec(String(value));
     return match?.[1] ?? null;
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Search, X } from "lucide-react";
 import { api } from "@/lib/api";
-import { chatKeys, chatPath, type ChatMessagePage } from "@/lib/projectChat";
+import { chatAuthorName, chatKeys, chatPath, type ChatMessagePage } from "@/lib/projectChat";
 import { useProjectChat } from "@/lib/useProjectChat";
 import { Button, IconButton } from "@/components/ui/Button";
 import { cn } from "@/lib/cn";
@@ -27,7 +27,7 @@ export function ChatSearch({ onJump, onClose, compact = false }: { onJump: (id: 
             {query.length >= 2 && search.isFetching && !results.length && <p role="status" className="px-2 py-3 text-xs text-muted">Поиск…</p>}
             {query.length >= 2 && !search.isFetching && !results.length && !search.error && <p className="px-2 py-3 text-xs text-muted">Сообщения не найдены.</p>}
             {search.error && <p role="alert" className="px-2 py-3 text-xs text-danger">{search.error.message}</p>}
-            {results.map((message) => <button key={message.id} type="button" className="block w-full rounded px-2 py-3 text-left hover:bg-hover" onClick={() => onJump(message.id)}><span className="flex justify-between gap-2 text-[10px] text-muted"><span className="truncate font-medium text-secondary">{message.author?.display_name}</span><time className="shrink-0">{new Date(message.created_at).toLocaleDateString("ru-RU")}</time></span><span className="mt-1 block line-clamp-4 text-xs leading-relaxed break-words text-primary">{message.content}</span></button>)}
+            {results.map((message) => <button key={message.id} type="button" className="block w-full rounded px-2 py-3 text-left hover:bg-hover" onClick={() => onJump(message.id)}><span className="flex justify-between gap-2 text-[10px] text-muted"><span className="truncate font-medium text-secondary">{chatAuthorName(message)}</span><time className="shrink-0">{new Date(message.created_at).toLocaleDateString("ru-RU")}</time></span><span className="mt-1 block line-clamp-4 text-xs leading-relaxed break-words text-primary">{message.content}</span></button>)}
             {search.hasNextPage && <Button variant="ghost" size="sm" disabled={search.isFetchingNextPage} onClick={() => void search.fetchNextPage()}>Ещё результаты</Button>}
         </div>
     </aside>;

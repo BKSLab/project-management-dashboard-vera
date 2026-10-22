@@ -1,9 +1,17 @@
 from datetime import datetime
-from typing import Self
+from typing import Annotated, Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
-from src.db.models.project_stickers import ProjectStickerColor
+from src.db.models.project_stickers import DEFAULT_STICKER_COLOR
 
 MAX_STICKER_BODY_LENGTH = 2000
 MAX_STICKER_TASKS = 20
@@ -11,6 +19,40 @@ MAX_STICKER_COORDINATE = 1_000_000.0
 DEFAULT_STICKER_COORDINATE = 40.0
 MIN_STICKER_SIZE = 160.0
 MAX_STICKER_SIZE = 520.0
+MAX_STICKER_Z_INDEX = 1_000_000_000
+STICKER_COLOR_PATTERN = r"^#[0-9a-fA-F]{6}$"
+
+# Имена прежней палитры (до 0008) принимаются и переводятся в hex — для старых
+# клиентов и агентов, которые ещё шлют «yellow». В ответах всегда hex.
+LEGACY_STICKER_COLORS: dict[str, str] = {
+    "neutral": "#f3efe4",
+    "yellow": DEFAULT_STICKER_COLOR,
+    "blue": "#c9edff",
+    "green": "#d8f5b5",
+    "red": "#ffbbb5",
+    "violet": "#e4d2ff",
+}
+
+
+def _legacy_color_to_hex(value: Any) -> Any:
+    if isinstance(value, str):
+        return LEGACY_STICKER_COLORS.get(value.strip().lower(), value.strip())
+    return value
+
+
+StickerColor = Annotated[
+    str,
+    BeforeValidator(_legacy_color_to_hex),
+    Field(
+        pattern=STICKER_COLOR_PATTERN,
+        description=(
+            "Цвет стикера: hex #rrggbb (хранится в нижнем регистре). Имена прежней палитры "
+            "neutral/yellow/blue/green/red/violet тоже принимаются и переводятся в hex."
+        ),
+        examples=["#fff19a"],
+    ),
+    AfterValidator(str.lower),
+]
 
 
 class ProjectStickerCreateSchema(BaseModel):
@@ -19,7 +61,7 @@ class ProjectStickerCreateSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     body: str = Field(..., min_length=1, max_length=MAX_STICKER_BODY_LENGTH)
-    color: ProjectStickerColor = ProjectStickerColor.YELLOW
+    color: StickerColor = DEFAULT_STICKER_COLOR
     task_ids: list[int] = Field(default_factory=list, max_length=MAX_STICKER_TASKS)
     canvas_x: float = Field(
         DEFAULT_STICKER_COORDINATE,
@@ -36,6 +78,9 @@ class ProjectStickerCreateSchema(BaseModel):
     )
     height: float = Field(
         230.0, ge=MIN_STICKER_SIZE, le=MAX_STICKER_SIZE, description="Высота стикера."
+    )
+    z_index: int = Field(
+        0, ge=-MAX_STICKER_Z_INDEX, le=MAX_STICKER_Z_INDEX, description="Слой на доске."
     )
 
     @field_validator("body")
@@ -63,7 +108,7 @@ class ProjectStickerUpdateSchema(BaseModel):
 
     revision: int = Field(..., ge=1)
     body: str | None = Field(None, min_length=1, max_length=MAX_STICKER_BODY_LENGTH)
-    color: ProjectStickerColor | None = None
+    color: StickerColor | None = None
     task_ids: list[int] | None = Field(None, max_length=MAX_STICKER_TASKS)
 
     @model_validator(mode="after")
@@ -110,6 +155,9 @@ class ProjectStickerPositionUpdateSchema(BaseModel):
     height: float | None = Field(
         None, ge=MIN_STICKER_SIZE, le=MAX_STICKER_SIZE, description="Новая высота."
     )
+    z_index: int | None = Field(
+        None, ge=-MAX_STICKER_Z_INDEX, le=MAX_STICKER_Z_INDEX, description="Новый слой."
+    )
 
 
 class ProjectStickerSchema(BaseModel):
@@ -118,13 +166,15 @@ class ProjectStickerSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    project_id: int
+    project_id: int | None
+    board_id: int
     body: str
-    color: ProjectStickerColor
+    color: str = Field(..., description="Цвет стикера: hex #rrggbb.")
     canvas_x: float
     canvas_y: float
     width: float = Field(230.0, ge=MIN_STICKER_SIZE, le=MAX_STICKER_SIZE)
     height: float = Field(230.0, ge=MIN_STICKER_SIZE, le=MAX_STICKER_SIZE)
+    z_index: int = 0
     created_by_user_id: int | None
     created_by_username_snapshot: str
     created_by_display_name_snapshot: str

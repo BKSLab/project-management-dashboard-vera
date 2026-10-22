@@ -12,8 +12,8 @@ from src.exceptions.users import (
     UsersServiceError,
 )
 from src.repositories.users import UsersRepository
-from src.schemas.users import UserSchema
-from src.services.auth import to_user_schema
+from src.schemas.users import UserSchema, UserSummarySchema
+from src.services.auth import to_user_schema, to_user_summary
 from src.storage.avatars import AvatarStorage
 from src.utils.security import hash_password, verify_password
 
@@ -245,3 +245,10 @@ def _content_type_for(storage_key: str) -> str:
         if storage_key.endswith(extension):
             return content_type
     return "application/octet-stream"
+
+    async def search_users(self, query: str | None = None, limit: int = 20) -> list[UserSummarySchema]:
+        """Return safe identities for assigning personal tasks."""
+        try:
+            return [to_user_summary(user) for user in await self.users_repository.search(query=query, limit=limit)]
+        except UsersRepositoryError as error:
+            raise UsersServiceError(str(error)) from error

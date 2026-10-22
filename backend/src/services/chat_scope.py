@@ -4,6 +4,8 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 
+from src.repositories.agent_tool_runs import AgentToolRunsRepository
+from src.repositories.chat_agent_turns import ChatAgentTurnsRepository
 from src.repositories.chat_attachments import ChatAttachmentsRepository
 from src.repositories.chat_entity_lookup import ChatEntityLookupRepository
 from src.repositories.chat_events import ChatEventsRepository
@@ -34,6 +36,8 @@ class ChatScope:
     participants: ChatParticipantsRepository
     auth: AuthService
     unit_of_work: UnitOfWork
+    turns: ChatAgentTurnsRepository | None = None
+    runs: AgentToolRunsRepository | None = None
 
 
 ChatScopeFactory = Callable[[], AbstractAsyncContextManager[ChatScope]]

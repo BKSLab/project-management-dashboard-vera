@@ -165,3 +165,48 @@ class TaskContextFileError(TasksServiceError):
     @property
     def detail(self) -> str:
         return f"Не удалось прочитать «{self.file_name}» для переформулирования."
+
+
+class TaskOutsideProjectError(TasksServiceError):
+    """Операция имеет смысл только для проектной задачи."""
+
+    status_code = status.HTTP_409_CONFLICT
+    detail = "Это действие доступно только задачам проекта."
+
+    def __init__(self, task_id: int) -> None:
+        self.task_id = task_id
+        super().__init__(error_details=f"Задача id={task_id} не принадлежит проекту.")
+
+
+class TaskStatusOfProjectTaskError(TasksServiceError):
+    """Статус проектной задачи задаёт стадия канбана, а не поле status."""
+
+    status_code = status.HTTP_409_CONFLICT
+    detail = "Состояние задачи проекта меняется переносом по стадиям доски."
+
+    def __init__(self, task_id: int) -> None:
+        self.task_id = task_id
+        super().__init__(error_details=f"Задача id={task_id} проектная, статус задаёт стадия.")
+
+
+class TaskPersonNotFoundError(TasksServiceError):
+    """Назначаемый на задачу пользователь не найден или отключён."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    detail = "Назначить на задачу можно только активного локального пользователя."
+
+    def __init__(self, user_id: int) -> None:
+        self.user_id = user_id
+        super().__init__(error_details=f"Пользователь id={user_id} не найден или отключён.")
+
+
+class TaskManagerRequiredError(TasksServiceError):
+    """Менять постановщика задачи вне проекта может только её OWNER."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    detail = (
+        "Изменить постановщика может постановщик разовой задачи."
+    )
+
+    def __init__(self) -> None:
+        super().__init__(error_details=self.detail)

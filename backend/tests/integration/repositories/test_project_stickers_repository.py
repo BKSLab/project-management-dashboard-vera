@@ -2,16 +2,17 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db.models.project_boards import ProjectBoard
 from src.db.models.project_stages import ProjectStage
 from src.db.models.project_stickers import (
     ProjectSticker,
-    ProjectStickerColor,
     ProjectStickerTaskLink,
 )
 from src.db.models.projects import Project
 from src.db.models.tasks import Task, TaskPriority
 from src.db.models.users import User
 from src.repositories.project_stickers import ProjectStickersRepository
+from tests.board_support import local_user, user_display_name
 
 
 async def create_task(
@@ -40,16 +41,18 @@ async def create_sticker(
     project: Project,
     user: User,
     task_ids: list[int],
+    board: ProjectBoard,
 ) -> ProjectSticker:
     # Порядок операций теперь принадлежит сервису; помощник повторяет его.
     sticker_id = await repository.insert(
         data={
             "project_id": project.id,
+            "board_id": board.id,
             "body": "Согласовать API",
-            "color": ProjectStickerColor.YELLOW,
+            "color": "#fff19a",
             "created_by_user_id": user.id,
             "created_by_username_snapshot": user.username,
-            "created_by_display_name_snapshot": f"{user.last_name} {user.first_name}",
+            "created_by_display_name_snapshot": user_display_name(user),
         },
     )
     await repository.replace_task_links(sticker_id=sticker_id, task_ids=task_ids)
@@ -61,6 +64,7 @@ async def create_sticker(
 @pytest.mark.asyncio
 async def test_crud_roundtrip_and_task_links(
     db_session: AsyncSession,
+    board: ProjectBoard,
     project: Project,
     stage: ProjectStage,
     user: User,
@@ -73,6 +77,7 @@ async def test_crud_roundtrip_and_task_links(
         project=project,
         user=user,
         task_ids=[first.id],
+        board=board,
     )
 
     listed = await repository.list_by_project_id(project.id)
@@ -80,7 +85,7 @@ async def test_crud_roundtrip_and_task_links(
         project_id=project.id,
         sticker_id=created.id,
         expected_revision=1,
-        changes={"body": "Новый текст", "color": ProjectStickerColor.BLUE},
+        changes={"body": "Новый текст", "color": "#c9edff"},
     )
     await repository.replace_task_links(sticker_id=created.id, task_ids=[second.id])
     updated = await repository.get_by_id(project_id=project.id, sticker_id=created.id)
@@ -95,7 +100,7 @@ async def test_crud_roundtrip_and_task_links(
     assert changed is True
     assert updated is not None
     assert updated.body == "Новый текст"
-    assert updated.color is ProjectStickerColor.BLUE
+    assert updated.color == "#c9edff"
     assert updated.revision == 2
     assert [link.task_id for link in updated.task_links] == [second.id]
     assert stale is False
@@ -104,11 +109,12 @@ async def test_crud_roundtrip_and_task_links(
 @pytest.mark.asyncio
 async def test_delete_is_revision_guarded(
     db_session: AsyncSession,
+    board: ProjectBoard,
     project: Project,
     user: User,
 ) -> None:
     repository = ProjectStickersRepository(db_session)
-    created = await create_sticker(repository, project=project, user=user, task_ids=[])
+    created = await create_sticker(repository, project=project, user=user, task_ids=[], board=board)
 
     assert (
         await repository.delete(
@@ -132,11 +138,12 @@ async def test_delete_is_revision_guarded(
 @pytest.mark.asyncio
 async def test_position_update_preserves_content_revision_and_timestamp(
     db_session: AsyncSession,
+    board: ProjectBoard,
     project: Project,
     user: User,
 ) -> None:
     repository = ProjectStickersRepository(db_session)
-    created = await create_sticker(repository, project=project, user=user, task_ids=[])
+    created = await create_sticker(repository, project=project, user=user, task_ids=[], board=board)
     original_updated_at = created.updated_at
 
     moved = await repository.update_position(
@@ -158,11 +165,12 @@ async def test_position_update_preserves_content_revision_and_timestamp(
 @pytest.mark.asyncio
 async def test_position_update_is_scoped_to_project(
     db_session: AsyncSession,
+    board: ProjectBoard,
     project: Project,
     user: User,
 ) -> None:
     repository = ProjectStickersRepository(db_session)
-    created = await create_sticker(repository, project=project, user=user, task_ids=[])
+    created = await create_sticker(repository, project=project, user=user, task_ids=[], board=board)
 
     moved = await repository.update_position(
         project_id=project.id + 999,
@@ -177,6 +185,7 @@ async def test_position_update_is_scoped_to_project(
 @pytest.mark.asyncio
 async def test_task_and_project_foreign_keys_cascade(
     db_session: AsyncSession,
+    board: ProjectBoard,
     project: Project,
     stage: ProjectStage,
     user: User,
@@ -188,6 +197,7 @@ async def test_task_and_project_foreign_keys_cascade(
         project=project,
         user=user,
         task_ids=[task.id],
+        board=board,
     )
     sticker_id = created.id
 
@@ -208,19 +218,20 @@ async def test_task_and_project_foreign_keys_cascade(
 @pytest.mark.asyncio
 async def test_author_snapshot_survives_user_deletion(
     db_session: AsyncSession,
+    board: ProjectBoard,
     project: Project,
 ) -> None:
-    author = User(
+    author = local_user(
         username="former-author",
-        password_hash="hash",
-        last_name="Бывший",
-        first_name="Участник",
+        display_name="Бывший Участник",
         is_active=True,
     )
     db_session.add(author)
     await db_session.flush()
     repository = ProjectStickersRepository(db_session)
-    created = await create_sticker(repository, project=project, user=author, task_ids=[])
+    created = await create_sticker(
+        repository, project=project, user=author, task_ids=[], board=board
+    )
     project_id = project.id
     sticker_id = created.id
 

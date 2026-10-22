@@ -35,6 +35,7 @@ class AppSettings(SettingsBase):
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
     logging_config_path: Path = BASE_DIR / "logging.ini"
     uploads_path: Path = BASE_DIR / "uploads"
+    app_public_url: str = ""
 
 
 class AuthSettings(SettingsBase):
@@ -72,22 +73,30 @@ class HttpClientSettings(SettingsBase):
 class LlmSettings(SettingsBase):
     """Настройки OpenAI-совместимого API для Project Agent.
 
-    Worst-case одного вызова считается как ``llm_timeout × llm_retries``
+    Для синхронных сценариев LlmClient worst-case одного вызова —
+    ``llm_timeout × llm_retries``
     плюс экспоненциальный backoff между попытками. При значениях по
     умолчанию это ``300 × 3 = 900`` секунд ожидания upstream. Расхождение
     этого бюджета с timeout-ом nginx на ``/api/`` зафиксировано в
-    ``docs/AI_TIMEOUT_BUDGET_DECISION.md``.
+    ``docs/agent.md``. Очередь Веры имеет отдельный общий срок выполнения.
     """
 
     llm_api_key: SecretStr
     llm_api_url: str
     llm_model: str = "google/gemini-3.7-flash"
     agent_model: str = "google/gemini-3.7-flash"
+    llm_api_base_url: str = ""
     llm_timeout: int = 300
     llm_retries: int = 3
     vision_model: str = "google/gemini-3.7-flash"
     vision_max_tokens: int = 4000
     task_rephrase_file_max_chars: int = Field(default=5000, ge=500, le=50_000)
+
+    @property
+    def base_url(self) -> str:
+        if self.llm_api_base_url.strip():
+            return self.llm_api_base_url.strip().rstrip("/")
+        return self.llm_api_url.strip().rstrip("/").removesuffix("/chat/completions")
 
     @property
     def headers(self) -> dict[str, str]:
@@ -191,6 +200,22 @@ class AgentSettings(SettingsBase):
     agent_context_tokens: int = Field(default=12000, ge=9000, le=64000)
     agent_retrieval_limit: int = Field(default=5, ge=1, le=10)
     agent_history_tokens: int = Field(default=1200, ge=200, le=4000)
+    agent_ask_wait_seconds: float = Field(default=25.0, ge=0, le=55)
+    agent_action_confirm_ttl_hours: int = Field(default=24, ge=1, le=168)
+
+
+class McpSettings(SettingsBase):
+    mcp_host: str = "0.0.0.0"
+    mcp_port: int = Field(default=8021, ge=1, le=65535)
+
+
+class TaskAttentionSettings(SettingsBase):
+    attention_max_connections: int = Field(default=2000, ge=1)
+    attention_heartbeat_seconds: float = Field(default=25.0, ge=2)
+    attention_reconnect_seconds: float = Field(default=2.0, ge=0)
+    attention_debounce_seconds: float = Field(default=0.2, ge=0)
+    attention_connect_timeout: float = Field(default=5.0, gt=0)
+    attention_send_timeout: float = Field(default=5.0, gt=0)
 
 
 class ChatSettings(SettingsBase):
@@ -227,6 +252,8 @@ class Settings(BaseSettings):
     knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     chat: ChatSettings = Field(default_factory=ChatSettings)
+    mcp: McpSettings = Field(default_factory=McpSettings)
+    task_attention: TaskAttentionSettings = Field(default_factory=TaskAttentionSettings)
 
 
 @lru_cache

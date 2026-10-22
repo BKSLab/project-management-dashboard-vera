@@ -27,6 +27,21 @@ class ActivitySchema(BaseModel):
         description="Новое значение.",
         examples=["В работе"],
     )
+    actor_user_id: int | None = Field(
+        None,
+        description="Кто выполнил изменение; null — автор не записан (старые события).",
+        examples=[5],
+    )
+    actor_name: str | None = Field(
+        None,
+        description="Имя автора изменения на момент события.",
+        examples=["Иванов Иван"],
+    )
+    via_api_key_label: str | None = Field(
+        None,
+        description="Имя сервисного API-ключа, через который агент сделал изменение.",
+        examples=["Проектный агент"],
+    )
     created_at: datetime = Field(
         ...,
         description="Дата фиксации события.",

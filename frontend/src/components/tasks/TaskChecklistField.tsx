@@ -46,7 +46,7 @@ function ChecklistEditor({ value, onChange, disabled }: EditorProps) {
 }
 
 interface TaskChecklistFieldProps {
-    projectId: number;
+    projectId: number | null;
     taskId?: number;
     title: string;
     description: string;
@@ -75,7 +75,7 @@ export function TaskChecklistField({ projectId, taskId, title, description, docu
             body.append("payload", JSON.stringify({ title: title.trim(), description_md: description, task_id: taskId ?? null,
                 document_ids: documentIds, ...(isChecklistValid(value) ? { checklist: checklistInput(value) } : {}) }));
             for (const file of files) body.append("files", file);
-            const result = await api.postForm<ChecklistSuggestion>(endpoints.taskChecklistSuggestion(projectId), body);
+            const result = await api.postForm<ChecklistSuggestion>(endpoints.taskChecklistSuggestion(projectId!), body);
             return { ...result, revision };
         },
         onSuccess: result => { setProposal(result); setActionError(null); },
@@ -114,7 +114,7 @@ export function TaskChecklistField({ projectId, taskId, title, description, docu
             <div className="flex flex-wrap gap-1.5">
                 {!value && <Button size="sm" disabled={busy} onClick={() => onChange({ title: "Чек-лист", items: [newChecklistItem()] })}>Добавить чек-лист</Button>}
                 {value && !editing && <Button size="sm" disabled={busy} onClick={onEdit}>Редактировать чек-лист</Button>}
-                <Button size="sm" disabled={busy || !title.trim()} onClick={() => generate.mutate()}>
+                <Button size="sm" disabled={projectId === null || busy || !title.trim()} onClick={() => generate.mutate()}>
                     <WandSparkles size={13} />{generate.isPending ? "Формирование…" : "Сформировать чек-лист"}
                 </Button>
                 {value && <Button size="sm" aria-label="Удалить чек-лист" disabled={busy} onClick={() => setConfirmDelete(true)}><Trash2 size={13} /></Button>}

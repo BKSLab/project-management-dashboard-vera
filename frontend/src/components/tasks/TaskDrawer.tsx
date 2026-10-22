@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link2, MessageSquare, Pencil, Trash2 } from "lucide-react";
+import { FolderInput, Link2, MessageSquare, Pencil, Trash2 } from "lucide-react";
 import { api, apiUrl, endpoints, queryKeys } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDateTime, formatRelative, toDateInputValue } from "@/lib/dates";
@@ -15,9 +15,10 @@ import type {
     TaskAttachment,
     TaskComment,
     TaskPriority,
+    TaskStatus,
     WbsStructure,
 } from "@/lib/types";
-import { PRIORITY_LABELS, PRIORITY_ORDER } from "@/lib/types";
+import { fullName, PRIORITY_LABELS, PRIORITY_ORDER } from "@/lib/types";
 import { useUiStore } from "@/stores/ui";
 import { useRenderedMarkdown } from "@/lib/useRenderedMarkdown";
 import { Button, IconButton } from "@/components/ui/Button";
@@ -33,6 +34,14 @@ import { useCurrentUser } from "@/lib/useAuth";
 import { TaskPeopleFields } from "@/components/tasks/TaskPeopleFields";
 import { TaskRiskSection } from "@/components/risks/TaskRiskSection";
 import { TaskChecklistSection } from "@/components/tasks/TaskChecklistSection";
+import { TaskReportSection } from "@/components/tasks/TaskReportSection";
+import { TaskTitleEditor } from "@/components/tasks/TaskTitleEditor";
+import { MoveTaskDialog } from "@/components/tasks/MoveTaskDialog";
+import { LocalUserSelect } from "@/components/tasks/LocalUserSelect";
+import { isClosedStatus, TASK_STATUS_LABELS, TASK_STATUS_ORDER, taskKind } from "@/lib/tasks";
+import { moveDeniedHint } from "@/lib/taskMove";
+import { useTaskViewed } from "@/lib/useTaskViewed";
+import type { TaskViewToken } from "@/lib/taskAttention";
 
 const EVENT_LABELS: Record<TaskActivity["event_type"], string> = {
     STAGE_CHANGED: "Стадия",
@@ -45,6 +54,8 @@ const EVENT_LABELS: Record<TaskActivity["event_type"], string> = {
     WBS_NODE_CHANGED: "Раздел ИСР",
     COMMENT_ADDED: "Добавлен комментарий",
     CHECKLIST_CHANGED: "Чек-лист изменён",
+    TASK_MOVED: "Перенесена",
+    LINKS_REMOVED: "При переносе снято",
 };
 
 function MarkdownBlock({ markdown }: { markdown: string }) {
@@ -85,17 +96,27 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
     const [isEditingDescription, setIsEditingDescription] = useState(false);
     const [descriptionDraft, setDescriptionDraft] = useState("");
     const [commentDraft, setCommentDraft] = useState("");
-    const [authorDraft, setAuthorDraft] = useState("");
+    const visibleCardRef = useRef<HTMLDivElement>(null);
+    const reportSectionRef = useRef<HTMLDivElement>(null);
+    const [reportComment, setReportComment] = useState<TaskComment | null>(null);
+    const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+    const [editingComment, setEditingComment] = useState<TaskComment | null>(null);
+    const [commentEditDraft, setCommentEditDraft] = useState("");
     const [documentToLink, setDocumentToLink] = useState("");
     const [attachmentError, setAttachmentError] = useState<string | null>(null);
     const currentUserQuery = useCurrentUser();
 
     const taskQuery = useQuery({
         queryKey: queryKeys.task(taskId),
-        queryFn: () => api.get<Task>(endpoints.task(taskId)),
+        queryFn: async () => {
+            const attention_view = await api.get<TaskViewToken>(`/api/v1/tasks/${taskId}/attention`);
+            return { ...await api.get<Task>(endpoints.task(taskId)), attention_view };
+        },
     });
     const task = taskQuery.data;
-    const projectId = task?.project_id;
+    const projectId = task?.project_id ?? undefined;
+    const kind = task ? taskKind(task) : "PROJECT";
+    const personal = kind === "PERSONAL";
 
     const stagesQuery = useQuery({
         queryKey: queryKeys.stages(projectId ?? 0),
@@ -122,6 +143,7 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
     const linksQuery = useQuery({
         queryKey: queryKeys.taskLinks(taskId),
         queryFn: () => api.get<LinkedDocument[]>(endpoints.taskLinks(taskId)),
+        enabled: projectId !== undefined,
     });
     const documentsQuery = useQuery({
         queryKey: queryKeys.documents(projectId ?? 0),
@@ -134,11 +156,14 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
         enabled: projectId !== undefined && task?.wbs_node_id !== null,
     });
 
+    useTaskViewed(taskId, commentsQuery.isSuccess && !commentsQuery.isFetching && attachmentsQuery.isSuccess && !attachmentsQuery.isFetching && activityQuery.isSuccess && !activityQuery.isFetching ? task?.attention_view : undefined, visibleCardRef);
+
     /** После любого изменения задачи обновляем все её представления. */
     const invalidateTask = () => {
         queryClient.invalidateQueries({ queryKey: queryKeys.task(taskId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.taskActivity(taskId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
+        queryClient.invalidateQueries({ queryKey: queryKeys.myTasks });
         if (projectId !== undefined) {
             queryClient.invalidateQueries({ queryKey: ["projects", projectId] });
         }
@@ -163,7 +188,6 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
     const commentMutation = useMutation({
         mutationFn: () =>
             api.post<TaskComment>(endpoints.taskComments(taskId), {
-                author_name: authorDraft || undefined,
                 body_md: commentDraft,
             }),
         onSuccess: () => {
@@ -171,6 +195,19 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
             queryClient.invalidateQueries({ queryKey: queryKeys.taskComments(taskId) });
             invalidateTask();
         },
+    });
+
+    const statusMutation = useMutation({
+        mutationFn: (status: TaskStatus) => api.patch<Task>(endpoints.taskStatus(taskId), { status }),
+        onSuccess: invalidateTask,
+    });
+    const editCommentMutation = useMutation({
+        mutationFn: () => api.patch<TaskComment>(`/api/v1/comments/${editingComment!.id}`, { body_md: commentEditDraft, expected_body_md: editingComment!.body_md }),
+        onSuccess: () => { setEditingComment(null); queryClient.invalidateQueries({ queryKey: queryKeys.taskComments(taskId) }); invalidateTask(); },
+    });
+    const deleteCommentMutation = useMutation({
+        mutationFn: (id: number) => api.delete(`/api/v1/comments/${id}`),
+        onSuccess: () => { queryClient.invalidateQueries({ queryKey: queryKeys.taskComments(taskId) }); invalidateTask(); },
     });
 
     const linkMutation = useMutation({
@@ -234,11 +271,12 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
 
     const stage = stagesQuery.data?.find((item) => item.id === task?.stage_id);
     const wbsNode = wbsQuery.data?.nodes.find((node) => node.id === task?.wbs_node_id);
-    const canChangeReporter = membersQuery.data?.some(
+    const canChangeReporter = personal ? participantUserId(task!, "REPORTER") === currentUserQuery.data?.id : membersQuery.data?.some(
         (member) =>
             member.user.id === currentUserQuery.data?.id && member.role === "OWNER",
     );
     const mutationError =
+        statusMutation.error ?? editCommentMutation.error ?? deleteCommentMutation.error ??
         updateMutation.error ??
         moveMutation.error ??
         commentMutation.error ??
@@ -251,9 +289,10 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                 <span className="font-mono text-[11px] text-muted">{task.key}</span>
                 <PriorityBadge priority={task.priority} showLow />
             </div>
-            <h2 className="text-[15px] leading-snug font-semibold break-words text-primary">
-                {task.title}
-            </h2>
+            <TaskTitleEditor title={task.title} canEdit saving={updateMutation.isPending} error={updateMutation.error?.message}
+                onSave={async title => { try { await updateMutation.mutateAsync({ title }); return true; } catch { return false; } }} />
+            <Button size="sm" variant="ghost" icon={<FolderInput size={13} />} disabled={Boolean(moveDeniedHint(kind, true, participantUserId(task, "REPORTER") === currentUserQuery.data?.id))}
+                title={moveDeniedHint(kind, true, participantUserId(task, "REPORTER") === currentUserQuery.data?.id)} onClick={() => setMoveDialogOpen(true)}>Переместить…</Button>
         </div>
     ) : (
         <Skeleton className="h-9 w-56" />
@@ -279,7 +318,7 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
             )}
 
             {task && (
-                <>
+                <div ref={visibleCardRef}>
                     {mutationError && (
                         <div className="px-4 pt-4">
                             <ErrorMessage message={(mutationError as Error).message} />
@@ -288,11 +327,11 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
 
                     <DrawerSection title="Свойства">
                         <div className="grid gap-3 sm:grid-cols-2">
-                            <Field label="Стадия">
+                            {personal ? <Field label="Статус">{id => <Select id={id} value={task.status ?? "NEW"} disabled={statusMutation.isPending} onChange={event => statusMutation.mutate(event.target.value as TaskStatus)}>{TASK_STATUS_ORDER.map(status => <option key={status} value={status}>{TASK_STATUS_LABELS[status]}</option>)}</Select>}</Field> : <Field label="Стадия">
                                 {(id) => (
                                     <Select
                                         id={id}
-                                        value={task.stage_id}
+                                        value={task.stage_id ?? ""}
                                         disabled={stagesQuery.isPending || moveMutation.isPending}
                                         onChange={(event) =>
                                             moveMutation.mutate(Number(event.target.value))
@@ -305,7 +344,7 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                                         ))}
                                     </Select>
                                 )}
-                            </Field>
+                            </Field>}
 
                             <Field label="Приоритет">
                                 {(id) => (
@@ -361,7 +400,11 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                             </Field>
 
                             <div className="border-t border-line-subtle pt-3 sm:col-span-2">
-                                <TaskPeopleFields
+                                {personal ? <div className="grid gap-3 sm:grid-cols-2">
+                                    <Field label="Исполнитель">{() => <LocalUserSelect label="Исполнитель" selected={(task.participants ?? []).filter(item => item.role === "EXECUTOR").map(item => item.user)} disabled={updateMutation.isPending} onChange={users => updateMutation.mutate({ executor_id: users[0]?.id ?? null })} />}</Field>
+                                    <Field label="Постановщик">{() => <LocalUserSelect label="Постановщик" selected={(task.participants ?? []).filter(item => item.role === "REPORTER").map(item => item.user)} disabled={!canChangeReporter || updateMutation.isPending} onChange={users => updateMutation.mutate({ reporter_id: users[0]?.id ?? null })} />}</Field>
+                                    <div className="sm:col-span-2"><Field label="Наблюдатели">{() => <LocalUserSelect label="Наблюдатели" multiple selected={(task.participants ?? []).filter(item => item.role === "OBSERVER").map(item => item.user)} disabled={updateMutation.isPending} onChange={users => updateMutation.mutate({ observer_ids: users.map(user => user.id) })} />}</Field></div>
+                                </div> : <TaskPeopleFields
                                     members={membersQuery.data ?? []}
                                     executorId={participantUserId(task, "EXECUTOR")}
                                     reporterId={participantUserId(task, "REPORTER")}
@@ -381,6 +424,7 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                                         updateMutation.mutate({ observer_ids: userIds })
                                     }
                                 />
+                                }
                                 {membersQuery.error && (
                                     <p className="mt-2 text-[11px] text-danger">
                                         Не удалось загрузить команду проекта.
@@ -388,12 +432,12 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                                 )}
                             </div>
 
-                            <div className="flex flex-col gap-1.5">
+                            {!personal && <div className="flex flex-col gap-1.5">
                                 <span className="text-xs font-medium text-secondary">Раздел ИСР</span>
                                 <p className="flex h-8 items-center text-[13px] text-muted">
                                     {wbsNode ? wbsNode.title : "Не распределена"}
                                 </p>
-                            </div>
+                            </div>}
                         </div>
 
                         <div className="mt-3 flex items-center gap-3 text-[11px] text-muted">
@@ -403,7 +447,7 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                                     {stage.name}
                                 </span>
                             )}
-                            <DueDate value={task.due_date} isDone={stage?.is_done_stage} />
+                            <DueDate value={task.due_date} isDone={personal ? isClosedStatus(task.status) : stage?.is_done_stage} />
                         </div>
                     </DrawerSection>
 
@@ -462,9 +506,9 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                         )}
                     </DrawerSection>
 
-                    <TaskRiskSection projectId={task.project_id} projectKey={task.key.slice(0, task.key.lastIndexOf("-"))} taskId={task.id} />
+                    {projectId !== undefined && <TaskRiskSection projectId={projectId} projectKey={task.key.slice(0, task.key.lastIndexOf("-"))} taskId={task.id} />}
                     <TaskChecklistSection task={task} description={isEditingDescription ? descriptionDraft : task.description_md ?? ""} />
-                    <DrawerSection title="Документы" count={linksQuery.data?.length ?? null}>
+                    {projectId !== undefined && <DrawerSection title="Документы" count={linksQuery.data?.length ?? null}>
                         <div className="flex flex-col gap-2">
                             {linksQuery.data?.map((link) => (
                                 <div
@@ -514,7 +558,7 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                                 </p>
                             )}
                         </div>
-                    </DrawerSection>
+                    </DrawerSection>}
 
                     <DrawerSection title="Файлы" count={attachmentsQuery.data?.length ?? null}>
                         <div ref={filesSectionRef} className="flex flex-col gap-2.5">
@@ -546,15 +590,20 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                                     <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
                                         <MessageSquare size={11} aria-hidden="true" />
                                         <span className="font-medium text-secondary">
-                                            {comment.author_name ?? "Без подписи"}
+                                            {comment.author ? fullName(comment.author) : comment.author_name ?? "Без подписи"}
                                         </span>
                                         <time dateTime={comment.created_at}>
                                             {formatRelative(comment.created_at)}
                                         </time>
                                     </div>
-                                    <p className="text-[13px] break-words whitespace-pre-wrap text-secondary">
-                                        {comment.body_md}
-                                    </p>
+                                    {editingComment?.id === comment.id ? <div className="flex flex-col gap-2"><Textarea aria-label="Изменить комментарий" value={commentEditDraft} onChange={event => setCommentEditDraft(event.target.value)} /><div className="flex gap-2"><Button size="sm" disabled={!commentEditDraft.trim() || editCommentMutation.isPending} onClick={() => editCommentMutation.mutate()}>Сохранить</Button><Button size="sm" variant="ghost" onClick={() => setEditingComment(null)}>Отмена</Button></div></div> : <p className="text-[13px] break-words whitespace-pre-wrap text-secondary">{comment.body_md}</p>}
+                                    <div className="mt-2 flex gap-2">
+                                        {(!comment.author || comment.author.id === currentUserQuery.data?.id) && <>
+                                            <Button size="sm" variant="ghost" onClick={() => { setEditingComment(comment); setCommentEditDraft(comment.body_md); }}>Изменить</Button>
+                                            <Button size="sm" variant="ghost" disabled={deleteCommentMutation.isPending} onClick={() => deleteCommentMutation.mutate(comment.id)}>Удалить</Button>
+                                        </>}
+                                        <Button size="sm" variant="ghost" onClick={() => { setReportComment(comment); reportSectionRef.current?.scrollIntoView({ behavior: "smooth" }); }}>Считать отчётом</Button>
+                                    </div>
                                 </article>
                             ))}
                             {commentsQuery.data?.length === 0 && (
@@ -562,12 +611,6 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                             )}
 
                             <div className="flex flex-col gap-2 pt-1">
-                                <Input
-                                    value={authorDraft}
-                                    aria-label="Подпись автора комментария"
-                                    placeholder="Ваше имя (необязательно)"
-                                    onChange={(event) => setAuthorDraft(event.target.value)}
-                                />
                                 <Textarea
                                     rows={3}
                                     value={commentDraft}
@@ -591,7 +634,9 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                         </div>
                     </DrawerSection>
 
-                    <DrawerSection title="Activity" count={activityQuery.data?.length ?? null}>
+                    <div ref={reportSectionRef}><DrawerSection title="Итоговый отчёт"><TaskReportSection taskId={taskId} active selectedComment={reportComment} clearComment={() => setReportComment(null)} /></DrawerSection></div>
+
+                    <DrawerSection title="История" count={activityQuery.data?.length ?? null}>
                         <ol className="flex flex-col gap-2">
                             {activityQuery.data?.map((event) => (
                                 <li key={event.id} className="flex gap-2.5 text-[12px]">
@@ -617,6 +662,7 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                                                 <span className="ml-1">{event.to_value}</span>
                                             )}
                                         </p>
+                                        {event.actor_name && <p className="text-[11px] text-muted">{event.actor_name}{event.via_api_key_label ? ` · через ${event.via_api_key_label}` : ""}</p>}
                                         <time
                                             dateTime={event.created_at}
                                             className={cn("text-[11px] text-disabled")}
@@ -631,7 +677,8 @@ function TaskDrawerContent({ taskId, onClose }: { taskId: number; onClose: () =>
                             )}
                         </ol>
                     </DrawerSection>
-                </>
+                    {moveDialogOpen && <MoveTaskDialog task={task} kind={kind} onClose={() => setMoveDialogOpen(false)} onMoved={() => { invalidateTask(); if (projectId) queryClient.invalidateQueries({ queryKey: queryKeys.wbs(projectId) }); }} />}
+                </div>
             )}
         </Drawer>
     );

@@ -49,6 +49,7 @@ class DashboardProjectSchema(BaseModel):
     status: ProjectStatus = Field(..., description="Статус проекта.", examples=["ACTIVE"])
     color: str = Field(..., description="HEX-цвет проекта.", examples=["#58a6ff"])
     icon: str | None = Field(None, description="Эмодзи-иконка проекта.", examples=["🚀"])
+    icon_image_version: str | None = Field(None, description="Версия локальной картинки проекта.")
     total_tasks: int = Field(..., ge=0, description="Всего задач в проекте.", examples=[18])
     done_tasks: int = Field(..., ge=0, description="Выполненных задач.", examples=[9])
     in_progress_tasks: int = Field(..., ge=0, description="Задач в работе.", examples=[5])
@@ -105,6 +106,7 @@ class DashboardTaskSchema(BaseModel):
 class DashboardSchema(BaseModel):
     """Сводка состояния всех проектов."""
 
+    has_outside_tasks: bool = Field(False, description="Есть открытые разовые задачи пользователя.")
     totals: DashboardTotalsSchema = Field(..., description="Суммарные показатели портфеля.")
     projects: list[DashboardProjectSchema] = Field(
         default_factory=list,

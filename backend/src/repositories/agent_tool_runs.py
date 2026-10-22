@@ -15,36 +15,91 @@ class AgentToolRunsRepository:
     def __init__(self, db_session: AsyncSession) -> None:
         self.db_session = db_session
 
-    async def lock_request(self, project_id: int, user_id: int, request_id: UUID) -> None:
+    async def lock_request(self, project_id: int | None, user_id: int, request_id: UUID) -> None:
         """Сериализует повтор запроса до commit, в том числе до создания строки."""
-        key = f"agent-tool:{project_id}:{user_id}:{request_id}"
+        key = f"agent-tool:{project_id or 'personal'}:{user_id}:{request_id}"
         await self._execute(select(func.pg_advisory_xact_lock(func.hashtextextended(key, 0))))
 
     async def get_request(
-        self, project_id: int, user_id: int, request_id: UUID
+        self, project_id: int | None, user_id: int, request_id: UUID
     ) -> AgentToolRun | None:
-        """Читает прежний результат только в области владельца и проекта."""
+        """Читает прежний результат только в области владельца и проекта (или вне его)."""
         return (
             await self._execute(
                 select(AgentToolRun).where(
-                    AgentToolRun.project_id == project_id,
+                    AgentToolRun.project_id.is_(None)
+                    if project_id is None
+                    else AgentToolRun.project_id == project_id,
                     AgentToolRun.user_id == user_id,
                     AgentToolRun.request_id == request_id,
                 )
             )
         ).scalar_one_or_none()
 
-    async def get_owned(self, run_id: UUID, project_id: int, user_id: int) -> AgentToolRun | None:
-        """Возвращает действие для решения участника с блокировкой строки."""
+    async def get_owned(
+        self, run_id: UUID, project_id: int | None, user_id: int
+    ) -> AgentToolRun | None:
+        """Возвращает действие инициатора для решения с блокировкой строки."""
         return (
             await self._execute(
                 select(AgentToolRun)
                 .where(
                     AgentToolRun.id == run_id,
-                    AgentToolRun.project_id == project_id,
+                    AgentToolRun.project_id.is_(None)
+                    if project_id is None
+                    else AgentToolRun.project_id == project_id,
                     AgentToolRun.user_id == user_id,
                 )
                 .with_for_update()
+            )
+        ).scalar_one_or_none()
+
+    async def get_for_decision(self, run_id: UUID, user_id: int) -> AgentToolRun | None:
+        """Действие инициатора в любом проекте или вне проекта, с блокировкой строки."""
+        return (
+            await self._execute(
+                select(AgentToolRun)
+                .where(AgentToolRun.id == run_id, AgentToolRun.user_id == user_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+
+    async def get_in_chat(
+        self, run_id: UUID, project_id: int, *, lock: bool = True
+    ) -> AgentToolRun | None:
+        """Действие, предложенное Верой в чате проекта, с блокировкой строки.
+
+        Решение в общем чате принимает не только инициатор, поэтому владелец
+        здесь не фильтруется: права решающего проверяет сервис.
+        """
+        statement = select(AgentToolRun).where(
+            AgentToolRun.id == run_id,
+            AgentToolRun.project_id == project_id,
+            AgentToolRun.chat_turn_id.is_not(None),
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return (await self._execute(statement)).scalar_one_or_none()
+
+    async def get_for_turns(self, turn_ids: list[int]) -> list[AgentToolRun]:
+        """Действия ходов Веры в чате проекта по порядку выполнения."""
+        return list(
+            (
+                await self._execute(
+                    select(AgentToolRun)
+                    .where(AgentToolRun.chat_turn_id.in_(turn_ids))
+                    .order_by(AgentToolRun.created_at, AgentToolRun.id)
+                )
+            ).scalars()
+        )
+
+    async def get_for_user(self, run_id: UUID, user_id: int) -> AgentToolRun | None:
+        """Читает действие только его инициатора: чужое неотличимо от несуществующего."""
+        return (
+            await self._execute(
+                select(AgentToolRun).where(
+                    AgentToolRun.id == run_id, AgentToolRun.user_id == user_id
+                )
             )
         ).scalar_one_or_none()
 

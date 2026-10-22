@@ -18,7 +18,7 @@ const sticker: ProjectSticker = {
     id: 1,
     project_id: 3,
     body: "Согласовать API",
-    color: "yellow",
+    color: "#fff19a",
     canvas_x: 40,
     canvas_y: 40,
     created_by_user_id: 7,
@@ -37,11 +37,8 @@ const member: ProjectMember = {
     created_at: "2026-09-01T08:00:00Z",
     user: {
         id: 7,
-        username: "vera",
-        last_name: "Иванова",
-        first_name: "Вера",
-        middle_name: null,
-        has_avatar: true,
+        username: "i.ivanov",
+        last_name: "Иванов", first_name: "Иван", middle_name: null, has_avatar: false,
     },
 };
 
@@ -50,8 +47,8 @@ describe("project board stickers", () => {
         const author = resolveStickerAuthor(sticker, [member]);
 
         expect(author.kind).toBe("current");
-        expect(author.displayName).toBe("Иванова Вера");
-        expect(stickerAuthorLabel(author)).toContain("@vera");
+        expect(author.displayName).toBe("Иванов Иван");
+        expect(stickerAuthorLabel(author)).toContain("@i.ivanov");
     });
 
     it("falls back to immutable snapshots for a former member", () => {
@@ -65,9 +62,9 @@ describe("project board stickers", () => {
     it("normalizes text and unique task links", () => {
         expect(normalizeStickerInput({
             body: "  Текст  ",
-            color: "blue",
+            color: "#7C1623",
             task_ids: [3, 3, 1],
-        })).toEqual({ body: "Текст", color: "blue", task_ids: [3, 1] });
+        })).toEqual({ body: "Текст", color: "#7c1623", task_ids: [3, 1] });
     });
 
     it("compares task links independent of their order", () => {
@@ -78,15 +75,21 @@ describe("project board stickers", () => {
         })).toBe(false);
         expect(stickerHasChanges(sticker, {
             body: sticker.body,
-            color: "green",
+            color: "#d8f5b5",
             task_ids: [1, 2],
         })).toBe(true);
+        // Тот же цвет в другом регистре — не изменение.
+        expect(stickerHasChanges(sticker, {
+            body: sticker.body,
+            color: "#FFF19A",
+            task_ids: [1, 2],
+        })).toBe(false);
     });
 
     it("limits the compact task picker to five results", () => {
         const tasks = Array.from({ length: 8 }, (_, index) => ({
             id: index + 1,
-            key: `VERA-${index + 1}`,
+            key: `CRM-${index + 1}`,
             title: `Задача ${index + 1}`,
         })) as Task[];
 
@@ -97,7 +100,7 @@ describe("project board stickers", () => {
         const tasks = [
             {
                 id: 1,
-                key: "VERA-1",
+                key: "CRM-1",
                 title: "Помощь в формулировке задачи",
                 description_md: null,
                 last_comment: null,
@@ -105,7 +108,7 @@ describe("project board stickers", () => {
             },
             {
                 id: 2,
-                key: "VERA-2",
+                key: "CRM-2",
                 title: "Пересмотреть календарь",
                 description_md: "Проверить поля формы",
                 last_comment: null,
@@ -118,8 +121,8 @@ describe("project board stickers", () => {
     });
 
     it("merges local and server task results without duplicates", () => {
-        const first = { id: 1, key: "VERA-1", title: "Первая" } as Task;
-        const second = { id: 2, key: "VERA-2", title: "Вторая" } as Task;
+        const first = { id: 1, key: "CRM-1", title: "Первая" } as Task;
+        const second = { id: 2, key: "CRM-2", title: "Вторая" } as Task;
 
         expect(mergeStickerTaskResults([first], [first, second])).toEqual([first, second]);
     });

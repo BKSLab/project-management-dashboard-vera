@@ -11,7 +11,7 @@ import { api, endpoints, queryKeys } from "@/lib/api";
 import { formatFullDate } from "@/lib/dates";
 import { latestUpdate } from "@/lib/pulse";
 import { RISK_SIGNAL_LABELS } from "@/lib/risks";
-import type { Dashboard } from "@/lib/types";
+import { fullName, type MyTask, type Dashboard } from "@/lib/types";
 import { Page } from "@/components/layout/AppShell";
 import { LinkButton } from "@/components/ui/Button";
 import { Section } from "@/components/ui/Card";
@@ -21,6 +21,7 @@ import { PulseBoard } from "@/components/pulse/PulseBoard";
 import { PortfolioScope, PulseFacts } from "@/components/pulse/PulseBreakdown";
 import { ProjectCard } from "@/components/dashboard/ProjectCard";
 import { TaskRow } from "@/components/dashboard/TaskRow";
+import { TaskSourceLabel } from "@/components/tasks/TaskSourceLabel";
 import { useUiStore } from "@/stores/ui";
 
 function DashboardSkeleton() {
@@ -56,6 +57,9 @@ export function DashboardPage() {
     queryKey: queryKeys.dashboard,
     queryFn: () => api.get<Dashboard>(endpoints.dashboard()),
   });
+
+  const personalTasks = useQuery({ queryKey: queryKeys.myTaskList("all", false), queryFn: () => api.get<MyTask[]>(endpoints.myTasks("all", false)) });
+  const personalRows = (personalTasks.data ?? []).filter(task => task.project_id === null);
 
   // Портфель показывает витрину активных проектов, а не их полный
   // список: за полным есть отдельная страница, и дублировать её на
@@ -152,6 +156,14 @@ export function DashboardPage() {
             )}
           </Section>
 
+          {(personalRows.length > 0 || personalTasks.error) && <Section title="Разовые задачи" action={<Link to="/my-tasks" className="text-[13px] text-accent">Мои задачи · {personalRows.length}</Link>}>
+            {personalTasks.error && <ErrorMessage message={(personalTasks.error as Error).message} />}
+            <div className="flex flex-col divide-y divide-line-subtle">{personalRows.slice(0, 6).map(task => {
+              const executor = task.participants?.find(person => person.role === "EXECUTOR")?.user;
+              return <button key={task.id} type="button" className="flex items-center gap-3 py-2.5 text-left hover:bg-surface/35" onClick={() => setSelectedTaskId(task.id)}><span className="font-mono text-xs text-muted">{task.key}</span><span className="min-w-0 flex-1 text-[13px] text-primary">{task.title}</span><span className="text-xs text-muted">{task.state_label}{executor ? ` · ${fullName(executor)}` : ""}</span><TaskSourceLabel context={task.context} /></button>;
+            })}</div>
+          </Section>}
+
           <PulseBoard
             onOpenTask={setSelectedTaskId}
             dataUpdatedAt={latestUpdate(dashboardQuery.data.projects)}
@@ -159,8 +171,9 @@ export function DashboardPage() {
               dashboardQuery.data.projects.some(
                 (project) => project.status === "ACTIVE",
               )
+                || dashboardQuery.data.has_outside_tasks
                 ? undefined
-                : "Нет проектов в работе"
+                : "Нет проектов в работе и открытых разовых задач"
             }
             metrics={
               <StatStrip className="rounded-none border-0 bg-transparent shadow-none">

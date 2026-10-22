@@ -34,6 +34,7 @@ async def test_complete_snapshot_survives_closed_database_scope(
     project,
     stage,
     user,
+    board,
     portfolio,
 ):
     project.status = ProjectStatus.ACTIVE
@@ -45,6 +46,7 @@ async def test_complete_snapshot_survives_closed_database_scope(
     )
     sticker = ProjectSticker(
         project_id=project.id,
+        board_id=board.id,
         body="Заметка.",
         created_by_user_id=user.id,
         created_by_username_snapshot=user.username,
@@ -60,7 +62,9 @@ async def test_complete_snapshot_survives_closed_database_scope(
             number=index,
             title=f"Работа {index}",
             description_md=f"Описание работы {index}.",
-            checklist=TaskChecklistSchema(items=[{"text": "Проверить результат"}]).model_dump(mode="json"),
+            checklist=TaskChecklistSchema(items=[{"text": "Проверить результат"}]).model_dump(
+                mode="json"
+            ),
             baseline_start_date=date(2026, 9, 1),
             baseline_due_date=date(2026, 9, 6),
         )

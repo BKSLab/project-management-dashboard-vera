@@ -20,6 +20,7 @@ SETTINGS_ALLOWLIST = {
     SRC / "core" / "settings.py",
     SRC / "db" / "session.py",
     SRC / "main.py",
+    SRC / "mcp_server" / "worker.py",
     SRC / "dependencies" / "settings.py",
     SRC / "dependencies" / "storage.py",
     # Имя cookie входит в сигнатуру маршрута и должно быть известно в
@@ -41,7 +42,8 @@ DEPENDENCIES = SRC / "dependencies"
 # Сценарии с медленным внешним вызовом. Каждый обязан работать через
 # короткую область базы, а не через репозитории, живущие вместе с ним.
 EXTERNAL_CALL_SERVICES = {
-    "agent_conversations.py": "AgentConversationsService",
+    "tim_widget.py": "TimWidgetService",
+    "tim_chat.py": "TimChatService",
     "risk_suggestions.py": "RiskSuggestionService",
     "task_checklist_suggestions.py": "TaskChecklistSuggestionService",
     "analytics.py": "AnalyticsService",

@@ -22,7 +22,7 @@ from src.schemas.dashboard import (
 )
 from src.schemas.project_risks import ProjectRiskFilters, ProjectRiskSummarySchema
 from src.services.project_risks import build_risk_summary
-from src.services.tasks import build_task_key
+from src.services.tasks import MY_TASK_ROLES, build_task_key
 from src.utils.deadlines import DUE_SOON_DAYS, is_task_overdue
 
 logger = logging.getLogger(__name__)
@@ -122,7 +122,9 @@ class DashboardService:
                 )
                 for project in projects
             ]
+            outside_tasks = await self.tasks_repository.get_for_person(user_id=user_id, roles=set(MY_TASK_ROLES["all"]), include_closed=False, limit=1, outside_projects_only=True)
             return DashboardSchema(
+                has_outside_tasks=bool(outside_tasks),
                 totals=_build_totals(projects=projects, project_cards=project_cards),
                 projects=project_cards,
                 attention_tasks=[
@@ -190,6 +192,7 @@ def _build_project_card(
         status=project.status,
         color=project.color,
         icon=project.icon,
+        icon_image_version=getattr(project, "icon_image_version", None),
         total_tasks=total,
         done_tasks=done,
         in_progress_tasks=in_progress,

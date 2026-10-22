@@ -1,12 +1,16 @@
 import type { ProjectMember, Task, UserSummary } from "@/lib/types";
 import { fullName, initials } from "@/lib/types";
 
-export type ProjectStickerColor = "neutral" | "yellow" | "blue" | "green" | "red" | "violet";
+/** Цвет стикера — свободный hex `#rrggbb` (сервер хранит в нижнем регистре). */
+export type ProjectStickerColor = string;
 export type ProjectStickerSize = "small" | "medium" | "large";
 
 export interface ProjectSticker {
     id: number;
-    project_id: number;
+    project_id: number | null;
+    board_id?: number;
+    /** Слой на доске — общая шкала с фигурами (docs/boards-contract.md). */
+    z_index?: number;
     body: string;
     color: ProjectStickerColor;
     canvas_x: number;
@@ -37,7 +41,7 @@ export interface ProjectStickerPositionInput {
     height?: number;
 }
 
-export type ProjectStickerCreateInput = ProjectStickerInput & ProjectStickerPositionInput;
+export type ProjectStickerCreateInput = ProjectStickerInput & ProjectStickerPositionInput & { z_index?: number };
 
 export interface ProjectStickerUpdateInput extends ProjectStickerInput {
     revision: number;
@@ -48,14 +52,56 @@ export interface StickerColorOption {
     label: string;
 }
 
-export const STICKER_COLOR_OPTIONS: StickerColorOption[] = [
-    { value: "neutral", label: "Нейтральный" },
-    { value: "yellow", label: "Жёлтый" },
-    { value: "blue", label: "Синий" },
-    { value: "green", label: "Зелёный" },
-    { value: "red", label: "Красный" },
-    { value: "violet", label: "Фиолетовый" },
+/** Бумажный жёлтый — цвет нового стикера (как DEFAULT_STICKER_COLOR на сервере). */
+export const DEFAULT_STICKER_COLOR = "#fff19a";
+
+/** Быстрые пресеты — прежние шесть бумажных цветов; любой другой выбирается палитрой. */
+export const STICKER_COLOR_PRESETS: StickerColorOption[] = [
+    { value: "#f3efe4", label: "Нейтральный" },
+    { value: DEFAULT_STICKER_COLOR, label: "Жёлтый" },
+    { value: "#c9edff", label: "Синий" },
+    { value: "#d8f5b5", label: "Зелёный" },
+    { value: "#ffbbb5", label: "Красный" },
+    { value: "#e4d2ff", label: "Фиолетовый" },
 ];
+
+export const STICKER_COLOR_OPTIONS = STICKER_COLOR_PRESETS;
+
+const LEGACY_STICKER_COLORS: Record<string, string> = {
+    neutral: "#f3efe4",
+    yellow: DEFAULT_STICKER_COLOR,
+    blue: "#c9edff",
+    green: "#d8f5b5",
+    red: "#ffbbb5",
+    violet: "#e4d2ff",
+};
+
+/**
+ * Приводит цвет к `#rrggbb` в нижнем регистре. Имя прежней палитры («yellow») — из кэша
+ * старой версии — переводится в hex; нераспознанное значение — жёлтый по умолчанию.
+ */
+export function normalizeStickerColor(color: string | null | undefined): string {
+    const value = (color ?? "").trim().toLowerCase();
+    if (/^#[0-9a-f]{6}$/.test(value)) return value;
+    return LEGACY_STICKER_COLORS[value] ?? DEFAULT_STICKER_COLOR;
+}
+
+/**
+ * Фон стикера на доске: выбранный цвет, «переведённый в бумагу» текущей темы. Светлота OKLCH
+ * зажимается в [--note-l-min; --note-l-max], насыщенность — не выше --note-c-max
+ * из board.css, так что --surface-note-ink читается на любом выбранном цвете ≥ 4.5.
+ * Оттенок сохраняется. Контраст проверяется stickerColor.test.ts.
+ */
+export function stickerSurface(color: string | null | undefined): string {
+    const hex = normalizeStickerColor(color);
+    return `oklch(from ${hex} clamp(var(--note-l-min), l, var(--note-l-max)) min(c, var(--note-c-max)) h)`;
+}
+
+/** Название пресета для подсказки или сам hex, если цвет выбран палитрой. */
+export function stickerColorLabel(color: string): string {
+    const hex = normalizeStickerColor(color);
+    return STICKER_COLOR_PRESETS.find((option) => option.value === hex)?.label ?? hex;
+}
 
 export const STICKER_TASK_RESULTS_LIMIT = 5;
 export const STICKER_NODE_WIDTH = 230;
@@ -250,7 +296,7 @@ export function findAvailableStickerPosition(
 export function normalizeStickerInput(input: ProjectStickerInput): ProjectStickerInput {
     return {
         body: input.body.trim(),
-        color: input.color,
+        color: normalizeStickerColor(input.color),
         task_ids: [...new Set(input.task_ids)],
         ...(input.width !== undefined ? { width: input.width } : {}),
         ...(input.height !== undefined ? { height: input.height } : {}),
@@ -265,7 +311,7 @@ export function stickerHasChanges(
     const previousTasks = [...sticker.task_ids].sort((left, right) => left - right);
     const nextTasks = [...normalized.task_ids].sort((left, right) => left - right);
     return sticker.body !== normalized.body
-        || sticker.color !== normalized.color
+        || normalizeStickerColor(sticker.color) !== normalized.color
         || previousTasks.length !== nextTasks.length
         || previousTasks.some((taskId, index) => taskId !== nextTasks[index]);
 }

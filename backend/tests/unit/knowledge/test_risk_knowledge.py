@@ -37,6 +37,7 @@ def test_every_semantic_source_is_validated_and_never_trusts_stale_or_foreign_te
             "task_id": 7,
             "stage_id": 3,
             "number": 21,
+            "revision": 1,
             "title": "Актуальный источник",
             "name": "Актуальный источник",
             "body": "Актуальный источник",

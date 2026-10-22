@@ -99,11 +99,14 @@ export interface Project {
     status: ProjectStatus;
     color: string;
     icon: string | null;
+    icon_image_version?: string | null;
     start_date: string | null;
     due_date: string | null;
     order_index: number;
     created_at: string;
     updated_at: string;
+    my_role?: EffectiveProjectRole;
+    is_member?: boolean;
 }
 
 export interface ProjectCreate {
@@ -111,13 +114,14 @@ export interface ProjectCreate {
     name: string;
     description_md?: string | null;
     description_sections?: ProjectDescription | null;
-    member_usernames?: string[];
+    member_logins?: string[];
     stages?: Pick<ProjectStage, "name" | "color" | "is_done_stage">[];
     status?: ProjectStatus;
     color?: string;
     icon?: string | null;
     start_date?: string | null;
     due_date?: string | null;
+    member_usernames?: string[];
 }
 
 export type ProjectUpdate = Partial<ProjectCreate> & {
@@ -182,9 +186,10 @@ export interface Task {
     checklist?: TaskChecklist | null;
     checklist_revision?: number;
     id: number;
-    project_id: number;
-    stage_id: number;
-    wbs_node_id: number | null;
+    kind?: TaskKind;
+    project_id: number | null;
+    stage_id: number | null;
+    status?: TaskStatus | null;
     number: number;
     key: string;
     title: string;
@@ -206,6 +211,7 @@ export interface Task {
     search_match_source: SearchMatchSource;
     search_title: string | null;
     search_excerpt: string | null;
+    wbs_node_id: number | null;
 }
 
 export interface TaskCompact {
@@ -214,17 +220,15 @@ export interface TaskCompact {
     key: string;
     title: string;
     stage_id: number;
-    wbs_node_id: number | null;
-    /** Порядок задачи среди задач своего раздела ИСР. */
-    wbs_position: number | null;
-    /** Координаты карточки на холсте ИСР; null — задача в списке-пуле. */
-    canvas_x: number | null;
-    canvas_y: number | null;
     priority: TaskPriority;
     assignee: string | null;
     start_date: string | null;
     due_date: string | null;
     is_done: boolean;
+    wbs_node_id: number | null;
+    wbs_position: number | null;
+    canvas_x: number | null;
+    canvas_y: number | null;
 }
 
 export interface CalendarRange {
@@ -263,7 +267,6 @@ export interface CalendarTask {
     baseline_due_date: string | null;
     drift_days: number | null;
     stage_id: number;
-    wbs_node_id: number | null;
     priority: TaskPriority;
     assignee: string | null;
     is_done: boolean;
@@ -272,6 +275,9 @@ export interface CalendarTask {
     risk_level: "low" | "medium" | "high" | null;
     risk_reasons: CalendarRiskReason[];
     updated_at: string;
+    progress?: number | null;
+    is_critical?: boolean;
+    wbs_node_id: number | null;
 }
 
 export interface CalendarRiskReason {
@@ -308,6 +314,7 @@ export interface TaskDependency {
     dependency_type: "FINISH_TO_START";
     lag_days: number;
     created_at: string;
+    is_critical?: boolean;
 }
 
 export interface TaskDependencyInput {
@@ -364,18 +371,18 @@ export interface ProjectMilestone {
     title: string;
     due_date: string;
     status: ProjectMilestoneStatus;
-    wbs_node_id: number | null;
     description_md: string | null;
     created_at: string;
     updated_at: string;
+    wbs_node_id: number | null;
 }
 
 export interface ProjectMilestoneInput {
     title: string;
     due_date: string;
     status: ProjectMilestoneStatus;
-    wbs_node_id: number | null;
     description_md: string | null;
+    wbs_node_id: number | null;
 }
 
 export interface CalendarMilestone {
@@ -383,9 +390,9 @@ export interface CalendarMilestone {
     title: string;
     due_date: string;
     status: ProjectMilestoneStatus;
-    wbs_node_id: number | null;
     description_md: string | null;
     is_system: boolean;
+    wbs_node_id: number | null;
 }
 
 export interface ProjectCalendar {
@@ -393,12 +400,12 @@ export interface ProjectCalendar {
     project: CalendarProject;
     tasks: CalendarTask[];
     stages: CalendarStage[];
-    wbs_nodes: CalendarWbsNode[];
     assignees: string[];
     summary: CalendarSummary;
     recent_changes: CalendarDateChange[];
     milestones: CalendarMilestone[];
     dependencies: TaskDependency[];
+    wbs_nodes: CalendarWbsNode[];
 }
 
 export interface UnscheduledTasksPage {
@@ -411,7 +418,6 @@ export interface TaskCreate {
     checklist?: TaskChecklist | null;
     description_md?: string | null;
     stage_id?: number | null;
-    wbs_node_id?: number | null;
     priority?: TaskPriority;
     role?: TaskRole | null;
     assignee?: string | null;
@@ -420,6 +426,7 @@ export interface TaskCreate {
     observer_ids?: number[];
     start_date?: string | null;
     due_date?: string | null;
+    wbs_node_id?: number | null;
 }
 
 export interface TaskUpdate {
@@ -446,10 +453,14 @@ export type TaskActivityEventType =
     | "DESCRIPTION_CHANGED"
     | "PRIORITY_CHANGED"
     | "ASSIGNEE_CHANGED"
-    | "WBS_NODE_CHANGED"
-    | "COMMENT_ADDED";
+    | "COMMENT_ADDED"
+    | "TASK_MOVED"
+    | "LINKS_REMOVED" | "WBS_NODE_CHANGED";
 
 export interface TaskActivity {
+    actor_user_id: number | null;
+    actor_name: string | null;
+    via_api_key_label: string | null;
     id: number;
     task_id: number;
     event_type: TaskActivityEventType;
@@ -461,6 +472,7 @@ export interface TaskActivity {
 export interface TaskComment {
     id: number;
     task_id: number;
+    author?: UserSummary | null;
     author_name: string | null;
     body_md: string;
     created_at: string;
@@ -586,16 +598,16 @@ export type KnowledgeEntityType =
     | "attachment"
     | "milestone"
     | "risk"
-    | "wbs_node"
     | "stage"
     | "sticker"
     | "member"
     | "activity"
     | "deadline_change"
-    | "analytics_report";
+    | "task_report"
+    | "analytics_report" | "wbs_node";
 
 export interface KnowledgeSource {
-    card?: { key?: string | null; status?: string | null; priority?: string | null; assignee?: string | null; due_date?: string | null; summary?: string | null } | null;
+    card?: { key?: string | null; status?: string | null; priority?: string | null; assignee?: string | null; due_date?: string | null; summary?: string | null; login?: string | null; avatar_url?: string | null; role?: string | null } | null;
     source_id: string;
     entity_type: KnowledgeEntityType;
     entity_id: number;
@@ -637,10 +649,10 @@ export interface KnowledgeAskPayload {
 
 export interface AgentConversation {
     id: number;
-    project_id: number;
     title: string;
     created_at: string;
     updated_at: string;
+    project_id: number;
 }
 
 export interface AgentConversationPage {
@@ -667,8 +679,10 @@ export interface AgentMessage {
     role: "user" | "assistant";
     content: string;
     sources: KnowledgeSource[];
+    page_context?: TimPageContext | null;
     status: "queued" | "processing" | "completed" | "failed";
     error: string | null;
+    progress?: string | null;
     created_at: string;
 }
 
@@ -709,6 +723,7 @@ export interface DashboardProject {
     status: ProjectStatus;
     color: string;
     icon: string | null;
+    icon_image_version?: string | null;
     total_tasks: number;
     done_tasks: number;
     in_progress_tasks: number;
@@ -716,6 +731,8 @@ export interface DashboardProject {
     completion_rate: number;
     next_due_date: string | null;
     updated_at: string;
+    my_role?: EffectiveProjectRole;
+    is_member?: boolean;
 }
 
 export interface DashboardTask {
@@ -735,6 +752,8 @@ export interface DashboardTask {
 }
 
 export interface Dashboard {
+    scope?: DashboardScope;
+    has_outside_tasks?: boolean;
     totals: DashboardTotals;
     projects: DashboardProject[];
     attention_tasks: DashboardTask[];
@@ -866,8 +885,8 @@ export interface AnalyticsSignals extends Partial<RiskSummary> {
     unassigned_tasks: number;
     stale_tasks: number;
     blocked_tasks: number;
-    unplaced_tasks: number;
     milestones_at_risk: number;
+    unplaced_tasks: number;
 }
 
 export interface AnalyticsContext {
@@ -880,11 +899,11 @@ export interface AnalyticsContext {
     comments_included: number;
     documents_included: number;
     stickers_included: number;
-    wbs_nodes_included: number;
     milestones_included: number;
     activity_included: number;
     truncated: boolean;
     omitted: string[];
+    wbs_nodes_included: number;
 }
 
 export interface AnalyticsReport {
@@ -927,3 +946,207 @@ export const ANALYTICS_HORIZON_LABELS: Record<AnalyticsHorizon, string> = {
     WEEK: "На неделе",
     LATER: "Позже",
 };
+
+
+export type EffectiveProjectRole = ProjectRole;
+
+export type TaskKind = "PROJECT" | "PERSONAL";
+
+export type TaskStatus = "NEW" | "IN_PROGRESS" | "REVIEW" | "DONE" | "CANCELLED";
+
+export interface ProjectBaselineResult {
+    dry_run: boolean;
+    scheduled_count: number;
+    changed_count: number;
+    task_ids: number[];
+}
+
+export interface CalendarTaskSource {
+    icon_image_version?: string | null;
+    kind: TaskKind;
+    id: number | null;
+    key: string | null;
+    name: string | null;
+    color: string | null;
+    icon?: string | null;
+}
+
+export type CalendarGridTask = Omit<CalendarTask, "stage_id"> & {
+    stage_id: number | null;
+    status?: TaskStatus | null;
+    /** «Мой календарь»: состояние как в «Моих задачах» (у проектной — по стадии) и его подпись. */
+    state?: TaskStatus | null;
+    state_label?: string | null;
+    source?: CalendarTaskSource;
+};
+
+export interface CalendarProjectRef {
+    id: number;
+    key: string;
+    name: string;
+    color: string;
+}
+
+export type CalendarGridMilestone = CalendarMilestone & { project?: CalendarProjectRef };
+
+export type MyCalendarTask = CalendarGridTask & { source: CalendarTaskSource };
+
+export interface MyCalendar {
+    range?: CalendarRange;
+    tasks: MyCalendarTask[];
+    milestones: CalendarGridMilestone[];
+    summary?: { overdue: number; due_soon: number; unscheduled: number };
+    truncated?: boolean;
+}
+
+export interface MyUnscheduledTasksPage {
+    items: MyCalendarTask[];
+    next_cursor: number | null;
+}
+
+export interface PortfolioMilestone {
+    id: number | null;
+    title: string;
+    due_date: string;
+    status: ProjectMilestoneStatus;
+    is_system: boolean;
+}
+
+export interface PortfolioCalendarProject {
+    id: number;
+    key: string;
+    name: string;
+    color: string;
+    icon: string | null;
+    icon_image_version?: string | null;
+    status: ProjectStatus;
+    start_date: string | null;
+    due_date: string | null;
+    is_unscheduled?: boolean;
+    completion_rate: number;
+    total_tasks: number;
+    overdue_tasks: number;
+    milestones: PortfolioMilestone[];
+}
+
+export interface PortfolioCalendar {
+    projects: PortfolioCalendarProject[];
+}
+
+export type HolidayKind = "HOLIDAY" | "DAY_OFF" | "WORKING_DAY" | "SHORT_DAY";
+
+export interface CalendarHoliday {
+    date: string;
+    kind: HolidayKind;
+    title: string | null;
+}
+
+export interface CalendarHolidays {
+    year: number;
+    known: boolean;
+    source?: string | null;
+    days: CalendarHoliday[];
+}
+
+export interface IcsTokenStatus {
+    exists: boolean;
+    created_at?: string | null;
+    last_used_at?: string | null;
+    url?: string | null;
+}
+
+export interface IcsTokenCreated extends IcsTokenStatus {
+    url: string;
+}
+
+export interface PersonalTaskCreate {
+    title: string;
+    description_md?: string | null;
+    priority?: TaskPriority;
+    start_date?: string | null;
+    due_date?: string | null;
+    checklist?: TaskChecklist | null;
+    executor_id?: number | null;
+    observer_ids?: number[];
+}
+
+export type MyTaskRoleFilter = "all" | "doing" | "assigned" | "watching";
+
+export interface MyTaskContext {
+    kind: "PROJECT";
+    id: number;
+    key: string;
+    name: string;
+    color?: string | null;
+    icon?: string | null;
+    icon_image_version?: string | null;
+}
+
+export interface MyTask extends Task {
+    context: MyTaskContext | null;
+    state: TaskStatus;
+    state_label: string;
+    my_roles: TaskParticipantRole[];
+}
+
+export interface BoardObjectSelectionRef {
+    type: "shape" | "sticker";
+    id: number
+}
+
+export interface TimPageContext {
+    board_selection?: BoardObjectSelectionRef[];
+    board_id?: number | null;
+    route: string;
+    project_key: string | null;
+    task_id: number | null;
+}
+
+export interface AgentPendingAction {
+    id: string;
+    tool_name: string;
+    title: string;
+    status: "pending" | "completed" | "rejected" | "failed" | "expired";
+    arguments: Record<string, unknown>;
+    preview: Record<string, unknown>;
+    result: Record<string, unknown>;
+    project: { id: number; key: string; name: string };
+    created_at: string;
+    expires_at: string;
+}
+
+export type DashboardScope = "mine" | "all";
+
+export type TaskMoveTarget =
+    | { project_id: number; stage_id?: number | null; remove_outsiders?: boolean }
+    | { personal: true };
+
+export interface TaskMoveLosses {
+    wbs_placements: number;
+    dependencies: number;
+    document_links: number;
+    risks: number;
+    board_stickers: number;
+}
+
+export interface TaskMovePreview {
+    from_key: string;
+    target_kind: TaskKind;
+    target_name: string;
+    target_key: string;
+    stage_id: number | null;
+    stage_name: string | null;
+    status: TaskStatus | null;
+    executor: UserSummary | null;
+    losses: TaskMoveLosses;
+    outsiders: UserSummary[];
+    notes: string[];
+}
+
+export interface TaskMoveResult {
+    task: Task;
+    from_key: string;
+    to_key: string;
+    losses: TaskMoveLosses;
+    notes: string[];
+}

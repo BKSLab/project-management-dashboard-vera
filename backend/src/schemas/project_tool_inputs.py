@@ -2,13 +2,14 @@
 
 import math
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.schemas.calendar_scenarios import ScenarioApplyChangeSchema, ScenarioChangeInputSchema
 from src.schemas.documents import DocumentCreateSchema, DocumentUpdateSchema
+from src.schemas.enums import TaskStatus
 from src.schemas.milestones import MilestoneCreateSchema, MilestoneUpdateSchema
 from src.schemas.project_risks import (
     ProjectRiskCreateSchema,
@@ -24,7 +25,7 @@ from src.schemas.project_stickers import (
 from src.schemas.projects import ProjectUpdateSchema
 from src.schemas.task_checklists import TaskChecklistSchema
 from src.schemas.task_dependencies import TaskDependencyCreateSchema
-from src.schemas.tasks import TaskCreateSchema, TaskUpdateSchema
+from src.schemas.tasks import PersonalTaskCreateSchema, TaskCreateSchema, TaskUpdateSchema
 
 
 class ToolInput(BaseModel):
@@ -78,6 +79,24 @@ class TaskInput(ToolInput):
     task_id: int = Field(gt=0, description="ID задачи из результатов поиска текущего проекта.")
 
 
+class TaskLookupInput(ToolInput):
+    """Задача по ID или по ключу вида KEY-12 — ключ избавляет от шага поиска."""
+
+    task_id: int | None = Field(None, gt=0, description="ID задачи текущего проекта.")
+    task_key: str | None = Field(
+        None,
+        pattern=r"^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё0-9_]{0,31}-\d{1,9}$",
+        description="Ключ задачи текущего проекта, например PROJ-12.",
+    )
+
+    @model_validator(mode="after")
+    def one_reference(self) -> "TaskLookupInput":
+        """Нужен ровно один способ указать задачу."""
+        if (self.task_id is None) == (self.task_key is None):
+            raise ValueError("Укажи task_id или task_key — ровно одно из двух.")
+        return self
+
+
 class TaskListInput(PageInput):
     search: str | None = Field(
         None, max_length=200, description="Название, слова описания или ключ задачи."
@@ -85,8 +104,20 @@ class TaskListInput(PageInput):
     stage_id: int | None = Field(None, gt=0, description="Стадия текущего проекта.")
 
 
+class OverdueTasksInput(ToolInput):
+    limit: int = Field(30, ge=1, le=30, description="Максимум задач, самые ранние сроки первыми.")
+
+
+class RecentActivityInput(ToolInput):
+    limit: int = Field(30, ge=1, le=50, description="Максимум событий, свежие первыми.")
+
+
 class TaskPageInput(TaskInput, PageInput):
     """Страница объектов задачи."""
+
+
+
+
 
 
 class RiskListInput(ProjectRiskFilters, ToolInput):
@@ -175,12 +206,26 @@ class StageUpdateInput(StageInput):
     changes: StageChangesInput = Field(description="Изменяемые параметры стадии.")
 
 
+BOARD_ID_DESCRIPTION = "ID доски проекта из list_boards; не указан — первая доска проекта."
+
+
+class StickerListInput(PageInput):
+    board_id: int | None = Field(None, gt=0, description=BOARD_ID_DESCRIPTION)
+
+
 class StickerCreateInput(ProjectStickerCreateSchema, ToolInput):
     """Новый стикер с привязками к задачам и координатами."""
+
+    board_id: int | None = Field(None, gt=0, description=BOARD_ID_DESCRIPTION)
 
 
 class StickerInput(ToolInput):
     sticker_id: int = Field(gt=0, description="ID стикера текущего проекта.")
+    board_id: int | None = Field(
+        None,
+        gt=0,
+        description="ID доски стикера; не указан — стикер ищется на любой доске проекта.",
+    )
 
 
 class StickerUpdateInput(StickerInput):
@@ -191,7 +236,7 @@ class StickerUpdateInput(StickerInput):
 
 class StickerMoveInput(StickerInput):
     position: ProjectStickerPositionUpdateSchema = Field(
-        description="Координаты и необязательный размер."
+        description="Координаты, необязательный размер и слой z_index."
     )
 
 
@@ -249,37 +294,6 @@ class TextAttachmentInput(TaskInput):
 
 class UploadedAttachmentInput(TaskInput):
     file_id: UUID = Field(description="ID файла из uploaded_files, ранее отправленного участником.")
-
-
-class WbsCreateInput(ToolInput):
-    title: str = Field(
-        min_length=1, max_length=255, description="Название результата или раздела ИСР."
-    )
-    parent_id: int | None = Field(None, gt=0, description="Родительский раздел; null — корень.")
-
-
-class WbsInput(ToolInput):
-    node_id: int = Field(gt=0, description="ID раздела ИСР текущего проекта.")
-
-
-class WbsUpdateInput(WbsInput):
-    title: str = Field(min_length=1, max_length=255, description="Новое название раздела.")
-
-
-class WbsMoveInput(WbsInput):
-    parent_id: int | None = Field(description="Новый родитель; null — корень.")
-    before_id: int | None = Field(
-        None, gt=0, description="Поставить перед соседним разделом; null — в конец."
-    )
-
-
-class TaskPlacementInput(TaskInput):
-    wbs_node_id: int | None = Field(description="Раздел ИСР; null возвращает задачу в пул.")
-    before_task_id: int | None = Field(
-        None, gt=0, description="Поставить перед задачей того же раздела."
-    )
-    canvas_x: float | None = Field(None, description="Координата в свободном пуле.")
-    canvas_y: float | None = Field(None, description="Координата в свободном пуле.")
 
 
 class MilestoneCreateInput(MilestoneCreateSchema, ToolInput):
@@ -349,3 +363,109 @@ class RiskChangesInput(ProjectRiskUpdateSchema, ToolInput):
 
 class RiskUpdateInput(RiskInput):
     changes: RiskChangesInput = Field(description="Изменяемые поля риска.")
+
+
+# Личные действия Веры вне проекта: мои задачи, потоки, разовые задачи.
+
+
+class MyTasksInput(PageInput):
+    role: Literal["all", "doing", "assigned", "watching"] = Field(
+        "all",
+        description="all — все мои; doing — я исполнитель; assigned — я постановщик; watching — наблюдаю.",
+    )
+    include_closed: bool = Field(False, description="Показывать ли закрытые задачи.")
+    search: str | None = Field(
+        None, max_length=200, description="Слова названия или ключ задачи для фильтра списка."
+    )
+
+
+class TaskSearchInput(PageInput):
+    search: str = Field(
+        min_length=1, max_length=200, description="Слова названия, описания или ключ задачи."
+    )
+
+
+class TaskRefInput(ToolInput):
+    task_id: int | None = Field(None, gt=0, description="ID задачи, если известен.")
+    task_key: str | None = Field(
+        None,
+        min_length=3,
+        max_length=64,
+        description="Ключ задачи: PROJ-142, ключ потока или T-15.",
+    )
+
+    @model_validator(mode="after")
+    def one_ref(self) -> "TaskRefInput":
+        if (self.task_id is None) == (self.task_key is None):
+            raise ValueError("Укажите ровно одно: task_id или task_key.")
+        return self
+
+
+class PersonalTaskCreateInput(PersonalTaskCreateSchema, ToolInput):
+    """Разовая задача вне проектов и потоков; постановщик — пользователь."""
+
+
+
+
+
+
+
+
+class TaskStatusInput(ToolInput):
+    task_id: int = Field(gt=0, description="ID задачи потока или разовой задачи.")
+    status: TaskStatus = Field(description="Новый статус: NEW, IN_PROGRESS, DONE и др.")
+
+
+class ProjectActionInput(ToolInput):
+    project_key: str = Field(
+        min_length=1, max_length=32, description="Ключ проекта из list_my_projects, например PROJ."
+    )
+    name: str = Field(min_length=1, max_length=64, description="Имя проектного действия.")
+    arguments: dict[str, Any] = Field(
+        default_factory=dict, description="Аргументы по схеме проектного действия."
+    )
+
+
+class TaskReportReadInput(TaskLookupInput):
+    """Постраничное чтение актуального текста, включая большие отчёты."""
+
+    offset: int = Field(0, ge=0)
+    max_chars: int = Field(8000, ge=500, le=16000)
+
+
+class TaskReportPublishInput(TaskInput):
+    """Полная новая версия с защитой от потери изменений."""
+
+    body_md: str = Field(max_length=50000)
+    expected_revision: int = Field(ge=0, strict=True)
+
+
+class WbsCreateInput(ToolInput):
+    title: str = Field(
+        min_length=1, max_length=255, description="Название результата или раздела ИСР."
+    )
+    parent_id: int | None = Field(None, gt=0, description="Родительский раздел; null — корень.")
+
+
+class WbsInput(ToolInput):
+    node_id: int = Field(gt=0, description="ID раздела ИСР текущего проекта.")
+
+
+class WbsUpdateInput(WbsInput):
+    title: str = Field(min_length=1, max_length=255, description="Новое название раздела.")
+
+
+class WbsMoveInput(WbsInput):
+    parent_id: int | None = Field(description="Новый родитель; null — корень.")
+    before_id: int | None = Field(
+        None, gt=0, description="Поставить перед соседним разделом; null — в конец."
+    )
+
+
+class TaskPlacementInput(TaskInput):
+    wbs_node_id: int | None = Field(description="Раздел ИСР; null возвращает задачу в пул.")
+    before_task_id: int | None = Field(
+        None, gt=0, description="Поставить перед задачей того же раздела."
+    )
+    canvas_x: float | None = Field(None, description="Координата в свободном пуле.")
+    canvas_y: float | None = Field(None, description="Координата в свободном пуле.")

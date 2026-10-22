@@ -15,6 +15,22 @@ class AccessServiceError(ServiceError):
     detail = "Ошибка проверки доступа."
 
 
+class ResourceWriteRequiredError(AccessServiceError):
+    status_code = status.HTTP_403_FORBIDDEN
+    detail = "Нет права изменять этот объект."
+
+    def __init__(self) -> None:
+        super().__init__(error_details=self.detail)
+
+
+class TaskOwnerRequiredError(AccessServiceError):
+    status_code = status.HTTP_403_FORBIDDEN
+    detail = "Удалить разовую задачу может только её постановщик."
+
+    def __init__(self, task_id: int) -> None:
+        super().__init__(error_details=f"Требуется владелец задачи id={task_id}.")
+
+
 class ResourceNotAvailableError(AccessServiceError):
     """Объект не существует либо не принадлежит доступному проекту.
 

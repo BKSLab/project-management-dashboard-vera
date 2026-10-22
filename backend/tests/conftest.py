@@ -13,12 +13,14 @@ from src.db.models import Base
 from src.db.models.api_tokens import ApiTokenScope
 from src.dependencies.access import (
     require_comment_access,
+    require_comment_authorship,
     require_document_access,
     require_link_access,
     require_project_access,
     require_project_ownership,
     require_stage_access,
     require_task_access,
+    require_task_deletion,
 )
 from src.dependencies.auth import get_principal
 from src.services.access import AccessGrant
@@ -95,9 +97,11 @@ def authenticate(current_principal: Principal) -> Generator[None, None, None]:
             require_project_access: lambda: grant,
             require_project_ownership: lambda: grant,
             require_task_access: lambda: grant,
+            require_task_deletion: lambda: grant,
             require_stage_access: lambda: grant,
             require_document_access: lambda: grant,
             require_comment_access: lambda: grant,
+            require_comment_authorship: lambda: grant,
             require_link_access: lambda: grant,
         }
     )

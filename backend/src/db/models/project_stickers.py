@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, Enum, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import CheckConstraint, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin
@@ -14,8 +14,12 @@ if TYPE_CHECKING:
     from .users import User
 
 
+DEFAULT_STICKER_COLOR = "#fff19a"
+"""Жёлтая бумага стикера по умолчанию (светлый --sticker-yellow-bg)."""
+
+
 class ProjectStickerColor(str, enum.Enum):
-    """Ограниченная спокойная палитра стикеров проекта."""
+    """Legacy public color names accepted and normalized by the schemas."""
 
     NEUTRAL = "neutral"
     YELLOW = "yellow"
@@ -43,6 +47,7 @@ class ProjectSticker(Base, TimestampMixin):
             "canvas_y BETWEEN -1000000.0 AND 1000000.0",
             name="ck_project_stickers_canvas_y_range",
         ),
+        CheckConstraint("color ~ '^#[0-9a-f]{6}$'", name="ck_project_stickers_color_hex"),
         Index("ix_project_stickers_project_created", "project_id", "created_at"),
     )
 
@@ -51,12 +56,19 @@ class ProjectSticker(Base, TimestampMixin):
         doc="Идентификатор стикера.",
         comment="Уникальный идентификатор стикера Project Board.",
     )
-    project_id: Mapped[int] = mapped_column(
+    project_id: Mapped[int | None] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+        doc="Проект, которому принадлежит стикер; NULL у стикера свободной доски.",
+        comment="Идентификатор проекта-владельца стикера; NULL — доска без проекта.",
+    )
+    board_id: Mapped[int] = mapped_column(
+        ForeignKey("project_boards.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
-        doc="Проект, которому принадлежит стикер.",
-        comment="Идентификатор проекта-владельца стикера.",
+        doc="Доска, на которой лежит стикер.",
+        comment="Идентификатор доски; стикер удаляется вместе с доской.",
     )
     body: Mapped[str] = mapped_column(
         Text,
@@ -64,16 +76,12 @@ class ProjectSticker(Base, TimestampMixin):
         doc="Текст стикера без пользовательского HTML.",
         comment="Текст общего стикера проекта.",
     )
-    color: Mapped[ProjectStickerColor] = mapped_column(
-        Enum(
-            ProjectStickerColor,
-            name="project_sticker_color",
-            values_callable=lambda enum_class: [item.value for item in enum_class],
-        ),
+    color: Mapped[str] = mapped_column(
+        String(length=7),
         nullable=False,
-        default=ProjectStickerColor.YELLOW,
-        doc="Цвет из ограниченной палитры.",
-        comment="Визуальный цвет стикера.",
+        default=DEFAULT_STICKER_COLOR,
+        doc="Свободный цвет стикера: hex #rrggbb в нижнем регистре.",
+        comment="Цвет стикера: hex #rrggbb в нижнем регистре.",
     )
     canvas_x: Mapped[float] = mapped_column(
         Float,
@@ -94,6 +102,14 @@ class ProjectSticker(Base, TimestampMixin):
     )
     height: Mapped[float] = mapped_column(
         Float, nullable=False, default=230.0, doc="Высота стикера на холсте."
+    )
+    z_index: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        doc="Слой: общая шкала с фигурами той же доски.",
+        comment="Порядок наложения стикера на доске.",
     )
     created_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -122,7 +138,7 @@ class ProjectSticker(Base, TimestampMixin):
         comment="Монотонная ревизия стикера.",
     )
 
-    project: Mapped[Project] = relationship("Project", back_populates="stickers")
+    project: Mapped[Project | None] = relationship("Project", back_populates="stickers")
     created_by: Mapped[User | None] = relationship("User")
     task_links: Mapped[list[ProjectStickerTaskLink]] = relationship(
         "ProjectStickerTaskLink",

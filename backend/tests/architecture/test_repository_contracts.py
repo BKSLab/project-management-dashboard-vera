@@ -107,15 +107,13 @@ def test_ordinary_public_method_issues_one_statement() -> None:
             if key in BATCH_METHODS or key in MULTI_STATEMENT_ALLOWLIST:
                 continue
             statements = [
-                (name, lineno)
-                for name, lineno in calls_in(method, QUERY_CALLS)
-                if name != "flush"
+                (name, lineno) for name, lineno in calls_in(method, QUERY_CALLS) if name != "flush"
             ]
             if len(statements) > 1:
                 offenders.append(f"{path.name}:{method.name}: {statements}")
 
-    assert not offenders, (
-        "Несколько запросов в одном публичном методе:\n  " + "\n  ".join(offenders)
+    assert not offenders, "Несколько запросов в одном публичном методе:\n  " + "\n  ".join(
+        offenders
     )
 
 
@@ -142,9 +140,7 @@ def test_public_method_does_not_call_another_public_method() -> None:
                 and item.func.attr != method.name
             )
 
-    assert not offenders, (
-        "Публичный метод собран из других публичных: " + ", ".join(offenders)
-    )
+    assert not offenders, "Публичный метод собран из других публичных: " + ", ".join(offenders)
 
 
 def test_batch_methods_do_not_loop_over_queries() -> None:
@@ -161,9 +157,7 @@ def test_batch_methods_do_not_loop_over_queries() -> None:
                 if inside:
                     offenders.append(f"{path.name}:{method.name}: {inside}")
 
-    assert not offenders, (
-        "Массовая операция выполняет запрос внутри цикла: " + ", ".join(offenders)
-    )
+    assert not offenders, "Массовая операция выполняет запрос внутри цикла: " + ", ".join(offenders)
 
 
 def test_self_committing_methods_declare_the_commit_flag() -> None:
@@ -183,6 +177,6 @@ def test_self_committing_methods_declare_the_commit_flag() -> None:
             if "commit" not in declared:
                 offenders.append(f"{path.name}:{method.name}")
 
-    assert not offenders, (
-        "Методы коммитят сами, но не объявляют флаг commit: " + ", ".join(offenders)
+    assert not offenders, "Методы коммитят сами, но не объявляют флаг commit: " + ", ".join(
+        offenders
     )

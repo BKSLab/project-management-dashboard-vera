@@ -215,3 +215,27 @@ class ProjectsRepository:
             await self.db_session.rollback()
             logger.error("❌ Не удалось удалить проект id=%s.", project.id, exc_info=True)
             raise ProjectsRepositoryError(f"Ошибка удаления проекта id={project.id}.") from error
+
+    async def get_by_ids(self, project_ids: set[int]) -> list[Project]:
+        """Возвращает проекты по набору идентификаторов.
+
+        Args:
+            project_ids: Идентификаторы проектов.
+
+        Returns:
+            Найденные проекты.
+
+        Raises:
+            ProjectsRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        if not project_ids:
+            return []
+        try:
+            result: Result = await self.db_session.execute(
+                select(Project).where(Project.id.in_(project_ids))
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить набор проектов.", exc_info=True)
+            raise ProjectsRepositoryError("Ошибка получения набора проектов.") from error

@@ -1,42 +1,79 @@
+import "@/components/board/board.css";
+import { useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, endpoints, queryKeys } from "@/lib/api";
-import type {
-    ProjectSticker,
-    ProjectStickerCreateInput,
-    ProjectStickerInput,
-    ProjectStickerPositionInput,
-    ProjectStickerUpdateInput,
-} from "@/lib/board/stickers";
+import { pendingBoardSaves } from "@/lib/board/saveQueue";
+import type { BoardContent, ProjectBoard } from "@/lib/board/types";
+import { useToast } from "@/lib/toast";
 import type { ProjectMember, Task } from "@/lib/types";
 import { useProjectOutlet } from "@/lib/useProjectOutlet";
-import { ProjectStickerBoard } from "@/components/board/ProjectStickerBoard";
+import { BoardEditor } from "@/components/board/BoardEditor";
+import { BoardTabs } from "@/components/board/BoardTabs";
 import { Button } from "@/components/ui/Button";
 import { ErrorMessage, Skeleton } from "@/components/ui/States";
 
-function ProjectBoardSkeleton() {
+function BoardSkeleton() {
     return (
-        <div role="status" aria-label="Загрузка доски" className="p-4 sm:p-5">
-            <div className="mb-5 flex items-center justify-between gap-4">
-                <Skeleton className="h-10 w-56" />
-                <Skeleton className="h-8 w-36" />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                {Array.from({ length: 6 }, (_, index) => (
-                    <Skeleton key={index} className="h-56" />
-                ))}
-            </div>
+        <div role="status" aria-label="Загрузка доски" className="flex h-full flex-col gap-3 p-4">
+            <Skeleton className="h-8 w-72" />
+            <Skeleton className="min-h-0 flex-1" />
         </div>
     );
 }
 
+function nextBoardTitle(boards: ProjectBoard[]): string {
+    const taken = new Set(boards.map((board) => board.title));
+    for (let index = boards.length + 1; ; index += 1) {
+        const title = `Доска ${index}`;
+        if (!taken.has(title)) return title;
+    }
+}
+
+/**
+ * Доски проекта: вкладки над холстом, выбранная доска — в `?board=<id>`
+ * (без параметра — первая). Содержимое доски грузится одним запросом /content.
+ */
 export function ProjectBoardPage() {
     const project = useProjectOutlet();
     const queryClient = useQueryClient();
-    const stickersKey = queryKeys.projectStickers(project.id);
+    const toast = useToast();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const boardsKey = queryKeys.projectBoards(project.id);
+    const readOnly = false;
 
-    const stickersQuery = useQuery({
-        queryKey: stickersKey,
-        queryFn: () => api.get<ProjectSticker[]>(endpoints.projectStickers(project.id)),
+    const boardsQuery = useQuery({
+        queryKey: boardsKey,
+        queryFn: () => api.get<ProjectBoard[]>(endpoints.projectBoards(project.id)),
+        retry: 1,
+    });
+    const boards = boardsQuery.data ?? [];
+    const requestedId = Number(searchParams.get("board"));
+    const activeBoard = boards.find((board) => board.id === requestedId) ?? boards[0] ?? null;
+    const activeBoardId = activeBoard?.id;
+    useEffect(() => {
+        if (requestedId || !activeBoardId) return;
+        setSearchParams(current => {
+            const next = new URLSearchParams(current);
+            next.set("board", String(activeBoardId));
+            return next;
+        }, { replace: true });
+    }, [activeBoardId, requestedId, setSearchParams]);
+
+    const contentQuery = useQuery({
+        queryKey: queryKeys.boardContent(project.id, activeBoard?.id ?? 0),
+        queryFn: async () => {
+            const boardId = activeBoard!.id;
+            // Ушли с доски и вернулись, пока досылалось сохранение, — ждём его, чтобы не прочитать старое.
+            await pendingBoardSaves.get(boardId);
+            return api.get<BoardContent>(endpoints.boardContent(project.id, boardId));
+        },
+        enabled: activeBoard !== null,
+        // Сцена живёт в редакторе; фоновые перечитывания сбили бы работу посреди жеста.
+        staleTime: Infinity,
+        gcTime: 0,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
         retry: 1,
     });
     const membersQuery = useQuery({
@@ -50,101 +87,63 @@ export function ProjectBoardPage() {
         retry: 1,
     });
 
-    function refreshAfterConflict(error: unknown) {
+    function selectBoard(board: ProjectBoard) {
+        setSearchParams((current) => {
+            const next = new URLSearchParams(current);
+            next.set("board", String(board.id));
+            return next;
+        });
+    }
+
+    function conflictMessage(error: unknown, fallback: string): string {
         if (error instanceof ApiError && error.status === 409) {
-            void queryClient.invalidateQueries({ queryKey: stickersKey });
+            void queryClient.invalidateQueries({ queryKey: boardsKey });
+            return error.message && !error.message.startsWith("{") ? error.message : fallback;
         }
+        return error instanceof Error && error.message ? error.message : fallback;
     }
 
     const createMutation = useMutation({
-        mutationFn: (input: ProjectStickerCreateInput) =>
-            api.post<ProjectSticker>(endpoints.projectStickers(project.id), input),
+        mutationFn: () => api.post<ProjectBoard>(endpoints.projectBoards(project.id), { title: nextBoardTitle(boards) }),
         onSuccess: (created) => {
-            queryClient.setQueryData<ProjectSticker[]>(stickersKey, (current = []) => [
-                created,
-                ...current,
-            ]);
+            queryClient.setQueryData<ProjectBoard[]>(boardsKey, (current = []) => [...current, created]);
+            selectBoard(created);
         },
+        onError: (error) => toast.error(`Доска не создана: ${conflictMessage(error, "ошибка сервера")}`),
     });
-    const updateMutation = useMutation({
-        mutationFn: ({ sticker, input }: { sticker: ProjectSticker; input: ProjectStickerInput }) => {
-            const latest = queryClient
-                .getQueryData<ProjectSticker[]>(stickersKey)
-                ?.find((item) => item.id === sticker.id);
-            return api.patch<ProjectSticker>(endpoints.projectSticker(project.id, sticker.id), {
-                ...input,
-                revision: latest?.revision ?? sticker.revision,
-            } satisfies ProjectStickerUpdateInput);
-        },
+
+    const renameMutation = useMutation({
+        mutationFn: ({ board, title }: { board: ProjectBoard; title: string }) =>
+            api.patch<ProjectBoard>(endpoints.projectBoard(project.id, board.id), { title, revision: board.revision }),
         onSuccess: (updated) => {
-            queryClient.setQueryData<ProjectSticker[]>(stickersKey, (current = []) =>
-                current.map((sticker) => sticker.id === updated.id ? updated : sticker),
-            );
+            queryClient.setQueryData<ProjectBoard[]>(boardsKey, (current = []) => current.map((board) => (board.id === updated.id ? updated : board)));
         },
-        onError: refreshAfterConflict,
+        onError: (error) => toast.error(`Доска не переименована: ${conflictMessage(error, "её уже изменил другой участник, список обновлён")}`),
     });
+
     const deleteMutation = useMutation({
-        mutationFn: (sticker: ProjectSticker) => {
-            const latest = queryClient
-                .getQueryData<ProjectSticker[]>(stickersKey)
-                ?.find((item) => item.id === sticker.id);
-            return api.delete<void>(
-                `${endpoints.projectSticker(project.id, sticker.id)}?revision=${latest?.revision ?? sticker.revision}`,
-            );
-        },
+        mutationFn: (board: ProjectBoard) => api.delete<void>(`${endpoints.projectBoard(project.id, board.id)}?revision=${board.revision}`),
         onSuccess: (_, deleted) => {
-            queryClient.setQueryData<ProjectSticker[]>(stickersKey, (current = []) =>
-                current.filter((sticker) => sticker.id !== deleted.id),
-            );
-        },
-        onError: refreshAfterConflict,
-    });
-    const moveMutation = useMutation({
-        mutationFn: ({
-            sticker,
-            position,
-        }: {
-            sticker: ProjectSticker;
-            position: ProjectStickerPositionInput;
-        }) => api.patch<ProjectSticker>(
-            endpoints.projectStickerPosition(project.id, sticker.id),
-            position,
-        ),
-        onSuccess: (moved) => {
-            queryClient.setQueryData<ProjectSticker[]>(stickersKey, (current = []) =>
-                current.map((sticker) => sticker.id === moved.id
-                    ? {
-                        ...sticker,
-                        canvas_x: moved.canvas_x,
-                        canvas_y: moved.canvas_y,
-                        width: moved.width,
-                        height: moved.height,
-                    }
-                    : sticker,
-                ),
-            );
-        },
-        onError: (error) => {
-            if (error instanceof ApiError && error.status === 404) {
-                void queryClient.invalidateQueries({ queryKey: stickersKey });
-            }
+            const rest = boards.filter((board) => board.id !== deleted.id);
+            queryClient.setQueryData<ProjectBoard[]>(boardsKey, rest);
+            if (activeBoard?.id === deleted.id && rest[0]) selectBoard(rest[0]);
         },
     });
 
-    if (stickersQuery.isPending || membersQuery.isPending) return <ProjectBoardSkeleton />;
+    if (boardsQuery.isPending || membersQuery.isPending) return <BoardSkeleton />;
 
-    const loadingError = stickersQuery.error ?? membersQuery.error;
-    if (loadingError || !stickersQuery.data || !membersQuery.data) {
+    const loadingError = boardsQuery.error ?? membersQuery.error;
+    if (loadingError || !activeBoard || !membersQuery.data) {
         return (
-            <div className="p-4 sm:p-5">
+            <div className="board-panel h-full p-4 sm:p-5">
                 <ErrorMessage
-                    message={(loadingError as Error | null)?.message ?? "Сервер вернул пустой ответ."}
+                    message={(loadingError as Error | null)?.message ?? "Сервер не вернул ни одной доски."}
                     action={
                         <Button
                             size="sm"
                             variant="ghost"
                             onClick={() => {
-                                void stickersQuery.refetch();
+                                void boardsQuery.refetch();
                                 void membersQuery.refetch();
                             }}
                         >
@@ -157,21 +156,51 @@ export function ProjectBoardPage() {
     }
 
     return (
-        <ProjectStickerBoard
-            project={project}
-            stickers={stickersQuery.data}
-            members={membersQuery.data}
-            tasks={tasksQuery.data ?? []}
-            tasksLoading={tasksQuery.isPending}
-            tasksError={(tasksQuery.error as Error | null) ?? null}
-            isSaving={createMutation.isPending || updateMutation.isPending}
-            isDeleting={deleteMutation.isPending}
-            onRetryTasks={() => void tasksQuery.refetch()}
-            onCreate={(input) => createMutation.mutateAsync(input)}
-            onUpdate={(sticker, input) => updateMutation.mutateAsync({ sticker, input })}
-            onMove={(sticker, position) => moveMutation.mutateAsync({ sticker, position })}
-            onResize={(sticker, size) => moveMutation.mutateAsync({ sticker, position: { canvas_x: sticker.canvas_x, canvas_y: sticker.canvas_y, ...size } })}
-            onDelete={(sticker) => deleteMutation.mutateAsync(sticker)}
-        />
+        <section className="board-panel board-page h-full" aria-label="Доски проекта">
+            <BoardTabs
+                boards={boards}
+                activeId={activeBoard.id}
+                readOnly={readOnly}
+                creating={createMutation.isPending}
+                onSelect={selectBoard}
+                onCreate={() => createMutation.mutate()}
+                onRename={(board, title) => renameMutation.mutateAsync({ board, title }).catch(() => undefined)}
+                onDelete={(board) =>
+                    deleteMutation.mutateAsync(board).catch((error: unknown) => {
+                        throw new Error(
+                            error instanceof ApiError && error.status === 409
+                                ? "Доску не удалить: это последняя доска проекта или её только что изменили. Обновите страницу."
+                                : error instanceof Error ? error.message : "Не удалось удалить доску.",
+                        );
+                    })
+                }
+            />
+            {contentQuery.isPending ? (
+                <BoardSkeleton />
+            ) : contentQuery.error || !contentQuery.data ? (
+                <div className="p-4">
+                    <ErrorMessage
+                        message={(contentQuery.error as Error | null)?.message ?? "Сервер вернул пустой ответ."}
+                        action={<Button size="sm" variant="ghost" onClick={() => void contentQuery.refetch()}>Повторить</Button>}
+                    />
+                </div>
+            ) : (
+                <BoardEditor
+                    // Перезагрузка содержимого (после конфликта) пересоздаёт редактор с чистой историей.
+                    key={`${activeBoard.id}:${contentQuery.dataUpdatedAt}`}
+                    project={project}
+                    board={activeBoard}
+                    content={contentQuery.data}
+                    members={membersQuery.data}
+                    tasks={tasksQuery.data ?? []}
+                    tasksLoading={tasksQuery.isPending}
+                    tasksError={(tasksQuery.error as Error | null) ?? null}
+                    readOnly={readOnly}
+
+                    onRetryTasks={() => void tasksQuery.refetch()}
+                    onReload={() => void contentQuery.refetch()}
+                />
+            )}
+        </section>
     );
 }

@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -27,3 +27,11 @@ def test_resolve_rejects_path_traversal(tmp_path: Path) -> None:
 
     with pytest.raises(TaskAttachmentStorageError):
         storage.resolve("../outside.pdf")
+
+
+@pytest.mark.parametrize("directory", ["../outside", "/outside", "projects/../../outside"])
+async def test_save_in_rejects_escaping_directory(tmp_path: Path, directory: str) -> None:
+    storage = TaskAttachmentStorage(root=tmp_path / "uploads")
+    with pytest.raises(TaskAttachmentStorageError):
+        await storage.save_in(PurePosixPath(directory), ".png", b"content")
+    assert not storage.root.exists()

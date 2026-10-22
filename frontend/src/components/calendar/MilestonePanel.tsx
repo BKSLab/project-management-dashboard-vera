@@ -1,4 +1,5 @@
 import { Check, Diamond, Pencil, Plus, Trash2 } from "lucide-react";
+import { Skeleton } from "@/components/ui/States";
 import { IconButton } from "@/components/ui/Button";
 import { dayTitle } from "@/lib/calendar";
 import type { ProjectMilestone } from "@/lib/types";
@@ -9,7 +10,8 @@ interface MilestonePanelProps {
     isLoading: boolean;
     error: Error | null;
     isSaving: boolean;
-    onCreate: () => void;
+    /** Нет — только просмотр, кнопки добавления нет. */
+    onCreate?: () => void;
     onEdit: (milestone: ProjectMilestone) => void;
     onDelete: (milestone: ProjectMilestone) => void;
 }
@@ -34,9 +36,9 @@ export function MilestonePanel({
                         Вехи
                     </h3>
                 </div>
-                <IconButton label="Добавить веху" size="sm" onClick={onCreate}>
+                {onCreate && <IconButton label="Добавить веху" size="sm" onClick={onCreate}>
                     <Plus size={13} aria-hidden="true" />
-                </IconButton>
+                </IconButton>}
             </div>
 
             {projectDueDate && (
@@ -51,7 +53,7 @@ export function MilestonePanel({
                 </div>
             )}
 
-            {isLoading && <p className="py-2 text-[11px] text-muted">Загрузка вех…</p>}
+            {isLoading && milestones.length === 0 && <Skeleton className="h-28 w-full" />}
             {error && <p className="py-2 text-[11px] text-danger">{error.message}</p>}
             {!isLoading && !error && milestones.length === 0 && (
                 <p className="py-2 text-[11px] text-muted">Пользовательских вех пока нет.</p>
@@ -60,7 +62,7 @@ export function MilestonePanel({
                 {milestones.map((milestone) => (
                     <div
                         key={milestone.id}
-                        className="group flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 transition-colors hover:bg-white/[0.035]"
+                        className="group flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 transition-colors hover:bg-hover"
                     >
                         {milestone.status === "ACHIEVED" ? (
                             <Check size={11} className="shrink-0 text-success" aria-hidden="true" />

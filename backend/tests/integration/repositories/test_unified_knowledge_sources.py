@@ -21,13 +21,14 @@ from src.db.models import (
     TaskComment,
     TaskDependency,
     TaskParticipant,
+    TaskReport,
     WbsNode,
 )
 from src.knowledge.catalog import EXCLUDED_TABLES, POLICIES, SourceType, build_catalog
 from src.repositories.knowledge_sources import KnowledgeSourcesRepository
 
 
-async def test_every_source_and_horizontal_relation_is_searchable(db_session, project, user):
+async def test_every_source_and_horizontal_relation_is_searchable(db_session, project, user, board):
     member = ProjectMember(project_id=project.id, user_id=user.id, role="OWNER")
     stage = ProjectStage(
         project_id=project.id,
@@ -68,6 +69,7 @@ async def test_every_source_and_horizontal_relation_is_searchable(db_session, pr
     )
     sticker = ProjectSticker(
         project_id=project.id,
+        board_id=board.id,
         body="Стикер: согласовали кварцопоставку",
         created_by_user_id=user.id,
         created_by_username_snapshot=user.username,
@@ -100,6 +102,13 @@ async def test_every_source_and_horizontal_relation_is_searchable(db_session, pr
                 task_id=task.id,
                 author_name="Виктор",
                 body_md="В обсуждении решили проверить янтарномодуль",
+            ),
+            TaskReport(
+                task_id=task.id,
+                revision=1,
+                body_md="Отчёт: выполнили аметистовыверку",
+                author_id=user.id,
+                author_name="Виктор",
             ),
             DocumentLink(document_id=document.id, task_id=task.id),
             ProjectStickerTaskLink(sticker_id=sticker.id, task_id=task.id),
@@ -176,6 +185,7 @@ async def test_every_source_and_horizontal_relation_is_searchable(db_session, pr
         ("кедросхему", "document"),
         ("рубинопакет", "risk"),
         ("янтарномодуль", "comment"),
+        ("аметистовыверку", "task_report"),
         ("сапфирооборудование", "deadline_change"),
         ("агатопроверка", "analytics_report"),
         ("обсидианокомпонент", "attachment"),

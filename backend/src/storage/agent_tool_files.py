@@ -1,5 +1,6 @@
 """Компенсация файлов и отложенное удаление вокруг транзакции инструмента."""
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -7,6 +8,21 @@ from src.exceptions.storage import TaskAttachmentStorageError
 from src.storage.task_attachments import TaskAttachmentStorage
 
 logger = logging.getLogger(__name__)
+
+
+async def read_local_file(path: Path, *, limit: int) -> bytes:
+    """Читает ограниченный объём локального файла вне event loop."""
+    def read() -> bytes:
+        with path.open("rb") as stream:
+            content = stream.read(limit + 1)
+        if len(content) > limit:
+            raise TaskAttachmentStorageError("Размер файла превышает допустимый.")
+        return content
+
+    try:
+        return await asyncio.to_thread(read)
+    except OSError as error:
+        raise TaskAttachmentStorageError(str(error)) from error
 
 
 class AgentToolFileStorage(TaskAttachmentStorage):
@@ -23,6 +39,10 @@ class AgentToolFileStorage(TaskAttachmentStorage):
         key = await super().save(task_id, extension, content)
         self.created.append(key)
         return key
+
+    async def read(self, storage_key: str, *, limit: int) -> bytes:
+        """Читает приватную загрузку только внутри локального корня."""
+        return await read_local_file(self.resolve(storage_key), limit=limit)
 
     async def delete(self, storage_key: str) -> None:
         """Откладывает физическое удаление до commit внешней транзакции."""

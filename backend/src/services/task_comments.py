@@ -12,12 +12,15 @@ from src.exceptions.task_comments import (
 )
 from src.exceptions.tasks import TaskNotFoundError, TasksRepositoryError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
+from src.exceptions.users import UsersRepositoryError
 from src.repositories.task_activity import TaskActivityRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
+from src.repositories.users import UsersRepository
 from src.schemas.task_comments import CommentSchema
 from src.services.knowledge_events import KnowledgeEvents
+from src.services.tasks import user_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +35,9 @@ class TaskCommentsService:
         activity_repository: TaskActivityRepository,
         unit_of_work: UnitOfWork,
         knowledge_events: KnowledgeEvents,
+        users_repository: UsersRepository | None = None,
     ):
+        self.users_repository = users_repository
         self.comments_repository = comments_repository
         self.tasks_repository = tasks_repository
         self.activity_repository = activity_repository
@@ -65,14 +70,20 @@ class TaskCommentsService:
     async def add_comment(
         self,
         task_id: int,
-        author_name: str | None,
-        body_md: str,
+        author_name: str | None = None,
+        body_md: str = "",
+        author_id: int | None = None,
     ) -> CommentSchema:
         """Добавляет комментарий и событие истории задачи.
 
+        Автор — всегда пользователь запроса (человек или владелец токена,
+        от чьего имени работает агент). Его полное имя сохраняется снимком в
+        ``author_name``: по нему ищет полнотекстовый поиск, и подпись
+        переживает удаление пользователя.
+
         Args:
             task_id: Идентификатор задачи.
-            author_name: Необязательная подпись автора.
+            author_id: Автор — текущий пользователь.
             body_md: Текст комментария в Markdown.
 
         Returns:
@@ -86,9 +97,12 @@ class TaskCommentsService:
             task = await self.tasks_repository.get_by_id(task_id=task_id)
             if task is None:
                 raise TaskNotFoundError(task_id=task_id)
+            author = (await self.users_repository.get_by_id(user_id=author_id)
+                      if self.users_repository is not None and author_id is not None else None)
             comment = await self.comments_repository.save(
                 task_id=task_id,
-                author_name=author_name,
+                author_id=author_id,
+                author_name=user_display_name(author) if author is not None else author_name,
                 body_md=body_md,
             )
             await self.activity_repository.save(
@@ -103,11 +117,14 @@ class TaskCommentsService:
                 entity_id=comment.id,
             )
             await self.unit_of_work.commit()
-            return CommentSchema.model_validate(comment)
+            return CommentSchema.model_validate(
+                await self.comments_repository.get_by_id(comment_id=comment.id)
+            )
         except (
             TaskCommentsRepositoryError,
             TasksRepositoryError,
             TaskActivityRepositoryError,
+            UsersRepositoryError,
             KnowledgeEventsServiceError,
             UnitOfWorkRepositoryError,
         ) as error:
@@ -154,7 +171,9 @@ class TaskCommentsService:
                 entity_id=comment.id,
             )
             await self.unit_of_work.commit()
-            return CommentSchema.model_validate(comment)
+            return CommentSchema.model_validate(
+                await self.comments_repository.get_by_id(comment_id=comment.id)
+            )
         except (
             TaskCommentsRepositoryError,
             TasksRepositoryError,

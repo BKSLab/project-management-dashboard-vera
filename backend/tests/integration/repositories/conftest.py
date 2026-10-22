@@ -1,9 +1,11 @@
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db.models.project_boards import ProjectBoard
 from src.db.models.project_stages import ProjectStage
 from src.db.models.projects import Project
 from src.db.models.users import User
+from src.repositories.project_boards import ProjectBoardsRepository
 from src.repositories.project_stages import ProjectStagesRepository
 from src.repositories.projects import ProjectsRepository
 from src.repositories.users import UsersRepository
@@ -48,5 +50,18 @@ async def stage(db_session: AsyncSession, project: Project) -> ProjectStage:
             "order_index": 1,
             "color": "#58a6ff",
             "is_done_stage": False,
+        }
+    )
+
+
+@pytest_asyncio.fixture
+async def board(db_session: AsyncSession, project: Project, user: User) -> ProjectBoard:
+    """Создаёт доску «Основная», без которой у стикера нет места."""
+    return await ProjectBoardsRepository(db_session).insert(
+        data={
+            "project_id": project.id,
+            "title": "Основная",
+            "position": 0,
+            "created_by_user_id": user.id,
         }
     )

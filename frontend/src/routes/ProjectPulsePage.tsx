@@ -74,7 +74,7 @@ export function ProjectPulsePage() {
   );
   const upcoming = (tasksQuery.data ?? [])
     .filter(
-      (task) => task.due_date !== null && !doneStageIds.has(task.stage_id),
+      (task) => task.due_date !== null && !doneStageIds.has(task.stage_id ?? 0),
     )
     .sort((first, second) =>
       (first.due_date ?? "").localeCompare(second.due_date ?? ""),
@@ -148,7 +148,7 @@ export function ProjectPulsePage() {
                   key={task.id}
                   taskKey={task.key}
                   title={task.title}
-                  stage={stageNames.get(task.stage_id)}
+                  stage={stageNames.get(task.stage_id ?? 0)}
                   priority={task.priority}
                   meta={<DueDate value={task.due_date} />}
                   onOpen={() => setSelectedTaskId(task.id)}

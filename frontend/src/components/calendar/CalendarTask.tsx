@@ -3,7 +3,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { AlertTriangle, CalendarDays, Check, Clock3 } from "lucide-react";
 import { calendarTaskDragId } from "@/lib/calendar";
 import { cn } from "@/lib/cn";
-import type { CalendarTask as CalendarTaskModel } from "@/lib/types";
+import type { CalendarGridTask as CalendarTaskModel } from "@/lib/types";
 import { IconButton } from "@/components/ui/Button";
 
 interface CalendarTaskProps {

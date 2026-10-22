@@ -76,6 +76,44 @@ async def _ask(client: LlmClient) -> AnswerSchema:
     )
 
 
+@pytest.mark.parametrize("host", ["polza.ai", "other.test", "polza.ai.other.test"])
+async def test_repeated_prompts_and_retries_have_independent_polza_routing(host):
+    requests = []
+    route_labels = set()
+
+    def reply(request):
+        payload = json.loads(request.content)
+        requests.append((request, payload))
+        if host == "polza.ai":
+            label = payload.get("prompt_cache_key")
+            if label in route_labels:
+                return httpx.Response(400, json={"error": "No endpoints found"})
+            route_labels.add(label)
+        if len(requests) == 1:
+            return httpx.Response(503, json={"error": "temporary unavailable"})
+        return build_response('{"answer":"готово"}')
+
+    client = build_client(reply)
+    client.url = f"https://{host}/v1/chat/completions"
+    try:
+        for _ in range(2):
+            assert (await _ask(client)).answer == "готово"
+    finally:
+        await client.http_client.aclose()
+    assert len(requests) == 3
+    labels = [body.get("prompt_cache_key") for _, body in requests]
+    if host == "polza.ai":
+        assert len(set(labels)) == 3 and all(labels)
+    else:
+        assert labels == [None] * 3
+    baseline = {k: v for k, v in requests[0][1].items() if k != "prompt_cache_key"}
+    assert all(
+        {k: v for k, v in body.items() if k != "prompt_cache_key"} == baseline
+        and request.headers["authorization"] == "Bearer test"
+        for request, body in requests
+    )
+
+
 async def test_answer_is_validated_and_unwrapped() -> None:
     """Ответ проходит валидацию схемой, обёртка из тройных кавычек снимается."""
     # Корректный JSON разбирается схемой.
@@ -117,7 +155,8 @@ async def test_worst_case_budget_is_derived_from_timeout_and_attempts() -> None:
     # Ноль попыток — некорректный бюджет, а не мгновенный вызов.
     with pytest.raises(ValueError):
         worst_case_seconds(timeout=5, attempts=0)
-    # Продовые значения дают известный worst case не менее 900 секунд. Это число зафиксировано в docs/AI_TIMEOUT_BUDGET_DECISION.md и служит основанием follow-up по асинхронному контракту.
+    # Синхронный LlmClient по умолчанию имеет worst case не менее 900 секунд.
+    # Ограничение HTTP и отдельный deadline очереди Веры описаны в docs/agent.md.
     assert worst_case_seconds(timeout=300, attempts=3) >= 900
 
 

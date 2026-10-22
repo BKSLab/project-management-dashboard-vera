@@ -7,6 +7,7 @@
 """
 
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
@@ -33,9 +34,11 @@ from src.services.project_query import (
     ProjectSummaryDto,
     ResolvedTask,
     TaskDetailsDto,
+    TaskPageDto,
     TaskSummaryDto,
     UnknownStageError,
 )
+from src.utils.task_filters import TaskFilters
 from tests.unit.mcp_server.conftest import PROJECT_ID, FakeContext
 
 PROJECT = ProjectSummaryDto(
@@ -60,6 +63,7 @@ def calendar_task(**overrides) -> CalendarTaskSchema:
         "drift_days": None,
         "stage_id": 11,
         "wbs_node_id": None,
+        "wbs_path": None,
         "priority": TaskPriority.HIGH,
         "assignee": "Борис",
         "is_done": False,
@@ -90,11 +94,12 @@ def calendar_response(tasks: list[CalendarTaskSchema]) -> CalendarResponseSchema
         recent_changes=[],
         milestones=[
             CalendarMilestoneSchema(
+                wbs_node_id=None,
+                wbs_path=None,
                 id=3,
                 title="MVP",
                 due_date=date(2026, 9, 20),
                 status=ProjectMilestoneStatus.PLANNED,
-                wbs_node_id=None,
                 description_md=None,
             )
         ],
@@ -173,7 +178,9 @@ async def test_list_tasks_applies_filters_and_reports_unknown_stage(tools) -> No
     """Фильтры доходят до use case, неизвестная стадия перечисляет доступные."""
     # Фильтры уходят в сценарий, а не применяются в обработчике.
     services = tools()
-    services.query.list_tasks.return_value = [task_dto()]
+    services.query.list_tasks.return_value = TaskPageDto(
+        items=[task_dto()], total=7, offset=0, limit=5
+    )
 
     result = await srv.list_tasks(
         FakeContext(),
@@ -181,16 +188,24 @@ async def test_list_tasks_applies_filters_and_reports_unknown_stage(tools) -> No
         stage="В работе",
         assignee="Борис",
         only_open=True,
+        priority="high",
+        due_to="2026-10-01",
+        text="отчёт",
         limit=5,
     )
 
-    assert [item["task_key"] for item in result] == ["PROJ-142"]
+    assert [item["task_key"] for item in result["items"]] == ["PROJ-142"]
+    # Пагинация как в Service Desk: всего, есть ли ещё и откуда продолжать.
+    assert (result["total"], result["has_more"], result["next_offset"]) == (7, True, 1)
     services.query.list_tasks.assert_awaited_once_with(
         project_id=PROJECT_ID,
         stage_name="В работе",
         assignee="Борис",
         only_open=True,
         limit=5,
+        offset=0,
+        query="отчёт",
+        filters=TaskFilters(priority="high", due_to=date(2026, 10, 1)),
     )
     # Неизвестная стадия отвечает списком доступных. Без него вызывающему пришлось бы угадывать написание.
     services = tools()
@@ -208,7 +223,7 @@ async def test_list_tasks_applies_filters_and_reports_unknown_stage(tools) -> No
 
 async def test_get_task_returns_details_with_done_flag(tools) -> None:
     """Карточка задачи с числом комментариев и признаком завершения."""
-    # Карточка задачи содержит описание, путь ИСР и число комментариев.
+    # Карточка задачи содержит описание и число комментариев.
     services = tools()
     services.query.resolve_task.return_value = ResolvedTask(
         task_id=7,
@@ -216,18 +231,41 @@ async def test_get_task_returns_details_with_done_flag(tools) -> None:
         task_key="PROJ-142",
     )
     services.query.get_task_details.return_value = TaskDetailsDto(
+        wbs_path=None,
         summary=task_dto(),
         role="BE",
-        wbs_path="1.2 Раздел",
         description="Подробности",
         comment_count=3,
     )
 
+    services.tasks.get_task.return_value = SimpleNamespace(
+        start_date=None,
+        checklist_revision=0,
+        report=None,
+        participants=[
+            SimpleNamespace(
+                role=SimpleNamespace(value="OBSERVER"),
+                user=SimpleNamespace(
+                    username="b.boris", first_name="Борис", last_name="", middle_name=None
+                ),
+            )
+        ],
+    )
+
+    from src.schemas.task_reports import TaskReportSchema
+
+    services.tasks.get_task.return_value.report = TaskReportSchema(
+        task_id=7, revision=2, body_md="Результат без комментария"
+    )
     result = await srv.get_task(FakeContext(), task_key="PROJ-142")
+    assert result["report"]["body_md"] == "Результат без комментария"
 
     assert result["task_key"] == "PROJ-142"
-    assert result["wbs_path"] == "1.2 Раздел"
     assert result["comment_count"] == 3
+    # Участники задачи — логинами: их понимают пишущие инструменты.
+    assert result["participants"] == [
+        {"role": "OBSERVER", "login": "b.boris", "full_name": "Борис"}
+    ]
     services.query.get_task_details.assert_awaited_once_with(task_id=7)
     # Задача в завершающей стадии помечается как выполненная.
     services = tools()
@@ -237,11 +275,25 @@ async def test_get_task_returns_details_with_done_flag(tools) -> None:
         task_key="PROJ-142",
     )
     services.query.get_task_details.return_value = TaskDetailsDto(
+        wbs_path=None,
         summary=task_dto(stage="Готово", is_done=True),
         role=None,
-        wbs_path=None,
         description=None,
         comment_count=0,
+    )
+
+    services.tasks.get_task.return_value = SimpleNamespace(
+        start_date=None,
+        checklist_revision=0,
+        report=None,
+        participants=[
+            SimpleNamespace(
+                role=SimpleNamespace(value="OBSERVER"),
+                user=SimpleNamespace(
+                    username="b.boris", first_name="Борис", last_name="", middle_name=None
+                ),
+            )
+        ],
     )
 
     result = await srv.get_task(FakeContext(), task_key="PROJ-142")
@@ -263,6 +315,7 @@ async def test_list_comments_returns_body_and_author(tools) -> None:
             author="Борис",
             created_at=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
             body="Текст",
+            comment_id=31,
         )
     ]
 
@@ -270,6 +323,7 @@ async def test_list_comments_returns_body_and_author(tools) -> None:
 
     assert result == [
         {
+            "comment_id": 31,
             "task_key": "PROJ-142",
             "author": "Борис",
             "created_at": "2026-09-01T10:00:00+00:00",

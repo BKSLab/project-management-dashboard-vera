@@ -5,7 +5,11 @@ from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from time import monotonic
+from uuid import NAMESPACE_URL, uuid5
 
+from src.agent.tim import is_addressed_to_tim
+from src.agent.wakeup import wake_agent_worker
+from src.exceptions.api_keys import ApiKeyRouteNotAllowedError
 from src.exceptions.base import RepositoryError
 from src.exceptions.project_chats import (
     ChatConflictError,
@@ -66,6 +70,8 @@ class ProjectChatService:
             principal = await db.auth.resolve_principal(
                 session_token=session_token, bearer_secret=bearer_secret
             )
+            if getattr(principal, "api_key", None) is not None:
+                raise ApiKeyRouteNotAllowedError('project chat')
             await self.require(db, project_id, principal.user_id)
             return principal
 
@@ -162,8 +168,13 @@ class ProjectChatService:
             )
             await self._save_links(db, row.id, data)
             await db.events.save(chat.id, seq, "message.created", {"message_id": row.id})
+            tim_called = is_addressed_to_tim(data.content)
+            if tim_called:
+                await self._call_tim(db, chat, project_id, user_id, row)
             result = (await self.presenter.messages(db, [row]))[0]
             await db.unit_of_work.commit()
+            if tim_called:
+                wake_agent_worker()
             self.metrics["db_message_write_count"] += 1
             self.metrics["db_message_write_ms_sum"] += (monotonic() - started) * 1000
             logger.info(
@@ -177,6 +188,44 @@ class ProjectChatService:
                 (monotonic() - started) * 1000,
             )
             return result
+
+    async def _call_tim(self, db: ChatScope, chat, project_id: int, user_id: int, request) -> None:
+        """Ставит ответ Веры в очередь: пустое сообщение Веры видно всем как «печатает».
+
+        Ответ-заглушка и ход сохраняются в транзакции вопроса, поэтому вопрос
+        без ответа (или ответ без вопроса) невозможен даже при сбое процесса.
+        """
+        seq = await db.chats.next_seq(chat.id)
+        reply = await db.messages.save(
+            dict(
+                chat_id=chat.id,
+                project_id=project_id,
+                seq=seq,
+                author_user_id=None,
+                author_kind="agent",
+                content="",
+                client_message_id=uuid5(NAMESPACE_URL, f"tim-reply:{request.id}"),
+                reply_to_message_id=request.id,
+            )
+        )
+        await db.turns.save(
+            dict(
+                chat_id=chat.id,
+                project_id=project_id,
+                request_message_id=request.id,
+                reply_message_id=reply.id,
+                requester_id=user_id,
+                status="queued",
+            )
+        )
+        await db.events.save(chat.id, seq, "message.created", {"message_id": reply.id})
+        logger.info(
+            "tim.chat_turn_queued project_id=%s actor_id=%s request_id=%s reply_id=%s",
+            project_id,
+            user_id,
+            request.id,
+            reply.id,
+        )
 
     async def edit(self, project_id: int, user_id: int, message_id: int, data: ChatMessageEdit):
         """Меняет свою реплику и её ссылки в одной транзакции."""

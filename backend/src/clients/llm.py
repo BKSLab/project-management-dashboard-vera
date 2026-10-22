@@ -7,6 +7,7 @@ from typing import TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from src.clients.request_routing import request_routing_fields
 from src.clients.retry import (
     RetryDecision,
     classify,
@@ -90,7 +91,9 @@ class LlmClient:
                 response = await self.http_client.post(
                     self.url,
                     headers=self.headers,
-                    content=json.dumps(payload, ensure_ascii=False),
+                    content=json.dumps(
+                        {**payload, **request_routing_fields(self.url)}, ensure_ascii=False
+                    ),
                     timeout=self.timeout,
                 )
                 response.raise_for_status()

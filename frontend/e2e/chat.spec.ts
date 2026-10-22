@@ -1,6 +1,8 @@
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 import { randomUUID } from "node:crypto";
-import type { ChatAttachment, ChatEntity, ChatEvent, ChatMessage, ChatMessageCreate } from "../src/lib/projectChat";
+import type { ChatAgentState, ChatAttachment, ChatEntity, ChatEvent, ChatMessage, ChatMessageCreate } from "../src/lib/projectChat";
+
+test.setTimeout(60_000);
 
 /** Общий серверный state для двух браузерных участников и нескольких вкладок. */
 function chatServer() {
@@ -22,15 +24,16 @@ function chatServer() {
         if (broadcast) for (const socket of sockets.keys()) socket.send(JSON.stringify(event));
         return event;
     };
-    const create = (userId: number, data: ChatMessageCreate, broadcast = true) => {
+    const create = (userId: number, data: ChatMessageCreate, broadcast = true, patch: Partial<ChatMessage> = {}) => {
         const duplicate = rows.find((row) => row.author?.id === userId && row.client_message_id === data.client_message_id);
         if (duplicate) return duplicate;
         const original = rows.find((row) => row.id === data.reply_to_message_id);
-        const message: ChatMessage = { id: ++messageId, chat_id: 1, project_id: 1, seq: seq + 1, author_type: "USER", author: members.find((user) => user.id === userId)!, client_message_id: data.client_message_id, content: data.content, revision: 1, created_at: stamp, edited_at: null, deleted_at: null, reply: original ? { id: original.id, seq: original.seq, author: original.author, content: original.content, deleted: Boolean(original.deleted_at) } : null, mentions: members.filter((user) => data.mentions.includes(user.id)), entities: data.entities.length ? [structuredClone(entity)] : [], attachments: data.attachment_ids.map((id) => ({ ...files.get(id)!, message_id: messageId })), reactions: [] };
+        const message: ChatMessage = { id: ++messageId, chat_id: 1, project_id: 1, seq: seq + 1, author_type: "USER", author: members.find((user) => user.id === userId)!, client_message_id: data.client_message_id, content: data.content, revision: 1, created_at: stamp, edited_at: null, deleted_at: null, reply: original ? { id: original.id, seq: original.seq, author_type: original.author_type, author: original.author, content: original.content, deleted: Boolean(original.deleted_at) } : null, mentions: members.filter((user) => data.mentions.includes(user.id)), entities: data.entities.length ? [structuredClone(entity)] : [], attachments: data.attachment_ids.map((id) => ({ ...files.get(id)!, message_id: messageId })), reactions: [], ...patch };
         rows.push(message); emit("message.created", { message_id: message.id, message }, broadcast);
         return message;
     };
     const add = (content: string, userId = 2, broadcast = true) => create(userId, { content, mentions: [], entities: [], attachment_ids: [], client_message_id: randomUUID(), reply_to_message_id: null }, broadcast);
+    const addTim = (content: string, status: ChatAgentState["status"] = "completed") => create(0, { content, mentions: [], entities: [], attachment_ids: [], client_message_id: randomUUID(), reply_to_message_id: null }, true, { author_type: "AGENT", author: null, agent: { name: "Вера", status, requester: members[0], request_message_id: 1, error: null, sources: [], actions: [] } });
 
     const attach = async (page: Page, userId = 1) => {
         const publicUser = members.find((user) => user.id === userId)!;
@@ -109,14 +112,107 @@ function chatServer() {
             });
         });
     };
-    return { attach, add, emit, rows, entity, sockets, control };
+    return { attach, add, addTim, emit, rows, entity, sockets, control };
+}
+
+const LEGACY_CONFIRM = "0f1e2d3c-0000-4000-8000-000000000001";
+
+async function installPersonalHistory(page: Page) {
+    const stamp = "2026-09-21T10:00:00Z";
+    const state = { reindexCalls: 0 };
+    await page.route(/\/api\/v1\/(?:projects\/1\/(?:agent\/conversations|knowledge\/)|agent\/pending\/)/, async (route) => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        const headers = { "access-control-allow-origin": "http://127.0.0.1:4179", "access-control-allow-credentials": "true", "access-control-allow-headers": "content-type", "access-control-allow-methods": "GET, POST, OPTIONS" };
+        const reply = (json: unknown) => route.fulfill({ json, headers });
+        if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers });
+        if (path.endsWith("/agent/conversations")) return reply({ items: [{ id: 17, project_id: 1, title: "План проекта", created_at: stamp, updated_at: stamp }], next_offset: null });
+        if (path.endsWith("/agent/conversations/17/messages")) return reply({ items: [{ id: 170, conversation_id: 17, request_id: "history", role: "assistant", content: "Сохранённый план проверки проекта", sources: [], files: [], actions: [], status: "completed", error: null, created_at: stamp }], next_before_id: null });
+        if (path.endsWith("/knowledge/reindex")) { state.reindexCalls += 1; return reply({ queued: true }); }
+        if (path.endsWith("/knowledge/status")) return reply({ enabled: true, ready: true, points_count: 23, pending_jobs: 0, processing_jobs: 0, failed_jobs: 1, last_error: null, obsolete_points: 0, coverage: [{ entity_type: "document", total: 2, indexed: 1, missing: 1, stale: 0 }], file_issues: [{ source_id: "attachment:9", title: "План.pdf", status: "failed", detail: "Текст файла недоступен" }] });
+        if (path.endsWith(`/agent/pending/${LEGACY_CONFIRM}`)) return reply({ id: LEGACY_CONFIRM, tool_name: "delete_task", title: "Удалить задачу", status: "pending", arguments: { task_id: 42 }, preview: {}, result: {}, project: { id: 1, key: "DEMO", name: "Портал заказов" }, created_at: stamp, expires_at: "2026-10-01T10:00:00Z" });
+        return reply([]);
+    });
+    return state;
 }
 
 async function openChat(page: Page) {
+    await page.bringToFront();
     await page.goto("/projects/DEMO/chat");
-    await expect(page.getByText("Подключено", { exact: true })).toBeVisible();
+    await expect(page.getByText("Подключено", { exact: true })).toBeVisible({ timeout: 60_000 });
     await expect(page.getByRole("combobox", { name: "Сообщение проекту" })).toBeVisible();
 }
+
+test("одна вкладка чата и обращение к Вере по начальному имени", async ({ page }) => {
+    const server = chatServer(); await server.attach(page); await openChat(page);
+    const sections = page.getByRole("navigation", { name: "Разделы проекта" });
+    await expect(sections.getByRole("link", { name: "Чат", exact: true })).toHaveCount(1);
+    await expect(sections.getByRole("link", { name: "Агент", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Открыть чат агента" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Открыть чат команды" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Спросить Веру", exact: true })).toHaveAttribute("title", /Вера — проектный менеджер/);
+    const input = page.getByRole("combobox", { name: "Сообщение проекту" });
+    await input.fill("Тим, что по задачам?");
+    await expect(page.getByText("Начните сообщение с «Вера, …», чтобы обратиться к проектному менеджеру", { exact: true })).toBeVisible();
+    await input.fill("Веранда готова");
+    await expect(page.getByText("Вера — проектный менеджер — ответит здесь, в чате проекта", { exact: true })).toHaveCount(0);
+    await input.fill("Вера, какие сроки ближайшие?");
+    await expect(page.getByText("Вера — проектный менеджер — ответит здесь, в чате проекта", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Отправить", exact: true }).click();
+    await expect(page.getByRole("article").filter({ hasText: "Вера, какие сроки ближайшие?" })).toBeVisible();
+    expect(server.control.commands.find((command) => command.type === "message.send")?.data.content).toBe("Вера, какие сроки ближайшие?");
+    await page.setViewportSize({ width: 390, height: 844 });
+    const send = await page.getByRole("button", { name: "Отправить", exact: true }).boundingBox();
+    const vera = await page.getByRole("button", { name: "Спросить Веру", exact: true }).boundingBox();
+    const editor = await input.boundingBox();
+    expect(vera!.y + vera!.height, "Личный виджет остаётся над полем общего чата").toBeLessThanOrEqual(editor!.y);
+    expect(vera!.x >= send!.x + send!.width || vera!.x + vera!.width <= send!.x || vera!.y >= send!.y + send!.height || vera!.y + vera!.height <= send!.y, "Личный виджет не перекрывает отправку в общий чат").toBe(true);
+});
+
+test("старый адрес личного диалога сохраняет историю, подтверждение и контекст в едином чате", async ({ page }) => {
+    const server = chatServer(); await server.attach(page); await installPersonalHistory(page);
+    await page.goto(`/projects/DEMO/agent?conversation=17&confirm=${LEGACY_CONFIRM}&task=42&tag=a&tag=b#context`);
+    await expect(page).toHaveURL(/\/projects\/DEMO\/chat\?/);
+    const confirmation = page.getByRole("dialog", { name: "Подтверждение действия агента", exact: true });
+    await expect(confirmation).toBeVisible();
+    const redirected = new URL(page.url());
+    expect(redirected.searchParams.get("view")).toBe("personal");
+    expect(redirected.searchParams.get("confirm")).toBe(LEGACY_CONFIRM);
+    expect(redirected.hash).toBe("#context");
+    await confirmation.getByRole("button", { name: "Закрыть", exact: true }).last().click();
+    await expect(page.getByText("Личные диалоги по проекту · видите только вы", { exact: true })).toBeVisible();
+    await expect(page.getByText("Сохранённый план проверки проекта", { exact: true })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Диалог", exact: true })).toHaveValue("17");
+    const current = new URL(page.url());
+    expect(current.searchParams.get("conversation")).toBe("17");
+    expect(current.searchParams.get("task")).toBe("42");
+    expect(current.searchParams.getAll("tag")).toEqual(["a", "b"]);
+    expect(current.searchParams.has("confirm")).toBe(false);
+    expect(current.hash).toBe("#context");
+    server.add("Сообщение команды во время личного разговора");
+    await expect(page.getByRole("complementary", { name: "Новое сообщение проекта" })).toBeVisible();
+    await page.getByRole("button", { name: "Общий чат", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "Сообщение проекту" })).toBeVisible();
+    await expect(page.getByText("Сохранённый план проверки проекта", { exact: true })).toHaveCount(0);
+});
+
+test("знания и переиндексация доступны из единого чата на телефоне", async ({ page }) => {
+    const server = chatServer(); await server.attach(page); const state = await installPersonalHistory(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/projects/DEMO/knowledge?task=42#knowledge");
+    await expect(page).toHaveURL(/\/projects\/DEMO\/chat\?task=42&view=knowledge#knowledge$/);
+    const knowledge = page.getByRole("complementary", { name: "Знания проекта", exact: true });
+    await expect(knowledge.getByText("Фрагментов", { exact: true })).toBeVisible();
+    await expect(knowledge.getByText("23", { exact: true })).toBeVisible();
+    await expect(knowledge.getByText("План.pdf", { exact: true })).toBeVisible();
+    await knowledge.getByRole("button", { name: "Переиндексировать", exact: true }).click();
+    await expect.poll(() => state.reindexCalls).toBe(1);
+    await page.getByRole("button", { name: "Личные диалоги и знания", exact: true }).click();
+    await page.getByRole("button", { name: "Личные диалоги", exact: true }).click();
+    await expect(page.getByText("Сохранённый план проверки проекта", { exact: true })).toBeVisible();
+    expect(new URL(page.url()).hash).toBe("#knowledge");
+    expect(new URL(page.url()).searchParams.get("conversation")).toBe("17");
+});
 
 test("окно команды и вкладка разделяют сокет, историю, ответ и черновик редактирования", async ({ page }) => {
     const server = chatServer();
@@ -133,7 +229,8 @@ test("окно команды и вкладка разделяют сокет, �
     await page.getByRole("button", { name: "Открыть чат во вкладке" }).click();
     await expect(page).toHaveURL(/\/chat$/);
     await expect(page.getByRole("button", { name: "Открыть чат команды", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Открыть чат агента", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Открыть чат агента", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Спросить Веру", exact: true })).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Сообщение проекту" })).toHaveValue("Проверяю прямо из команды");
     await page.getByRole("button", { name: "Отправить", exact: true }).click();
     expect(server.rows.at(-1)!.reply?.id).toBe(server.rows[0].id);
@@ -257,6 +354,44 @@ test("счётчик и уведомление обновляются на др�
     expect(server.control.messageGets).toBe(historyRequests);
     await page.getByRole("link", { name: /Чат/ }).click();
     await expect(page.getByText("Обсудим критерии приёмки", { exact: true }).first()).toBeVisible();
+});
+
+test("переносы задач появляются в общем чате без повторов и скрываются по одному", async ({ page }) => {
+    const server = chatServer(); await server.attach(page); await openChat(page);
+    const outgoing = server.emit("task.moved", { task_id: 42, from_key: "DEMO-42", user_id: 2, direction: "out", target_kind: "PROJECT", target_name: null, to_key: null });
+    const notices = page.getByRole("list", { name: "Переносы задач" });
+    await expect(notices.getByText("Задача DEMO-42 перенесена в другой проект — Олег Петров")).toBeVisible();
+    for (const socket of server.sockets.keys()) socket.send(JSON.stringify(outgoing));
+    server.emit("task.moved", { task_id: 43, from_key: "PERSONAL-9", user_id: 1, direction: "in", target_kind: "PROJECT", target_name: "Портал заказов", to_key: "DEMO-43" });
+    await expect(notices.getByRole("listitem")).toHaveCount(2);
+    await expect(notices.getByText("Задача PERSONAL-9 перенесена в этот проект: теперь DEMO-43 — Анна Иванова")).toBeVisible();
+    await notices.getByRole("button", { name: "Скрыть уведомление о переносе" }).first().click();
+    await expect(notices.getByRole("listitem")).toHaveCount(1);
+    await expect(notices.getByText(/DEMO-42/)).toHaveCount(0);
+});
+
+test("уведомление, ответ и поиск называют Веру при пустом author", async ({ page }) => {
+    const server = chatServer(); await server.attach(page); await openChat(page);
+    await page.getByRole("link", { name: "Команда", exact: true }).click();
+    await expect(page).toHaveURL(/\/team$/);
+    server.addTim("", "processing");
+    await expect(page.getByRole("complementary", { name: "Новое сообщение проекта" })).toHaveCount(0);
+    server.addTim("План проверки готов");
+    const notification = page.getByRole("complementary", { name: "Новое сообщение проекта" });
+    await expect(notification.getByText("Вера: План проверки готов")).toBeVisible();
+    await notification.getByRole("button").first().click();
+    const answer = page.getByRole("article", { name: "Сообщение Вера", exact: true }).filter({ hasText: "План проверки готов" });
+    await answer.getByRole("button", { name: "Действия с сообщением" }).click();
+    await page.getByRole("button", { name: "Ответить", exact: true }).click();
+    await expect(page.getByText("Ответ Вера: План проверки готов", { exact: true })).toBeVisible();
+    await page.getByRole("combobox", { name: "Сообщение проекту" }).fill("Спасибо за план");
+    await page.getByRole("button", { name: "Отправить", exact: true }).click();
+    const reply = page.getByRole("article", { name: "Сообщение Анна Иванова", exact: true });
+    await expect(reply.getByRole("button", { name: "Перейти к исходному сообщению" }).getByText("Вера", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Поиск в чате" }).click();
+    const search = page.getByRole("complementary", { name: "Поиск по сообщениям" });
+    await search.getByRole("textbox", { name: "Поиск по сообщениям" }).fill("План проверки готов");
+    await expect(search.getByRole("button").filter({ hasText: "План проверки готов" }).getByText("Вера", { exact: true })).toBeVisible();
 });
 
 test("потерянный ack и reload сохраняют UUID и не дублируют сообщение", async ({ page }) => {

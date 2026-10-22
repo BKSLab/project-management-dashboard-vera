@@ -74,3 +74,19 @@ class RiskReasonCode(str, enum.Enum):
     RISK_WITHOUT_OWNER = "RISK_WITHOUT_OWNER"
     RISK_WITHOUT_MITIGATION = "RISK_WITHOUT_MITIGATION"
     RISK_OCCURRED = "RISK_OCCURRED"
+
+
+class TaskKind(str, enum.Enum):
+    """Вид задачи: проектная или разовая."""
+
+    PROJECT = "PROJECT"
+    PERSONAL = "PERSONAL"
+
+class TaskStatus(str, enum.Enum):
+    """Состояние разовой задачи; у проектной состояние задаёт стадия."""
+
+    NEW = "NEW"
+    IN_PROGRESS = "IN_PROGRESS"
+    REVIEW = "REVIEW"
+    DONE = "DONE"
+    CANCELLED = "CANCELLED"

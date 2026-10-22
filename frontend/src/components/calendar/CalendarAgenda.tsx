@@ -47,7 +47,7 @@ export function CalendarAgenda({
                                 stageName={stagesById.get(task.stage_id)?.name}
                                 draggable
                                 onOpen={onOpenTask}
-                                onSchedule={onScheduleTask}
+                                onSchedule={task => onScheduleTask(task as CalendarTaskModel)}
                             />
                         ))}
                     </div>
@@ -75,7 +75,7 @@ export function CalendarAgenda({
                                 stageName={stagesById.get(task.stage_id)?.name}
                                 draggable
                                 onOpen={onOpenTask}
-                                onSchedule={onScheduleTask}
+                                onSchedule={task => onScheduleTask(task as CalendarTaskModel)}
                             />
                         ))}
                     </div>

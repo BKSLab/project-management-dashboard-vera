@@ -6,7 +6,8 @@ interface DependencyPanelProps {
     dependencies: TaskDependency[];
     tasks: Task[];
     isSaving: boolean;
-    onCreate: () => void;
+    /** Нет — только просмотр, кнопки добавления нет. */
+    onCreate?: () => void;
     onDelete: (dependency: TaskDependency) => void;
 }
 
@@ -28,9 +29,9 @@ export function DependencyPanel({
                         Зависимости
                     </h3>
                 </div>
-                <IconButton label="Добавить зависимость" size="sm" onClick={onCreate}>
+                {onCreate && <IconButton label="Добавить зависимость" size="sm" onClick={onCreate}>
                     <Plus size={13} aria-hidden="true" />
-                </IconButton>
+                </IconButton>}
             </div>
             {dependencies.length === 0 && (
                 <p className="py-2 text-[11px] text-muted">Связей между задачами пока нет.</p>
@@ -42,7 +43,7 @@ export function DependencyPanel({
                     return (
                         <div
                             key={dependency.id}
-                            className="group flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 transition-colors hover:bg-white/[0.035]"
+                            className="group flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 transition-colors hover:bg-hover"
                             title="Finish-to-Start"
                         >
                             <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-secondary">

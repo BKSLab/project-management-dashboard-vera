@@ -6,6 +6,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from src.schemas.agent_tools import AgentToolRunSchema
+from src.schemas.knowledge import KnowledgeSourceSchema
+
 EntityType = Literal["TASK", "DOCUMENT", "RISK", "MILESTONE", "WBS_NODE"]
 Reaction = Literal["👍", "❤️", "👀", "✅", "🎉"]
 PositiveId = Annotated[int, Field(gt=0)]
@@ -114,9 +117,35 @@ class ChatReplyView(BaseModel):
 
     id: int
     seq: int
+    author_type: Literal["USER", "AGENT"] = "USER"
     author: ChatUser | None
     content: str
     deleted: bool
+
+
+class ChatAgentView(BaseModel):
+    """Состояние ответа Веры: печатает, готов или ошибка, и его карточки."""
+
+    name: str = Field(description="Имя агента для людей — «Вера».")
+    status: Literal["queued", "processing", "completed", "failed"] = Field(
+        description="queued/processing — Вера печатает; completed — ответ; failed — ошибка."
+    )
+    error: str | None = Field(description="Причина ошибки; текст ошибки уже в content.")
+    progress: str | None = Field(
+        None,
+        description=(
+            "Что Вера делает сейчас, пока готовит ответ («Ищу задачи…»); "
+            "null — статуса нет или ответ завершён."
+        ),
+    )
+    requester: ChatUser | None = Field(description="Кто позвал Веру; его права действуют.")
+    request_message_id: int = Field(description="Сообщение участника, на которое отвечает Вера.")
+    sources: list[KnowledgeSourceSchema] = Field(
+        description="Карточки сущностей проекта, подтверждающие ответ."
+    )
+    actions: list[AgentToolRunSchema] = Field(
+        description="Действия ответа; pending ждёт решения в карточке."
+    )
 
 
 class ChatReactionView(BaseModel):
@@ -133,7 +162,7 @@ class ChatMessageView(BaseModel):
     chat_id: int
     project_id: int
     seq: int
-    author_type: Literal["USER"] = "USER"
+    author_type: Literal["USER", "AGENT"] = "USER"
     author: ChatUser | None
     client_message_id: UUID
     content: str
@@ -146,6 +175,7 @@ class ChatMessageView(BaseModel):
     entities: list[ChatEntityView]
     attachments: list[ChatAttachmentView]
     reactions: list[ChatReactionView]
+    agent: ChatAgentView | None = None
 
 
 class ProjectChatView(BaseModel):

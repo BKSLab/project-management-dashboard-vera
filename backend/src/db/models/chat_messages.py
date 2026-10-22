@@ -5,11 +5,13 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     Computed,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    String,
     Text,
     UniqueConstraint,
     Uuid,
@@ -21,7 +23,7 @@ from .base import Base, TimestampMixin
 
 
 class ChatMessage(TimestampMixin, Base):
-    """Сообщение участника с серверным порядком и ключом повторной отправки."""
+    """Сообщение участника или Тима с серверным порядком и ключом повторной отправки."""
 
     __tablename__ = "chat_messages"
     __table_args__ = (
@@ -39,6 +41,10 @@ class ChatMessage(TimestampMixin, Base):
             name="fk_chat_reply_same_chat",
         ),
         Index("ix_chat_messages_search", "search_vector", postgresql_using="gin"),
+        CheckConstraint("author_kind IN ('user', 'agent')", name="ck_chat_message_author_kind"),
+        CheckConstraint(
+            "author_kind = 'user' OR author_user_id IS NULL", name="ck_chat_agent_message_author"
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, doc="ID сообщения.", comment="ID сообщения.")
@@ -49,6 +55,12 @@ class ChatMessage(TimestampMixin, Base):
     )
     author_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), doc="Автор.", comment="Автор."
+    )
+    author_kind: Mapped[str] = mapped_column(
+        String(16),
+        server_default="user",
+        doc="Автор: user — участник, agent — Тим.",
+        comment="Автор: user — участник, agent — Тим.",
     )
     content: Mapped[str] = mapped_column(
         Text, doc="Безопасный текст сообщения.", comment="Безопасный текст сообщения."

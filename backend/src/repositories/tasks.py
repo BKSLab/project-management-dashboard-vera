@@ -6,12 +6,16 @@ from sqlalchemy import Result, Row, and_, case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db.models.project_members import ProjectMember
 from src.db.models.project_stages import ProjectStage
+from src.db.models.projects import Project
+from src.db.models.task_participants import TaskParticipant, TaskParticipantRole
 from src.db.models.tasks import Task, TaskPriority
 from src.exceptions.tasks import (
     TaskNumberAlreadyExistsRepositoryError,
     TasksRepositoryError,
 )
+from src.schemas.enums import TaskStatus
 from src.utils.db_errors import get_integrity_constraint_name
 from src.utils.deadlines import due_soon_sql, overdue_sql
 from src.utils.fts import (
@@ -22,8 +26,10 @@ from src.utils.fts import (
 )
 
 logger = logging.getLogger(__name__)
+CLOSED_STATUSES = (TaskStatus.DONE, TaskStatus.CANCELLED)
+PERSONAL_NUMBERS_LOCK_KEY = 7_310_001
 
-TASK_NUMBER_CONSTRAINTS = frozenset({"uq_tasks_project_number"})
+TASK_NUMBER_CONSTRAINTS = frozenset({"uq_tasks_project_number", "uq_tasks_personal_number"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,7 +312,9 @@ class TasksRepository:
         """
         try:
             result = await self.db_session.execute(
-                select(Task).where(Task.id == task_id).with_for_update()
+                select(Task)
+                .where(Task.id == task_id)
+                .with_for_update()
                 .execution_options(populate_existing=True)
             )
             return result.scalar_one_or_none()
@@ -971,7 +979,7 @@ class TasksRepository:
         except IntegrityError as error:
             await self.db_session.rollback()
             if get_integrity_constraint_name(error) in TASK_NUMBER_CONSTRAINTS:
-                project_id = int(data.get("project_id", 0))
+                project_id = int(data.get("project_id") or 0)
                 number = int(data.get("number", 0))
                 logger.warning("⚠️ Номер %s уже занят в проекте id=%s.", number, project_id)
                 raise TaskNumberAlreadyExistsRepositoryError(
@@ -1045,6 +1053,356 @@ class TasksRepository:
             logger.error("❌ Не удалось удалить задачу id=%s.", task.id, exc_info=True)
             raise TasksRepositoryError(f"Ошибка удаления задачи id={task.id}.") from error
 
+    async def relocate(self, *, task_id: int, data: dict) -> None:
+        """Календарь проектных и разовых задач с доступом по локальным назначениям."""
+        try:
+            async with self.db_session.begin_nested():
+                await self.db_session.execute(
+                    update(Task)
+                    .where(Task.id == task_id)
+                    .values(**data)
+                    .execution_options(synchronize_session="fetch")
+                )
+        except IntegrityError as error:
+            if get_integrity_constraint_name(error) in TASK_NUMBER_CONSTRAINTS:
+                logger.warning("⚠️ Номер %s в цели переноса занят.", data.get("number"))
+                raise TaskNumberAlreadyExistsRepositoryError(
+                    project_id=int(data.get("project_id") or 0),
+                    number=int(data.get("number") or 0),
+                ) from error
+            await self.db_session.rollback()
+            logger.error("❌ Ограничение БД не позволило перенести задачу id=%s.", task_id)
+            raise TasksRepositoryError(
+                f"Ошибка ограничения БД при переносе задачи id={task_id}."
+            ) from error
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось перенести задачу id=%s.", task_id, exc_info=True)
+            raise TasksRepositoryError(f"Ошибка переноса задачи id={task_id}.") from error
+
+    async def lock_personal_numbers(self) -> None:
+        """Календарь проектных и разовых задач с доступом по локальным назначениям."""
+        try:
+            await self.db_session.execute(
+                select(func.pg_advisory_xact_lock(PERSONAL_NUMBERS_LOCK_KEY))
+            )
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось заблокировать счётчик разовых задач.", exc_info=True)
+            raise TasksRepositoryError("Ошибка блокировки счётчика разовых задач.") from error
+
+    async def get_next_personal_number(self) -> int:
+        """Возвращает следующий номер разовой задачи (общий счётчик).
+
+        Returns:
+            Номер для новой разовой задачи, начиная с ``1``.
+
+        Raises:
+            TasksRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        try:
+            result: Result = await self.db_session.execute(
+                select(func.coalesce(func.max(Task.number), 0) + 1).where(Task.project_id.is_(None))
+            )
+            return int(result.scalar_one())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить номер разовой задачи.", exc_info=True)
+            raise TasksRepositoryError("Ошибка получения номера разовой задачи.") from error
+
+    async def get_for_person(
+        self,
+        *,
+        user_id: int,
+        roles: set[TaskParticipantRole],
+        include_closed: bool,
+        limit: int,
+        outside_projects_only: bool = False,
+        attention_task_ids: set[int] | None = None,
+    ) -> list[Task]:
+        """Календарь проектных и разовых задач с доступом по локальным назначениям."""
+        if not roles:
+            return []
+        try:
+            participation = (
+                select(TaskParticipant.task_id)
+                .outerjoin(ProjectMember, ProjectMember.id == TaskParticipant.project_member_id)
+                .where(
+                    func.coalesce(TaskParticipant.user_id, ProjectMember.user_id) == user_id,
+                    TaskParticipant.role.in_(roles),
+                )
+            )
+            stmt = (
+                select(Task)
+                .outerjoin(ProjectStage, ProjectStage.id == Task.stage_id)
+                .where(Task.id.in_(participation))
+                .order_by(Task.due_date.asc().nulls_last(), Task.id.desc())
+                .limit(limit)
+            )
+            if attention_task_ids is not None:
+                stmt = stmt.where(Task.id.in_(attention_task_ids))
+            if outside_projects_only:
+                stmt = stmt.where(Task.project_id.is_(None))
+            if not include_closed:
+                stmt = stmt.where(
+                    or_(
+                        and_(Task.project_id.is_not(None), ProjectStage.is_done_stage.is_(False)),
+                        and_(Task.project_id.is_(None), Task.status.not_in(CLOSED_STATUSES)),
+                    )
+                )
+            result: Result = await self.db_session.execute(stmt)
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось получить задачи пользователя id=%s.", user_id, exc_info=True
+            )
+            raise TasksRepositoryError("Ошибка получения задач пользователя.") from error
+
+    async def get_latest_open_end_date(self, *, project_id: int) -> date | None:
+        """Возвращает самый поздний конец открытой задачи проекта — цель критического пути."""
+        try:
+            result = await self.db_session.execute(
+                select(func.max(func.coalesce(Task.due_date, Task.start_date)))
+                .join(ProjectStage, ProjectStage.id == Task.stage_id)
+                .where(Task.project_id == project_id, ProjectStage.is_done_stage.is_(False))
+            )
+            return result.scalar_one_or_none()
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось получить последний срок проекта id=%s.",
+                project_id,
+                exc_info=True,
+            )
+            raise TasksRepositoryError("Ошибка получения последнего срока проекта.") from error
+
+    async def personal_access(self, task_id: int, user_id: int) -> tuple[bool, bool]:
+        """Return participation and ownership of a personal task."""
+        try:
+            result = await self.db_session.execute(
+                select(TaskParticipant.role)
+                .join(Task, Task.id == TaskParticipant.task_id)
+                .where(
+                    Task.id == task_id,
+                    Task.project_id.is_(None),
+                    TaskParticipant.user_id == user_id,
+                )
+            )
+            roles = set(result.scalars())
+            return bool(roles), TaskParticipantRole.REPORTER in roles
+        except SQLAlchemyError as error:
+            await self.db_session.rollback()
+            raise TasksRepositoryError("Cannot read personal task access.") from error
+
+    async def get_person_calendar_range(
+        self,
+        *,
+        user_id: int,
+        date_from: date,
+        date_to: date,
+        visible_project_ids: set[int] | None,
+        limit: int,
+        project_id: int | None = None,
+        priority: TaskPriority | None = None,
+        include_cancelled: bool = False,
+        require_due_date: bool = False,
+    ) -> list[Task]:
+        """Возвращает задачи любого вида, где пользователь исполнитель, в диапазоне дат.
+
+        Интервал задачи считается так же, как в календаре проекта:
+        отсутствующая граница подменяется известной.
+
+        Args:
+            user_id: Исполнитель.
+            date_from: Первый день диапазона включительно.
+            date_to: Последний день диапазона включительно.
+            visible_project_ids: Проекты, видимые пользователю; ``None`` — все.
+            limit: Максимальное число задач.
+            project_id: Только задачи этого проекта.
+            priority: Только задачи этого приоритета.
+            include_cancelled: Возвращать ли отменённые задачи вне проекта.
+            require_due_date: Только задачи с ``due_date``.
+
+        Returns:
+            Задачи по сроку, затем по id.
+
+        Raises:
+            TasksRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        try:
+            interval_start = func.coalesce(Task.start_date, Task.due_date)
+            interval_end = func.coalesce(Task.due_date, Task.start_date)
+            stmt = _person_executor_scope(
+                select(Task),
+                user_id=user_id,
+                visible_project_ids=visible_project_ids,
+            ).where(interval_start <= date_to, interval_end >= date_from)
+            if project_id is not None:
+                stmt = stmt.where(Task.project_id == project_id)
+            if priority is not None:
+                stmt = stmt.where(Task.priority == priority)
+            if not include_cancelled:
+                stmt = stmt.where(
+                    or_(Task.project_id.is_not(None), Task.status != TaskStatus.CANCELLED)
+                )
+            if require_due_date:
+                stmt = stmt.where(Task.due_date.is_not(None))
+            result: Result = await self.db_session.execute(
+                stmt.order_by(Task.due_date.asc().nulls_last(), Task.id).limit(limit)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось получить календарь пользователя id=%s.", user_id, exc_info=True
+            )
+            raise TasksRepositoryError("Ошибка получения календаря пользователя.") from error
+
+    async def get_person_unscheduled_page(
+        self,
+        *,
+        user_id: int,
+        visible_project_ids: set[int] | None,
+        cursor: int | None,
+        limit: int,
+    ) -> list[Task]:
+        """Возвращает страницу незавершённых задач исполнителя без обеих дат.
+
+        Args:
+            user_id: Исполнитель.
+            visible_project_ids: Проекты, видимые пользователю; ``None`` — все.
+            cursor: Последний id прошлой страницы.
+            limit: Размер страницы; возвращается до ``limit + 1`` строк.
+
+        Returns:
+            Задачи по возрастанию id.
+
+        Raises:
+            TasksRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        try:
+            stmt = _person_executor_scope(
+                select(Task).outerjoin(ProjectStage, ProjectStage.id == Task.stage_id),
+                user_id=user_id,
+                visible_project_ids=visible_project_ids,
+            ).where(Task.start_date.is_(None), Task.due_date.is_(None), _open_task_sql())
+            if cursor is not None:
+                stmt = stmt.where(Task.id > cursor)
+            result: Result = await self.db_session.execute(stmt.order_by(Task.id).limit(limit + 1))
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось получить задачи без срока пользователя id=%s.",
+                user_id,
+                exc_info=True,
+            )
+            raise TasksRepositoryError("Ошибка получения задач без срока.") from error
+
+    async def get_person_calendar_counts(
+        self,
+        *,
+        user_id: int,
+        visible_project_ids: set[int] | None,
+        today: date,
+        soon_until: date,
+    ) -> CalendarTaskCounts:
+        """Считает просроченные, близкие к сроку и бессрочные незавершённые задачи исполнителя.
+
+        Args:
+            user_id: Исполнитель.
+            visible_project_ids: Проекты, видимые пользователю; ``None`` — все.
+            today: Текущая дата клиента.
+            soon_until: Верхняя граница окна «скоро срок».
+
+        Returns:
+            Счётчики; ``drifted`` не считается и равен нулю.
+
+        Raises:
+            TasksRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        try:
+            stmt = _person_executor_scope(
+                select(
+                    func.count().filter(Task.due_date < today).label("overdue"),
+                    func.count()
+                    .filter(Task.due_date >= today, Task.due_date <= soon_until)
+                    .label("due_soon"),
+                    func.count()
+                    .filter(Task.start_date.is_(None), Task.due_date.is_(None))
+                    .label("unscheduled"),
+                )
+                .select_from(Task)
+                .outerjoin(ProjectStage, ProjectStage.id == Task.stage_id),
+                user_id=user_id,
+                visible_project_ids=visible_project_ids,
+            ).where(_open_task_sql())
+            row = (await self.db_session.execute(stmt)).one()
+            return CalendarTaskCounts(
+                overdue=int(row.overdue or 0),
+                due_soon=int(row.due_soon or 0),
+                unscheduled=int(row.unscheduled or 0),
+                drifted=0,
+            )
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error(
+                "❌ Не удалось посчитать сводку календаря пользователя id=%s.",
+                user_id,
+                exc_info=True,
+            )
+            raise TasksRepositoryError("Ошибка подсчёта сводки календаря.") from error
+
+    async def get_workload_rows(
+        self,
+        *,
+        user_ids: set[int],
+        date_from: date,
+        date_to: date,
+        limit: int,
+    ) -> list[Row]:
+        """Календарь проектных и разовых задач с доступом по локальным назначениям."""
+        if not user_ids:
+            return []
+        try:
+            executor = func.coalesce(TaskParticipant.user_id, ProjectMember.user_id)
+            interval_start = func.coalesce(Task.start_date, Task.due_date)
+            interval_end = func.coalesce(Task.due_date, Task.start_date)
+            stmt = (
+                select(
+                    executor.label("user_id"),
+                    Task.id.label("task_id"),
+                    Task.project_id,
+                    Task.number,
+                    Task.title,
+                    Task.start_date,
+                    Task.due_date,
+                    Project.key.label("project_key"),
+                    Project.name.label("project_name"),
+                )
+                .select_from(TaskParticipant)
+                .join(Task, Task.id == TaskParticipant.task_id)
+                .outerjoin(ProjectMember, ProjectMember.id == TaskParticipant.project_member_id)
+                .outerjoin(ProjectStage, ProjectStage.id == Task.stage_id)
+                .outerjoin(Project, Project.id == Task.project_id)
+                .where(
+                    TaskParticipant.role == TaskParticipantRole.EXECUTOR,
+                    executor.in_(user_ids),
+                    interval_start <= date_to,
+                    interval_end >= date_from,
+                    _open_task_sql(),
+                )
+                .order_by(executor, interval_start, Task.id)
+                .limit(limit)
+            )
+            result: Result = await self.db_session.execute(stmt)
+            return list(result.all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить задачи для загрузки команды.", exc_info=True)
+            raise TasksRepositoryError("Ошибка получения загрузки команды.") from error
+
 
 def _extract_task_number(search: str) -> int | None:
     """Возвращает номер задачи из запроса вида ``PROJ-142`` или ``142``."""
@@ -1070,3 +1428,33 @@ def _apply_calendar_filters(
     if wbs_node_id is not None:
         stmt = stmt.where(Task.wbs_node_id == wbs_node_id)
     return stmt
+
+
+def _person_executor_scope(stmt, *, user_id: int, visible_project_ids: set[int] | None):
+    """Сужает запрос до задач, где пользователь исполнитель и которые ему видны.
+
+    Исполнитель определяется так же, как во вкладке «Делаю» «Моих задач»:
+    участник с ролью EXECUTOR напрямую или через участника проекта.
+    Проектная задача дополнительно ограничена видимыми проектами — задача
+    вне проекта видна своему исполнителю по правилам доступа.
+    """
+    participation = (
+        select(TaskParticipant.task_id)
+        .outerjoin(ProjectMember, ProjectMember.id == TaskParticipant.project_member_id)
+        .where(
+            func.coalesce(TaskParticipant.user_id, ProjectMember.user_id) == user_id,
+            TaskParticipant.role == TaskParticipantRole.EXECUTOR,
+        )
+    )
+    stmt = stmt.where(Task.id.in_(participation))
+    if visible_project_ids is not None:
+        stmt = stmt.where(or_(Task.project_id.is_(None), Task.project_id.in_(visible_project_ids)))
+    return stmt
+
+
+def _open_task_sql():
+    """Условие «задача не завершена»; запрос обязан присоединить ProjectStage."""
+    return or_(
+        and_(Task.project_id.is_not(None), ProjectStage.is_done_stage.is_(False)),
+        and_(Task.project_id.is_(None), Task.status.not_in(CLOSED_STATUSES)),
+    )

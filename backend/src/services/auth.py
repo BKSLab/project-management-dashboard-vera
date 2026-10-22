@@ -6,10 +6,13 @@
 """
 
 import logging
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 
 from src.db.models.api_tokens import ApiTokenScope
 from src.db.models.users import User
+from src.exceptions.api_keys import ApiKeyInvalidError, ApiKeyScopeError, ApiKeysRepositoryError
 from src.exceptions.api_tokens import ApiTokensRepositoryError
 from src.exceptions.auth import (
     AuthServiceError,
@@ -23,14 +26,30 @@ from src.exceptions.users import (
     UsernameConflictError,
     UsersRepositoryError,
 )
+from src.repositories.api_keys import ApiKeysRepository
 from src.repositories.api_tokens import ApiTokensRepository
 from src.repositories.users import UsersRepository
 from src.schemas.users import UserSchema, UserSummarySchema
+from src.utils.api_keys import is_service_key, key_prefix_of, verify_api_key
+from src.utils.api_scopes import API_SCOPES, WRITE_SCOPES
 from src.utils.api_tokens import hash_token_secret
+from src.utils.request_actor import RequestActor
 from src.utils.security import hash_password, secrets_match, verify_password
 from src.utils.tokens import create_access_token, decode_access_token
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ApiKeyGrant:
+    """Права ключа, принадлежащего локальному пользователю."""
+
+    key_id: uuid.UUID
+    label: str
+    key_prefix: str
+    scopes: frozenset[str]
+    owner_user_id: int
+    kind: str = "personal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +79,30 @@ class Principal:
     middle_name: str | None
     scope: ApiTokenScope
     via_api_token: bool
+    api_key: ApiKeyGrant | None = None
+
+    @property
+    def login(self) -> str:
+        return self.username
+
+    def allows(self, scope: str) -> bool:
+        if self.api_key is not None:
+            return scope in self.api_key.scopes
+        if not self.via_api_token:
+            return True
+        return scope in API_SCOPES and (scope not in WRITE_SCOPES or self.can_write)
+
+    def require(self, scope: str) -> None:
+        if not self.allows(scope):
+            granted = sorted(self.api_key.scopes) if self.api_key else []
+            raise ApiKeyScopeError(scope, granted)
+
+    def request_actor(self) -> RequestActor:
+        return RequestActor(
+            user_id=self.user_id,
+            name=self.full_name,
+            via_api_key_label=self.api_key.label if self.api_key else None,
+        )
 
     @property
     def can_write(self) -> bool:
@@ -88,6 +131,7 @@ class AuthService:
         *,
         tokens_repository: ApiTokensRepository,
         invite_code: str,
+        api_keys_repository: ApiKeysRepository | None = None,
     ):
         """Создаёт сервис аутентификации.
 
@@ -100,6 +144,7 @@ class AuthService:
         self.users_repository = users_repository
         self.tokens_repository = tokens_repository
         self.invite_code = invite_code
+        self.api_keys_repository = api_keys_repository
 
     async def resolve_principal(
         self,
@@ -131,6 +176,8 @@ class AuthService:
             AuthServiceError: Если проверить учётные данные не удалось.
         """
         if bearer_secret is not None:
+            if is_service_key(bearer_secret):
+                return await self._principal_from_api_key(secret=bearer_secret)
             return await self._principal_from_token(secret=bearer_secret)
         if not session_token:
             raise NotAuthenticatedError()
@@ -158,6 +205,41 @@ class AuthService:
             # Отметка использования — диагностика, а не условие доступа.
             logger.warning("⚠️ Не удалось отметить использование токена id=%s.", token.id)
         return _to_principal(user, scope=token.scope, via_api_token=True)
+
+    async def _principal_from_api_key(self, *, secret: str) -> Principal:
+        prefix = key_prefix_of(secret)
+        if prefix is None or self.api_keys_repository is None:
+            raise ApiKeyInvalidError()
+        try:
+            key = await self.api_keys_repository.get_active_by_prefix(prefix)
+            if key is None or not verify_api_key(secret, key.key_hash):
+                raise ApiKeyInvalidError()
+            if key.kind not in {"personal", "service"} or key.owner_user_id is None:
+                raise ApiKeyInvalidError()
+            if key.expires_at is not None and key.expires_at <= datetime.now(UTC):
+                raise ApiKeyInvalidError()
+            user = await self._load_active_user(key.owner_user_id)
+            scopes = frozenset(str(scope) for scope in key.scopes if scope in API_SCOPES)
+            principal = _to_principal(
+                user,
+                scope=ApiTokenScope.WRITE if scopes & WRITE_SCOPES else ApiTokenScope.READ,
+                via_api_token=True,
+            )
+            grant = ApiKeyGrant(
+                key_id=key.id,
+                label=key.label,
+                key_prefix=key.key_prefix,
+                scopes=scopes,
+                owner_user_id=user.id,
+                kind=key.kind,
+            )
+            try:
+                await self.api_keys_repository.touch_last_used(key, commit=True)
+            except ApiKeysRepositoryError:
+                logger.warning("Не удалось отметить использование API-ключа id=%s.", key.id)
+            return replace(principal, api_key=grant)
+        except ApiKeysRepositoryError as error:
+            raise AuthServiceError(str(error)) from error
 
     async def _load_active_user(self, user_id: int) -> User:
         """Загружает пользователя и проверяет, что он не отключён."""

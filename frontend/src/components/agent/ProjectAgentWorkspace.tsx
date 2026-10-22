@@ -1,6 +1,6 @@
-import { useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
     Bot,
     Database,
@@ -20,12 +20,14 @@ import { useCurrentUser } from "@/lib/useAuth";
 import { useAgentChatStore } from "@/stores/agentChat";
 import { useAgentConversations } from "@/lib/useAgentConversations";
 import { useRenderedMarkdown } from "@/lib/useRenderedMarkdown";
+import { TimThinking } from "@/components/chat/TimChatReply";
 import { AgentEntityCard } from "@/components/agent/AgentEntityCard";
 import { actionSources } from "@/lib/agentCards";
 import { Button } from "@/components/ui/Button";
 import { AgentActionCard } from "@/components/projects/AgentActionCard";
 import { ErrorMessage } from "@/components/ui/States";
 import { cn } from "@/lib/cn";
+import { TIM_PERSONA } from "@/lib/tim";
 
 const STARTERS = [
     "Дай краткую сводку проекта и текущие риски",
@@ -35,7 +37,7 @@ const STARTERS = [
 ];
 
 const SOURCE_LABELS: Record<KnowledgeEntityType, string> = {
-    project: "Паспорт", task: "Задачи и чек-листы", document: "Документы", comment: "Комментарии",
+    project: "Паспорт", task: "Задачи и чек-листы", task_report: "Отчёты задач", document: "Документы", comment: "Комментарии",
     attachment: "Файлы", milestone: "Вехи", risk: "Риски", wbs_node: "Разделы ИСР",
     stage: "Стадии", sticker: "Стикеры", member: "Команда", activity: "История задач",
     deadline_change: "История сроков", analytics_report: "Сохранённые отчёты",
@@ -52,11 +54,16 @@ function MarkdownAnswer({ content }: { content: string }) {
     );
 }
 
-export function ProjectAgentWorkspace({ project, compact = false }: { project: Project; compact?: boolean }) {
+export function ProjectAgentWorkspace({ project, compact = false, knowledgeOnly = false }: { project: Project; compact?: boolean; knowledgeOnly?: boolean }) {
     const navigate = useNavigate();
+    const location = useLocation();
     const queryClient = useQueryClient();
     const endRef = useRef<HTMLDivElement>(null);
-    const [searchParams, setSearchParams] = useSearchParams();
+    const [searchParams] = useSearchParams();
+    const updateSearchParams = useCallback((update: (previous: URLSearchParams) => URLSearchParams, options?: { replace?: boolean }) => {
+        const next = update(new URLSearchParams(location.search));
+        navigate({ pathname: location.pathname, search: next.toString(), hash: location.hash }, options);
+    }, [location, navigate]);
     const userId = useCurrentUser().data?.id ?? 0;
     const sessionKey = `${userId}:${project.id}`;
     const rememberedId = useAgentChatStore((state) => state.conversations[sessionKey]);
@@ -87,7 +94,7 @@ export function ProjectAgentWorkspace({ project, compact = false }: { project: P
 
     function selectConversation(id: number) {
         select(sessionKey, id);
-        if (!compact && mounted.current) setSearchParams((previous) => { const next = new URLSearchParams(previous); next.set("conversation", String(id)); return next; });
+        if (!compact && mounted.current) updateSearchParams((previous) => { const next = new URLSearchParams(previous); next.set("conversation", String(id)); return next; });
         chat.send.reset();
         chat.retry.reset();
         chat.decide.reset();
@@ -123,11 +130,11 @@ export function ProjectAgentWorkspace({ project, compact = false }: { project: P
         return () => { active = false; };
     }, [completedActions, project.id, project.key, queryClient, navigate]);
     useEffect(() => {
-        if (conversationId == null && firstConversationId != null) {
+        if (!knowledgeOnly && conversationId == null && firstConversationId != null) {
             select(sessionKey, firstConversationId);
-            if (!compact) setSearchParams((previous) => { const next = new URLSearchParams(previous); next.set("conversation", String(firstConversationId)); return next; }, { replace: true });
+            if (!compact) updateSearchParams((previous) => { const next = new URLSearchParams(previous); next.set("conversation", String(firstConversationId)); return next; }, { replace: true });
         }
-    }, [conversationId, firstConversationId, compact, select, sessionKey, setSearchParams]);
+    }, [conversationId, firstConversationId, compact, knowledgeOnly, select, sessionKey, updateSearchParams]);
 
     const statusQuery = useQuery({
         enabled: !compact,
@@ -232,17 +239,17 @@ export function ProjectAgentWorkspace({ project, compact = false }: { project: P
 
     return (
         <div className="h-full min-h-0">
-            <div className={cn("mx-auto grid h-full w-full", !compact && "max-w-6xl gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_280px]")}>
-                <section aria-label="Диалог с агентом" className={cn("ai-surface flex min-h-0 min-w-0 flex-col overflow-hidden", !compact && "rounded-[var(--radius-panel)] border border-ai-border shadow-card")}>
+            <div className={cn("mx-auto grid h-full w-full", !compact && "max-w-6xl gap-4 p-5", !compact && !knowledgeOnly && "lg:grid-cols-[minmax(0,1fr)_280px]")}>
+                <section aria-label="Личный диалог с Верой" className={cn("ai-surface flex min-h-0 min-w-0 flex-col overflow-hidden", !compact && "rounded-[var(--radius-panel)] border border-ai-border shadow-card", knowledgeOnly && "hidden")}>
                     {!compact && <div className="flex items-center justify-between gap-3 border-b border-line-subtle px-4 py-3">
                         <div className="flex min-w-0 items-center gap-2.5">
                             <span className="ai-mark flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-ai-blue">
                                 <Bot size={17} aria-hidden="true" />
                             </span>
                             <div className="min-w-0">
-                                <h2 className="text-[13px] font-semibold text-primary">Агент проекта</h2>
+                                <h2 className="text-[13px] font-semibold text-primary">{TIM_PERSONA}</h2>
                                 <p className="truncate text-[11px] text-muted">
-                                    {project.name} · личные диалоги
+                                    {project.name} · видите только вы
                                 </p>
                             </div>
                         </div>
@@ -282,7 +289,7 @@ export function ProjectAgentWorkspace({ project, compact = false }: { project: P
                                         Спросите что угодно о {project.name}
                                     </h3>
                                     <p className="text-[13px] text-muted">
-                                        Агент сверяет семантическую базу с актуальным состоянием задач.
+                                        Вера учитывает знания проекта и актуальное состояние задач.
                                     </p>
                                 </div>
                                 <div className={cn("grid w-full border-y border-line-subtle", !compact && "sm:grid-cols-2")}>
@@ -319,7 +326,7 @@ export function ProjectAgentWorkspace({ project, compact = false }: { project: P
                                             )}
                                         >
                                             {message.status === "queued" || message.status === "processing" ? (
-                                                <div className="flex items-center gap-2 text-[12px] text-muted"><RefreshCw size={13} className="animate-spin" />{message.status === "queued" ? "Вопрос сохранён. Ожидаю ответа…" : "Агент сверяет источники…"}</div>
+                                                <TimThinking progress={message.progress} />
                                             ) : message.status === "failed" ? (
                                                 <div className="space-y-2 text-[12px]">
                                                     <p className="text-danger">{message.error}</p>
@@ -358,7 +365,7 @@ export function ProjectAgentWorkspace({ project, compact = false }: { project: P
                             {file.original_name} <button type="button" aria-label={`Убрать ${file.original_name}`} disabled={sending || busy} onClick={() => void removeFile(file.id)}>×</button>
                         </li>)}</ul>}
                         <div className="material-metal mx-auto flex max-w-3xl items-end gap-2 rounded-[var(--radius-card)] border border-ai-border p-2 transition-[border-color,box-shadow] focus-within:border-ai-blue/55 focus-within:shadow-focus">
-                            <input type="file" multiple ref={fileInputRef} aria-label="Файлы для агента" className="hidden" onChange={(event) => { void uploadFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
+                            <input type="file" multiple ref={fileInputRef} aria-label="Файлы для Веры" className="hidden" onChange={(event) => { void uploadFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
                             <Button type="button" size="sm" disabled={sending || busy || loading || selectedFiles.length >= 5} title="Добавить файл до 10 МБ" onClick={() => fileInputRef.current?.click()} icon={<Paperclip size={14} />}>Файл</Button>
                             <textarea
                                 value={question}
@@ -367,7 +374,7 @@ export function ProjectAgentWorkspace({ project, compact = false }: { project: P
                                 rows={2}
                                 maxLength={2000}
                                 placeholder="Спросите о проекте…"
-                                aria-label="Вопрос агенту"
+                                aria-label="Вопрос Вере по проекту"
                                 disabled={sending || busy || loading}
                                 className="scrollbar-thin min-h-10 min-w-0 flex-1 resize-none bg-transparent px-1.5 py-1 text-[13px] text-primary outline-none placeholder:text-disabled"
                             />
@@ -387,7 +394,7 @@ export function ProjectAgentWorkspace({ project, compact = false }: { project: P
                     </form>
                 </section>
 
-                {!compact && <aside className="scrollbar-thin hidden min-h-0 flex-col gap-3 overflow-y-auto lg:flex">
+                {!compact && <aside aria-label="Знания проекта" className={cn("scrollbar-thin min-h-0 flex-col gap-3 overflow-y-auto", knowledgeOnly ? "mx-auto flex w-full max-w-3xl" : "hidden lg:flex")}>
                     <section className="flex flex-col gap-3 rounded-[var(--radius-card)] bg-surface/55 p-4">
                         <div className="flex items-center gap-2 text-[13px] font-semibold text-secondary">
                             <Database size={14} aria-hidden="true" />
@@ -462,7 +469,7 @@ export function ProjectAgentWorkspace({ project, compact = false }: { project: P
                         </section>
                     )}
                     <section className="border-t border-line-subtle px-1 pt-4 text-[12px] leading-relaxed text-muted">
-                        <p className="mb-2 font-medium text-secondary">Что знает агент</p>
+                        <p className="mb-2 font-medium text-secondary">Что знает Вера</p>
                         <ul className="flex list-disc flex-col gap-1 pl-4">
                             <li>паспорт, команда, стадии и структура проекта;</li>
                             <li>задачи, чек-листы, риски, вехи и стикеры;</li>

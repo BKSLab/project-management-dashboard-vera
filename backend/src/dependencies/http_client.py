@@ -14,9 +14,7 @@ from fastapi import Depends, Request
 from src.core.app_state import RUNTIME_STATE_KEY
 from src.knowledge.runtime import KnowledgeRuntime
 
-RUNTIME_MISSING = (
-    "Клиенты внешних API недоступны: контейнер не создан в lifespan приложения."
-)
+RUNTIME_MISSING = "Клиенты внешних API недоступны: контейнер не создан в lifespan приложения."
 
 
 def get_knowledge_runtime(request: Request) -> KnowledgeRuntime:

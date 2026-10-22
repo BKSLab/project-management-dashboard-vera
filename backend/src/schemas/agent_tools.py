@@ -25,3 +25,30 @@ class AgentToolDecisionSchema(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     decision: Literal["approve", "reject"] = Field(description="Выполнить или отклонить действие.")
+
+
+class AgentPendingProjectSchema(BaseModel):
+    """Проект, в котором выполнится действие."""
+
+    id: int = Field(description="ID проекта.")
+    key: str = Field(description="Ключ проекта.")
+    name: str = Field(description="Название проекта.")
+
+
+class AgentPendingActionSchema(BaseModel):
+    """Предложенное агентом действие для страницы подтверждения по ссылке."""
+
+    id: UUID = Field(description="ID действия.")
+    tool_name: str = Field(description="Имя инструмента.")
+    title: str = Field(description="Что будет сделано, кратко.")
+    status: Literal["pending", "completed", "rejected", "failed", "expired"] = Field(
+        description="Состояние; expired — срок подтверждения истёк, действие не выполнено."
+    )
+    arguments: dict[str, Any] = Field(description="Сохранённые параметры действия.")
+    preview: dict[str, Any] = Field(
+        description="Объекты, которые затронет действие, на момент предложения."
+    )
+    result: dict[str, Any] = Field(description="Результат решения; пусто до решения.")
+    project: AgentPendingProjectSchema = Field(description="Проект действия.")
+    created_at: datetime = Field(description="Время предложения.")
+    expires_at: datetime = Field(description="До какого момента можно подтвердить.")

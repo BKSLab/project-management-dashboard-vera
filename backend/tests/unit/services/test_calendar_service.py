@@ -66,6 +66,7 @@ def build_service() -> tuple[
         drifted=0,
     )
     tasks.get_calendar_assignees.return_value = ["Анна"]
+    tasks.get_latest_open_end_date.return_value = None
     tasks.get_by_ids.return_value = []
     stages = AsyncMock(spec=ProjectStagesRepository)
     stages.get_by_project.return_value = [

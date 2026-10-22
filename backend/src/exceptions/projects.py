@@ -125,3 +125,40 @@ class ProjectOwnerRemovalError(ProjectsServiceError):
 
     def __init__(self):
         super().__init__(error_details=self.detail)
+
+
+class ProjectIconImageInvalidError(ProjectsServiceError):
+    """Загруженная картинка проекта не PNG, JPEG или WebP."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    detail = "Картинка проекта — только PNG, JPG или WebP до 2 МБ."
+
+    def __init__(self, reason: str):
+        super().__init__(error_details=reason)
+
+
+class ProjectIconImageNotFoundError(ProjectsServiceError):
+    """У проекта нет своей картинки."""
+
+    status_code = status.HTTP_404_NOT_FOUND
+    detail = "У проекта нет своей картинки."
+
+    def __init__(self, project_id: int):
+        super().__init__(error_details=f"У проекта id={project_id} нет картинки.")
+
+
+class ProjectIconImageTooLargeError(ProjectsServiceError):
+    """Картинка проекта больше допустимого размера."""
+
+    status_code = status.HTTP_413_CONTENT_TOO_LARGE
+    detail = "Картинка проекта должна быть не больше 2 МБ."
+
+    def __init__(self):
+        super().__init__(error_details=self.detail)
+
+
+class ProjectIconStorageError(ProjectsServiceError):
+    """Хранилище файлов не приняло или не отдало картинку проекта."""
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    detail = "Файловое хранилище недоступно, повторите позже."

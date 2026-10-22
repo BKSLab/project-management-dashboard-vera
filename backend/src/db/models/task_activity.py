@@ -26,6 +26,8 @@ class TaskActivityEventType(str, enum.Enum):
     WBS_NODE_CHANGED = "WBS_NODE_CHANGED"
     COMMENT_ADDED = "COMMENT_ADDED"
     CHECKLIST_CHANGED = "CHECKLIST_CHANGED"
+    TASK_MOVED = "TASK_MOVED"
+    LINKS_REMOVED = "LINKS_REMOVED"
 
 
 class TaskActivity(Base):
@@ -61,6 +63,24 @@ class TaskActivity(Base):
         nullable=True,
         doc="Новое значение.",
         comment="Текстовое представление нового значения.",
+    )
+    actor_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        doc="Кто выполнил изменение.",
+        comment="Пользователь, от имени которого сделано изменение; NULL — неизвестен.",
+    )
+    actor_name: Mapped[str | None] = mapped_column(
+        String(length=255),
+        nullable=True,
+        doc="Имя автора изменения.",
+        comment="Снимок имени автора изменения на момент события.",
+    )
+    via_api_key_label: Mapped[str | None] = mapped_column(
+        String(length=160),
+        nullable=True,
+        doc="Сервисный ключ, через который сделано изменение.",
+        comment="Имя API-ключа: изменение сделано агентом «через ключ»; NULL — напрямую.",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

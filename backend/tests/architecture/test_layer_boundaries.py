@@ -35,7 +35,10 @@ COMPOSITION_MODULES = {
     SRC / "dependencies" / "scopes.py",
     SRC / "dependencies" / "storage.py",
     SRC / "dependencies" / "clients.py",
+    SRC / "dependencies" / "board_editor.py",
+    SRC / "dependencies" / "task_attention.py",
     SRC / "mcp_server" / "services.py",
+    SRC / "mcp_server" / "app.py",
     SRC / "knowledge" / "composition.py",
     SRC / "knowledge" / "runtime.py",
     # Lifecycle и сборка общего чата с одним Redis transport на процесс.

@@ -28,7 +28,7 @@ export function CalendarRecentChanges({ changes, onOpenTask }: CalendarRecentCha
                         key={change.id}
                         type="button"
                         onClick={() => onOpenTask(change.task_id)}
-                        className="rounded-[var(--radius-control)] px-2 py-1.5 text-left transition-colors hover:bg-white/[0.035]"
+                        className="rounded-[var(--radius-control)] px-2 py-1.5 text-left transition-colors hover:bg-hover"
                     >
                         <span className="block truncate text-[11px] text-primary">
                             <span className="font-mono text-accent">{change.task_key}</span>{" "}

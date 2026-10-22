@@ -9,9 +9,10 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from testcontainers.postgres import PostgresContainer
 
@@ -32,13 +33,22 @@ MAX_ATTEMPTS = 3
 
 @pytest.fixture
 async def session_factory(postgres_container: PostgresContainer):
-    """Фабрика сессий над тестовым PostgreSQL с готовой схемой."""
+    """Изолирует глобальную очередь от заданий других интеграционных тестов."""
     url = postgres_container.get_connection_url().replace("psycopg2", "asyncpg")
-    engine = create_async_engine(url)
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    yield async_sessionmaker(engine, expire_on_commit=False)
-    await engine.dispose()
+    database = f"knowledge_queue_{uuid4().hex}"
+    admin = create_async_engine(url, isolation_level="AUTOCOMMIT")
+    async with admin.connect() as connection:
+        await connection.execute(text(f'CREATE DATABASE "{database}"'))
+    engine = create_async_engine(admin.url.set(database=database))
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        yield async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        await engine.dispose()
+        async with admin.connect() as connection:
+            await connection.execute(text(f'DROP DATABASE "{database}"'))
+        await admin.dispose()
 
 
 @pytest.fixture
@@ -356,3 +366,24 @@ async def test_outbox_tracks_each_committed_transaction_and_rollback_is_atomic(
     await queue.finish([JobOutcome(job_id=first.id, chunks_count=2)], max_attempts=3)
     (second,) = await queue.claim_next_batch(limit=8)
     assert second.id != first.id
+
+
+async def test_outbox_claim_uses_database_clock_when_worker_clock_is_behind(
+    session_factory, project_id, monkeypatch
+):
+    """Задание, созданное DB-триггером сейчас, сразу доступно процессу с отстающими часами."""
+    async with session_factory() as session:
+        record = await session.get(Project, project_id)
+        record.name = "Изменение для индексации"
+        await session.commit()
+
+    class SlowWorkerClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) - timedelta(seconds=10)
+
+    monkeypatch.setattr("src.repositories.knowledge_index_jobs.datetime", SlowWorkerClock)
+    jobs = await make_queue(session_factory).claim_next_batch(limit=8)
+    assert len(jobs) == 1
+    assert jobs[0].project_id == project_id
+    assert jobs[0].status is KnowledgeIndexStatus.PROCESSING

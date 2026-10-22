@@ -33,3 +33,26 @@ class AgentToolOperationError(AgentToolsServiceError):
         super().__init__(str(error))
         self.status_code = error.status_code
         self.detail = error.detail
+
+
+class AgentToolArgumentsError(AgentToolConflictError):
+    """Аргументы действия не приняты: причина называет поле и ожидаемый формат."""
+
+    status_code = 422
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.detail = message
+
+
+class AgentToolDecidedError(AgentToolConflictError):
+    """По действию уже принято решение; повторно по ссылке его не принимают."""
+
+    detail = "По этому действию решение уже принято."
+
+
+class AgentToolExpiredError(AgentToolConflictError):
+    """Срок подтверждения прошёл: параметры могли устареть."""
+
+    status_code = 410
+    detail = "Срок подтверждения истёк. Попросите агента предложить действие заново."

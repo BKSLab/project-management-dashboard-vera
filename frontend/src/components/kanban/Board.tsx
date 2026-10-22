@@ -57,7 +57,7 @@ export function Board({
             map.set(stage.id, []);
         }
         for (const task of tasks) {
-            map.get(task.stage_id)?.push(task);
+            if (task.stage_id !== null) map.get(task.stage_id)?.push(task);
         }
         for (const list of map.values()) {
             list.sort((first, second) => first.position - second.position);

@@ -8,6 +8,30 @@ from src.schemas.project_stages import StageCreateSchema
 from src.schemas.users import USERNAME_PATTERN
 
 KEY_PATTERN = r"^[A-Za-z][A-Za-z0-9]{1,9}$"
+LUCIDE_ICON_PATTERN = r"^lucide:[a-z0-9]+(?:-[a-z0-9]+)*$"
+ICON_DESCRIPTION = (
+    "Иконка проекта: `lucide:<имя>` — иконка из набора интерфейса (например "
+    "`lucide:rocket`), либо эмодзи до 8 символов (старый формат). Своя картинка "
+    "загружается отдельно (POST /projects/{id}/icon-image) и показывается вместо иконки."
+)
+
+
+def validate_project_icon(value: str | None) -> str | None:
+    """Проверяет формат иконки: lucide:<имя> либо короткое эмодзи."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if value.startswith("lucide:"):
+        if len(value) > 64 or not re.fullmatch(LUCIDE_ICON_PATTERN, value):
+            raise ValueError("Иконка из набора задаётся как lucide:<имя-через-дефис>.")
+        return value
+    if len(value) > 8:
+        raise ValueError("Эмодзи-иконка — не длиннее 8 символов.")
+    return value
+
+
 COLOR_PATTERN = r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
 
 
@@ -64,7 +88,8 @@ class ProjectSchema(BaseModel):
     )
     status: ProjectStatus = Field(..., description="Статус проекта.", examples=["ACTIVE"])
     color: str = Field(..., description="HEX-цвет проекта.", examples=["#58a6ff"])
-    icon: str | None = Field(None, description="Эмодзи-иконка проекта.", examples=["🚀"])
+    icon: str | None = Field(None, description=ICON_DESCRIPTION, examples=["🚀"])
+    icon_image_version: str | None = Field(None, description="Версия локальной картинки проекта.")
     start_date: date | None = Field(
         None,
         description="Плановая дата начала.",
@@ -173,7 +198,7 @@ class ProjectCreateSchema(BaseModel):
     )
     icon: str | None = Field(
         None,
-        max_length=8,
+        max_length=64,
         description="Эмодзи-иконка проекта.",
         examples=["🚀"],
     )
@@ -193,6 +218,11 @@ class ProjectCreateSchema(BaseModel):
     def normalize_key(cls, value: str) -> str:
         """Приводит код проекта к верхнему регистру."""
         return value.upper()
+
+    @field_validator("icon")
+    @classmethod
+    def validate_icon(cls, value: str | None) -> str | None:
+        return validate_project_icon(value)
 
 
 class ProjectUpdateSchema(BaseModel):
@@ -240,7 +270,7 @@ class ProjectUpdateSchema(BaseModel):
     )
     icon: str | None = Field(
         None,
-        max_length=8,
+        max_length=64,
         description="Новая эмодзи-иконка проекта.",
         examples=["🛠"],
     )
@@ -266,6 +296,11 @@ class ProjectUpdateSchema(BaseModel):
     def normalize_key(cls, value: str | None) -> str | None:
         """Приводит код проекта к верхнему регистру."""
         return value.upper() if value is not None else None
+
+    @field_validator("icon")
+    @classmethod
+    def validate_icon(cls, value: str | None) -> str | None:
+        return validate_project_icon(value)
 
 
 class StageBreakdownSchema(BaseModel):

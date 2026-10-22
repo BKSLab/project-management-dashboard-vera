@@ -4,8 +4,9 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.db.models.task_participants import TaskParticipantRole
-from src.schemas.enums import TaskPriority, TaskRole
+from src.schemas.enums import TaskKind, TaskPriority, TaskRole, TaskStatus
 from src.schemas.task_checklists import TaskChecklistSchema
+from src.schemas.task_reports import TaskReportSchema
 from src.schemas.users import UserSummarySchema
 
 
@@ -32,8 +33,10 @@ class TaskSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int = Field(..., description="Уникальный идентификатор задачи.", examples=[142])
-    project_id: int = Field(..., description="Идентификатор проекта.", examples=[1])
-    stage_id: int = Field(..., description="Идентификатор текущей стадии.", examples=[2])
+    kind: TaskKind = Field(TaskKind.PROJECT, description="Вид задачи.")
+    status: TaskStatus | None = Field(None, description="Статус разовой задачи.")
+    project_id: int | None = Field(..., description="Идентификатор проекта.", examples=[1])
+    stage_id: int | None = Field(..., description="Идентификатор текущей стадии.", examples=[2])
     wbs_node_id: int | None = Field(
         None,
         description="Раздел ИСР или null, если задача не распределена.",
@@ -386,4 +389,108 @@ class TaskMoveSchema(BaseModel):
         ge=0,
         description="Новая позиция внутри стадии; без значения задача ставится в конец.",
         examples=[2000.0],
+    )
+
+
+class TaskDetailSchema(TaskSchema):
+    """Полная карточка, в отличие от списка, содержит актуальный отчёт."""
+
+    report: TaskReportSchema | None = Field(
+        None, description="Актуальная опубликованная версия отчёта; null, если публикаций нет."
+    )
+
+
+class PersonalTaskCreateSchema(TaskCreateSchema):
+    """Тело запроса для создания разовой задачи.
+
+    Та же форма, что у проектной задачи, но без стадии и роли: исполнитель
+    и наблюдатели — локальные пользователи, известные трекеру.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "title": "Подготовить отчёт по складу",
+                "executor_id": 7,
+                "due_date": "2026-10-03",
+                "priority": "HIGH",
+            }
+        }
+    )
+
+    stage_id: None = Field(None, exclude=True, description="У разовой задачи стадий нет.")
+    wbs_node_id: None = Field(None, exclude=True, description="У разовой задачи ИСР нет.")
+    role: None = Field(None, exclude=True, description="У разовой задачи нет роли проекта.")
+
+
+class TaskStatusUpdateSchema(BaseModel):
+    """Смена статуса задачи вне проекта."""
+
+    model_config = ConfigDict(json_schema_extra={"example": {"status": "IN_PROGRESS"}})
+
+    status: TaskStatus = Field(..., description="Новый статус.", examples=["IN_PROGRESS"])
+
+
+class TaskContextSchema(BaseModel):
+    """Проект, которому принадлежит задача."""
+
+    kind: TaskKind = Field(..., description="PROJECT.", examples=["PROJECT"])
+    id: int = Field(..., description="Идентификатор проекта.", examples=[3])
+    key: str = Field(..., description="Ключ проекта.", examples=["ДОСТ"])
+    name: str = Field(..., description="Название.", examples=["Заявки на доступы"])
+    color: str | None = Field(
+        None, description="Цвет проекта (#RRGGBB).", examples=["#8a1538"]
+    )
+    icon: str | None = Field(
+        None,
+        description="Иконка проекта: `lucide:<имя>` или эмодзи.",
+        examples=["lucide:rocket"],
+    )
+    icon_image_version: str | None = Field(
+        None,
+        description="Версия своей картинки проекта для адреса иконки; null — картинки нет.",
+    )
+
+
+class MyTaskSchema(TaskSchema):
+    """Задача в списке «Мои задачи»: общий вид для задач всех видов."""
+
+    context: TaskContextSchema | None = Field(
+        None, description="Проект задачи; null у разовой."
+    )
+    state: TaskStatus = Field(
+        ...,
+        description=(
+            "Состояние для общего списка. У проектной выводится из стадии: первая "
+            "стадия — NEW, завершающая — DONE, прочие — IN_PROGRESS."
+        ),
+        examples=["IN_PROGRESS"],
+    )
+    state_label: str = Field(
+        ..., description="Подпись состояния: статус или имя стадии проекта.", examples=["В работе"]
+    )
+    my_roles: list[TaskParticipantRole] = Field(
+        default_factory=list, description="Мои роли в задаче.", examples=[["EXECUTOR"]]
+    )
+
+
+class ProjectBaselineResultSchema(BaseModel):
+    """Итог фиксации плана (baseline) всех задач проекта с датами."""
+
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"dry_run": False, "scheduled_count": 12, "changed_count": 4}}
+    )
+
+    dry_run: bool = Field(..., description="Только подсчёт: план не записан.", examples=[False])
+    scheduled_count: int = Field(
+        ..., ge=0, description="Задач проекта хотя бы с одной плановой датой.", examples=[12]
+    )
+    changed_count: int = Field(
+        ...,
+        ge=0,
+        description="У скольких задач план отличался от текущих дат и был (будет) перезаписан.",
+        examples=[4],
+    )
+    task_ids: list[int] = Field(
+        default_factory=list, description="Задачи, у которых план изменился.", examples=[[7, 9]]
     )

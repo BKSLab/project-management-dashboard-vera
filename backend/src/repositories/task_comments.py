@@ -3,6 +3,7 @@ import logging
 from sqlalchemy import Result, func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from src.db.models.task_comments import TaskComment
 from src.exceptions.task_comments import TaskCommentsRepositoryError
@@ -56,8 +57,9 @@ class TaskCommentsRepository:
         try:
             result: Result = await self.db_session.execute(
                 select(TaskComment)
+                .options(selectinload(TaskComment.author))
                 .where(TaskComment.task_id == task_id)
-                .order_by(TaskComment.created_at)
+                .order_by(TaskComment.created_at, TaskComment.id)
             )
             return list(result.scalars().all())
         except (SQLAlchemyError, Exception) as error:
@@ -105,6 +107,20 @@ class TaskCommentsRepository:
             logger.error("❌ Не удалось получить комментарии набора задач.", exc_info=True)
             raise TaskCommentsRepositoryError("Ошибка получения комментариев задач.") from error
 
+    async def get_for_update(self, comment_id: int) -> TaskComment | None:
+        """Блокирует источник публикации до окончания транзакции."""
+        try:
+            result = await self.db_session.execute(
+                select(TaskComment)
+                .where(TaskComment.id == comment_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as error:
+            await self.db_session.rollback()
+            raise TaskCommentsRepositoryError("Не удалось заблокировать комментарий.") from error
+
     async def get_by_id(self, comment_id: int) -> TaskComment | None:
         """Возвращает комментарий по идентификатору.
 
@@ -119,7 +135,10 @@ class TaskCommentsRepository:
         """
         try:
             result: Result = await self.db_session.execute(
-                select(TaskComment).where(TaskComment.id == comment_id)
+                select(TaskComment)
+                .options(selectinload(TaskComment.author))
+                .where(TaskComment.id == comment_id)
+                .execution_options(populate_existing=True)
             )
             return result.scalar_one_or_none()
         except (SQLAlchemyError, Exception) as error:
@@ -214,12 +233,15 @@ class TaskCommentsRepository:
             logger.error("❌ Не удалось подготовить подсветку комментариев.", exc_info=True)
             raise TaskCommentsRepositoryError("Ошибка подсветки комментариев.") from error
 
-    async def save(self, task_id: int, author_name: str | None, body_md: str) -> TaskComment:
+    async def save(
+        self, task_id: int, author_name: str | None, body_md: str, *, author_id: int | None = None
+    ) -> TaskComment:
         """Создаёт комментарий задачи.
 
         Args:
             task_id: Идентификатор задачи.
-            author_name: Необязательная подпись автора.
+            author_id: Автор — пользователь единого входа.
+            author_name: Снимок полного имени автора.
             body_md: Текст комментария.
 
         Returns:
@@ -229,7 +251,9 @@ class TaskCommentsRepository:
             TaskCommentsRepositoryError: Если сохранить комментарий не удалось.
         """
         try:
-            comment = TaskComment(task_id=task_id, author_name=author_name, body_md=body_md)
+            comment = TaskComment(
+                task_id=task_id, author_id=author_id, author_name=author_name, body_md=body_md
+            )
             self.db_session.add(comment)
             await self.db_session.flush()
             return comment

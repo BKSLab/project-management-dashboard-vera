@@ -104,3 +104,41 @@ class MilestonesRepository:
             await self.db_session.rollback()
             logger.error("❌ Не удалось удалить веху id=%s.", milestone.id, exc_info=True)
             raise MilestonesRepositoryError("Ошибка удаления вехи.") from error
+
+    async def get_range_for_projects(
+        self,
+        *,
+        project_ids: set[int],
+        date_from: date,
+        date_to: date,
+    ) -> list[ProjectMilestone]:
+        """Возвращает вехи нескольких проектов внутри включительного диапазона.
+
+        Args:
+            project_ids: Проекты, чьи вехи нужны.
+            date_from: Первый день диапазона.
+            date_to: Последний день диапазона.
+
+        Returns:
+            Вехи по дате, затем по id.
+
+        Raises:
+            MilestonesRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        if not project_ids:
+            return []
+        try:
+            result: Result = await self.db_session.execute(
+                select(ProjectMilestone)
+                .where(
+                    ProjectMilestone.project_id.in_(project_ids),
+                    ProjectMilestone.due_date >= date_from,
+                    ProjectMilestone.due_date <= date_to,
+                )
+                .order_by(ProjectMilestone.due_date, ProjectMilestone.id)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить вехи проектов в диапазоне.", exc_info=True)
+            raise MilestonesRepositoryError("Ошибка получения диапазона вех.") from error

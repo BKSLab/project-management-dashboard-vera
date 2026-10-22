@@ -1,18 +1,31 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import secrets
-from dataclasses import dataclass, field, replace
-from datetime import date, timedelta
-from enum import StrEnum
+from dataclasses import dataclass, replace
+from datetime import date
 from time import perf_counter
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel
+from pydantic_ai.exceptions import AgentRunError
+from pydantic_ai.models import Model
 
 from src.agent.context import AgentContextBudget
-from src.agent.tools import AgentToolContext, AgentToolExecutor, AgentToolRequest
+from src.agent.progress import SEARCH_PROJECT, ProgressReporter, ProgressSink
+from src.agent.runtime import (
+    PROJECT_ACTION_TOOL,
+    TimAnswer,
+    TimDeps,
+    TimRunResult,
+    TimRuntime,
+    WriteGate,
+)
+from src.agent.runtime import metrics as runtime_metrics
+from src.agent.tim import TimMode
+from src.agent.tools import AgentTool, AgentToolContext, AgentToolExecutor
 from src.clients.embedding import EmbeddingClient
 from src.clients.llm import LlmClient
 from src.clients.qdrant import KnowledgeSearchHit, ProjectQdrantClient
@@ -32,127 +45,61 @@ from src.exceptions.knowledge import (
 )
 from src.exceptions.projects import ProjectNotFoundError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
-from src.knowledge.catalog import SourceType, build_catalog, digest
+from src.knowledge.catalog import build_catalog, digest
 from src.knowledge.context import (
     citation,
     coverage,
     file_issues,
     retrieve,
 )
-from src.knowledge.documents import build_wbs_paths
-from src.knowledge.retrieval import reciprocal_rank_fusion
 from src.prompts.project_agent import (
-    PROJECT_AGENT_SYSTEM_PROMPT,
-    PROJECT_AGENT_TOOL_SELECTION_PROMPT,
+    PROJECT_AGENT_API_BASE_PROMPT,
+    PROJECT_AGENT_WRITE_INTENT_PROMPT,
+    TIM_BASE_PROMPTS,
 )
-from src.repositories.tasks import ProjectTaskStatistics
 from src.schemas.knowledge import (
     KnowledgeAnswerSchema,
     KnowledgeChatMessageSchema,
-    KnowledgeReadRequest,
     KnowledgeSourceSchema,
     KnowledgeStatusSchema,
 )
-from src.schemas.project_risks import (
-    ProjectRiskFilters,
-    ProjectRiskSchema,
-    ProjectRiskSummarySchema,
-)
 from src.services.agent_cards import source_card
-from src.services.calendar import MAX_CALENDAR_RANGE_DAYS
 from src.services.db_scope import ProjectAgentScope, ProjectAgentScopeFactory
-from src.services.project_risks import build_risk_summary
-from src.services.tasks import build_task_key
-from src.utils.checklists import checklist_context
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIEVED_TASKS = 30
-MAX_RETRIEVED_DOCUMENTS = 30
-MAX_RETRIEVAL_CONTEXT = 30
-MAX_TOOL_TASKS = 30
 PROJECT_DESCRIPTION_LIMIT = 400
 TEXT_FRAGMENT_LIMIT = 1200
 SOURCE_EXCERPT_LIMIT = 500
+#: Канал ответа внешнему клиенту (#40793).
+API_CHANNEL = "api"
+EMPTY_ANSWER = (
+    "Не удалось завершить проверку источников. Уточните вопрос или сузьте перечень объектов."
+)
+INCOMPLETE_ANSWER = (
+    "Проверка неполная: исчерпан лимит шагов, часть запрошенных данных осталась "
+    "непрочитанной. Уточните вопрос или сузьте перечень объектов."
+)
 
 
-class StructuredToolName(StrEnum):
-    """Разрешённые read-only инструменты Project Agent."""
+class WriteIntent(BaseModel):
+    """Ответ проверки: поручил ли участник изменить данные в текущем вопросе."""
 
-    PROJECT_STATISTICS = "get_project_statistics"
-    TASKS_BY_STATUS = "get_tasks_by_status"
-    OVERDUE_TASKS = "get_overdue_tasks"
-    PROJECT_STRUCTURE = "get_project_structure"
-    RECENT_PROJECT_ACTIVITY = "get_recent_project_activity"
-    CALENDAR = "get_calendar"
-    UPCOMING_DEADLINES = "get_upcoming_deadlines"
-    PROJECT_RISKS = "get_project_risks"
-    REGISTERED_RISKS = "list_project_risks"
-    MILESTONES = "get_milestones"
-    SCHEDULE_DRIFT = "get_schedule_drift"
-    PREVIEW_SCHEDULE_CHANGE = "preview_schedule_change"
+    write_intent: bool = False
 
 
-class AgentToolCall(BaseModel):
-    """Один выбранный моделью structured tool."""
+def retrieval_query(question: str, history: list[KnowledgeChatMessageSchema]) -> str:
+    """Запрос стартового поиска: вопрос, а в продолжении беседы — ещё и прошлый вопрос.
 
-    name: StructuredToolName
-    stage_name: str | None = Field(default=None, max_length=255)
-    date_from: date | None = None
-    date_to: date | None = None
-    task_key: str | None = Field(default=None, max_length=32)
-    proposed_start_date: date | None = None
-    proposed_due_date: date | None = None
-    shift_days: int | None = Field(default=None, ge=-3650, le=3650)
-
-
-class AgentToolPlan(BaseModel):
-    write_intent: bool = Field(
-        default=False,
-        description="Пользователь явно поручил изменить проект или подтвердил обсуждённое изменение; вопросы о состоянии не разрешают запись.",
-    )
-    """План SQL-инструментов и retrieval для текущего вопроса."""
-
-    calls: list[AgentToolCall] = Field(default_factory=list, max_length=7)
-    search_query: str | None = Field(default=None, max_length=2000)
-    entity_type: SourceType | None = None
-
-
-class AgentOutput(BaseModel):
-    """Внутренняя structured-схема ответа LLM."""
-
-    answer: str = Field(default="", max_length=20000)
-    source_ids: list[str] = Field(default_factory=list, max_length=20)
-    reads: list[KnowledgeReadRequest] = Field(default_factory=list, max_length=8)
-    tool_calls: list[AgentToolRequest] = Field(default_factory=list, max_length=8)
-
-    @model_validator(mode="after")
-    def limit_calls(self) -> AgentOutput:
-        if len(self.reads) + len(self.tool_calls) > 8:
-            raise ValueError("За один шаг допускается не более восьми инструментов.")
-        return self
-
-
-@dataclass(slots=True)
-class _AgentDatabaseContext:
-    """Данные PostgreSQL, загруженные ограниченными structured tools."""
-
-    stages: list[Any]
-    ranked_tasks: list[Any]
-    ranked_documents: list[Any]
-    nodes: list[Any]
-    statistics: ProjectTaskStatistics | None = None
-    tasks_by_status: list[tuple[str, Any | None, list[Any]]] = field(default_factory=list)
-    overdue_tasks: list[Any] = field(default_factory=list)
-    structure_counts: dict[int, int] | None = None
-    activity: list[Any] = field(default_factory=list)
-    activity_tasks: dict[int, Any] = field(default_factory=dict)
-    calendar_results: dict[StructuredToolName, Any] = field(default_factory=dict)
-    milestones: list[Any] = field(default_factory=list)
-    scenario_preview: Any | None = None
-    ranked_risks: list[Any] = field(default_factory=list)
-    registered_risks: list[Any] = field(default_factory=list)
-    risk_summary: ProjectRiskSummarySchema | None = None
+    Раньше запрос переписывал отдельный вызов модели (4–6 с до старта агента).
+    Первый вопрос беседы самодостаточен; в продолжении («а кто по ней исполнитель?»)
+    предыдущая реплика участника несёт предмет разговора. Дальше агент ищет сам
+    инструментами, стартовый поиск — только подсказка.
+    """
+    previous = next((item.content for item in reversed(history) if item.role == "user"), "").strip()
+    if not previous:
+        return question
+    return f"{previous[:TEXT_FRAGMENT_LIMIT]}\n{question}"
 
 
 class _SourceRegistry:
@@ -208,6 +155,7 @@ class ProjectAgentConfig:
     context_tokens: int = 12000
     retrieval_limit: int = 5
     history_tokens: int = 1200
+    app_public_url: str = ""
 
 
 class ProjectAgentService:
@@ -222,6 +170,7 @@ class ProjectAgentService:
         qdrant_client: ProjectQdrantClient,
         config: ProjectAgentConfig,
         tools: AgentToolExecutor,
+        agent_model: Model,
     ) -> None:
         """Создаёт Project Agent.
 
@@ -233,6 +182,7 @@ class ProjectAgentService:
             qdrant_client: Клиент векторного индекса.
             config: Настройки семантического поиска.
             tools: Исполнитель зарегистрированных инструментов проекта.
+            agent_model: Модель PydanticAI, которая ведёт цикл инструментов.
         """
         self.scope = scope
         self.llm_client = llm_client
@@ -240,6 +190,15 @@ class ProjectAgentService:
         self.qdrant_client = qdrant_client
         self.config = config
         self.tools = tools
+        self.agent_model = agent_model
+        self._runtime: TimRuntime | None = None
+
+    @property
+    def runtime(self) -> TimRuntime:
+        """Агент PydanticAI над текущим реестром инструментов (строится один раз)."""
+        if self._runtime is None or self._runtime.executor is not self.tools:
+            self._runtime = TimRuntime(model=self.agent_model, executor=self.tools)
+        return self._runtime
 
     async def ask(
         self,
@@ -252,8 +211,19 @@ class ProjectAgentService:
         execution: AgentToolContext | None = None,
         action_history: list[dict[str, Any]] | None = None,
         uploaded_files: list[dict[str, Any]] | None = None,
+        mode: TimMode = TimMode.WIDGET_PROJECT,
+        extra_context: dict[str, Any] | None = None,
+        channel: str = "web",
+        verbatim: str | None = None,
+        conversation_id: str | None = None,
+        on_progress: ProgressSink | None = None,
     ) -> KnowledgeAnswerSchema:
         """Ищет по всем источникам и позволяет модели дочитать текст и связи.
+
+        Это ответ Веры в проектном режиме: общий чат проекта или личный виджет
+        на странице проекта. ``mode`` выбирает секцию системного промпта и
+        набор инструментов; ``extra_context`` добавляет контекст режима
+        (page_context, quoted_message) без права менять проект запроса.
 
         Args:
             project_id: Проверенный вызывающим сервисом проект.
@@ -263,6 +233,16 @@ class ProjectAgentService:
             actor: Участник из серверного контекста; для прежнего API может отсутствовать.
             execution: Доверенная область инструментов и текущая попытка очереди.
             action_history: Сохранённые результаты действий и решений участника.
+            uploaded_files: Файлы, отправленные участником в диалог.
+            mode: Режим Веры; только проектные режимы. Канал ``api`` идёт в режиме
+                ``project_chat``: только инструменты проекта, без личных действий.
+            extra_context: Дополнительные поля входного JSON модели.
+            channel: ``web`` — ответ в интерфейсе трекера с карточками; ``api`` —
+                ответ внешнему клиенту полным текстом со ссылками.
+            verbatim: Дословная реплика сотрудника в канале ``api``. Только она
+                разрешает запись; без неё вопрос выполняется на чтение.
+            conversation_id: Диалог или ход чата — для трассировки.
+            on_progress: Запись живого статуса ответа; сбой записи ответ не роняет.
         Returns:
             Ответ с источниками, проверенными в текущем проекте.
         Raises:
@@ -270,195 +250,332 @@ class ProjectAgentService:
             KnowledgeProviderError: Если модель не смогла подготовить ответ.
         """
         started = perf_counter()
-        phases = {name: None for name in ("planner", "ranked_fts", "embedding", "qdrant", "llm")}
+        phases = {
+            name: None for name in ("write_intent", "ranked_fts", "embedding", "qdrant", "llm")
+        }
         question = question.strip()
+        api_channel = channel == API_CHANNEL
+        verbatim = (verbatim or "").strip() or None
         async with self.scope() as db:
-            await self._require_project(db, project_id=project_id)
-        phase = perf_counter()
-        try:
-            plan = await self._select_tools(question=question, history=history, memory=memory)
-        except KnowledgeProviderError:
-            plan = AgentToolPlan(
-                calls=[AgentToolCall(name=StructuredToolName.PROJECT_STATISTICS)],
-                search_query=question,
-            )
-        phases["planner"] = self._elapsed_ms(phase)
+            project = await self._require_project(db, project_id=project_id)
         tool_context = execution or AgentToolContext(
             project_id=project_id, user_id=(actor or {}).get("user_id")
         )
         if tool_context.project_id != project_id:
             raise ProjectAgentError("Область инструментов не совпадает с проектом вопроса.")
-        tool_context = replace(tool_context, can_write=tool_context.can_write and plan.write_intent)
-        query = (plan.search_query or question).strip()
-        semantic_hits = []
-        semantic_available = False
-        if self.config.knowledge_enabled:
-            try:
-                phase = perf_counter()
-                vector = await self.embedding_client.get_embedding(query)
-                phases["embedding"] = self._elapsed_ms(phase)
-                phase = perf_counter()
-                semantic_hits = await self.qdrant_client.search(
-                    project_id=project_id,
-                    vector=vector,
-                    limit=self.config.semantic_limit,
-                    score_threshold=self.config.score_threshold,
-                    entity_type=plan.entity_type,
-                )
-                phases["qdrant"] = self._elapsed_ms(phase)
-                semantic_available = True
-            except ClientError:
-                phases["qdrant" if phases["embedding"] is not None else "embedding"] = (
-                    self._elapsed_ms(phase)
-                )
-                logger.warning(
-                    "Семантический поиск проекта %s недоступен; читаю PostgreSQL.",
-                    project_id,
-                    exc_info=True,
-                )
+        if mode is TimMode.WIDGET_PERSONAL:
+            raise ProjectAgentError("Проектный ответ требует проектного режима.")
+        # В канале API пересказ вызывающего агента запись не разрешает: без
+        # дословной реплики сотрудника вопрос выполняется только на чтение.
+        write_possible = tool_context.can_write and (not api_channel or verbatim is not None)
+        tool_context = replace(tool_context, mode=mode, can_write=write_possible)
+        progress = ProgressReporter(on_progress)
+        deps: TimDeps | None = None
         try:
+            query = retrieval_query(question, history)
+            registry = _SourceRegistry()
+            content = {
+                "mode": mode.value,
+                "current_date": date.today().isoformat(),
+                "question": question,
+                **(extra_context or {}),
+                "dialog_history": [message.model_dump() for message in history],
+                "dialog_memory": memory,
+                "current_participant": actor,
+                "project_reference": {"id": project.id, "key": project.key},
+                "writes_allowed": tool_context.can_write,
+                "previous_actions": action_history or [],
+                "uploaded_files": uploaded_files or [],
+            }
+            system_prompt = TIM_BASE_PROMPTS[mode]
+            if api_channel:
+                system_prompt = PROJECT_AGENT_API_BASE_PROMPT
+                content.pop("mode", None)
+                content["channel"] = API_CHANNEL
+                content["participant_verbatim"] = verbatim
+                content["task_link_template"] = self.task_link_template()
+            budget = AgentContextBudget(
+                system_prompt=system_prompt,
+                max_tokens=self.config.context_tokens,
+                history_tokens=self.config.history_tokens,
+            )
+            budget.prepare(content)
+            state: dict[str, Any] = {
+                "catalog": None,
+                "stale": False,
+                "semantic_loaded": False,
+                "fts_hits": [],
+            }
+            context_lock = asyncio.Lock()
+
+            async def load_context(group_id: str) -> None:
+                """Читает данные только после выбора рабочей области моделью."""
+                async with context_lock:
+                    progress.report(SEARCH_PROJECT)
+                    if state["catalog"] is None:
+                        current_project, catalog, fts_hits, stages = await self._load_project_base(
+                            project_id, query, phases
+                        )
+                        state["catalog"], state["fts_hits"] = catalog, fts_hits
+                        content.update(
+                            retrieval_query=query,
+                            current_postgres_state=self._build_postgres_context(
+                                project=current_project, stages=stages, registry=registry
+                            ),
+                            catalog={
+                                "counts": catalog.counts,
+                                "file_issues": file_issues(catalog)[:5],
+                                "file_issues_total": len(file_issues(catalog)),
+                                "semantic_available": False,
+                            },
+                        )
+                        content["retrieval_context"] = retrieve(
+                            catalog,
+                            fts_hits=fts_hits,
+                            semantic_hits=[],
+                            query=query,
+                            target_chars=self.config.chunk_target_chars,
+                            overlap_chars=self.config.chunk_overlap_chars,
+                            limit=self.config.retrieval_limit,
+                        )
+                    # Точные операции с задачами/досками читают SQL-инструментами.
+                    # Embeddings нужны только для выбранной области поиска по знаниям.
+                    if (
+                        group_id in {"sources", "documents", "attachments", "reports"}
+                        and not state["semantic_loaded"]
+                    ):
+                        hits, available = await self._semantic_search(project_id, query, phases)
+                        state["semantic_loaded"] = True
+                        content["catalog"]["semantic_available"] = available
+                        content["retrieval_context"] = retrieve(
+                            state["catalog"],
+                            fts_hits=state["fts_hits"],
+                            semantic_hits=hits,
+                            query=query,
+                            target_chars=self.config.chunk_target_chars,
+                            overlap_chars=self.config.chunk_overlap_chars,
+                            limit=self.config.retrieval_limit,
+                        )
+                    self._register_views(content, state["catalog"], registry)
+
+            deps = TimDeps(
+                execution=tool_context,
+                executor=self.tools,
+                system_prompt=system_prompt,
+                content=content,
+                budget=budget,
+                tool_rounds=self.config.tool_rounds,
+                defer_workflows=True,
+                load_context=load_context,
+                write_gate_factory=(
+                    lambda: self._write_gate(
+                        question=question,
+                        history=history,
+                        memory=memory,
+                        verbatim=verbatim if api_channel else None,
+                        phases=phases,
+                    )
+                )
+                if write_possible
+                else None,
+                progress=progress,
+            )
+            member_handles: list[str] = []
+
+            async def register(tool: AgentTool, result: dict[str, Any]) -> None:
+                # Запись меняет источники проекта: каталог перечитывается перед
+                # следующей регистрацией, чтобы карточка созданной задачи прошла проверку.
+                if state["stale"]:
+                    async with self.scope() as db:
+                        await self._require_project(db, project_id=project_id)
+                        state["catalog"] = build_catalog(
+                            project_id, await db.sources.get_project_rows(project_id)
+                        )
+                    state["stale"] = False
+                self._register_views(result, state["catalog"], registry)
+                if tool.name in {"list_members", "list_sources"}:
+                    for item in result.get("items", []):
+                        source_id = item.get("source_id", "")
+                        if source_id.startswith("member:"):
+                            handle = registry.get_handle(source_id)
+                            if handle and handle not in member_handles:
+                                member_handles.append(handle)
+                if tool.mutating or tool.name == PROJECT_ACTION_TOOL:
+                    state["stale"] = True
+
+            deps.on_result = register
             phase = perf_counter()
-            async with self.scope() as db:
-                project = await self._require_project(db, project_id=project_id)
-                catalog = build_catalog(project_id, await db.sources.get_project_rows(project_id))
-                fts_hits = await db.sources.search(
-                    project_id, query, entity_type=plan.entity_type, limit=30
+            run: TimRunResult | None = None
+            try:
+                run = await self.runtime.run(
+                    deps,
+                    metadata={
+                        "channel": channel,
+                        "mode": mode.value,
+                        "project_id": project_id,
+                        "conversation_id": conversation_id,
+                    },
                 )
-                database_context = await self._load_structured_tools(
-                    db,
-                    project=project,
-                    stages=await db.stages.get_by_project(project_id),
-                    nodes=await db.wbs_nodes.get_by_project(project_id),
-                    ranked_tasks=[],
-                    ranked_documents=[],
-                    tool_plan=plan,
+                if state["stale"]:
+                    async with self.scope() as db:
+                        await self._require_project(db, project_id=project_id)
+                        state["catalog"] = build_catalog(
+                            project_id, await db.sources.get_project_rows(project_id)
+                        )
+                catalog = state["catalog"]
+                output = run.output or TimAnswer()
+                selected = []
+                seen_sources = set()
+                for handle in [*output.source_ids, *(member_handles if run.output else [])]:
+                    source = registry.resolve(handle)
+                    if (
+                        source
+                        and catalog is not None
+                        and source.source_id in catalog.sources
+                        and source.source_id not in seen_sources
+                    ):
+                        current_source = catalog.sources[source.source_id]
+                        selected.append(
+                            source.model_copy(
+                                update={
+                                    "title": current_source.title,
+                                    "card": source_card(current_source, catalog),
+                                }
+                            )
+                        )
+                        seen_sources.add(source.source_id)
+                answer = output.answer.strip()
+                if run.output is None:
+                    answer = INCOMPLETE_ANSWER
+                elif not answer and not selected:
+                    answer = EMPTY_ANSWER
+                return KnowledgeAnswerSchema(answer=answer, sources=selected)
+            except AgentRunError as error:
+                raise KnowledgeProviderError(str(error)) from error
+            except ClientError as error:
+                raise KnowledgeProviderError(str(error)) from error
+            except RepositoryError as error:
+                raise ProjectAgentError(str(error)) from error
+            except ValueError as error:
+                raise ProjectAgentError(str(error)) from error
+            finally:
+                phases["llm"] = self._elapsed_ms(phase)
+                logger.info(
+                    "Метрики Project Agent: %s",
+                    json.dumps(
+                        {
+                            "event": "project_agent.ask",
+                            "project_id": project_id,
+                            "mode": mode.value,
+                            "channel": channel,
+                            "phases_ms": phases,
+                            "total_ms": self._elapsed_ms(started),
+                            "context_chars": run.prompt_chars if run else 0,
+                            "context_budget_tokens_estimate": self.config.context_tokens,
+                            "agent": runtime_metrics(run) if run else None,
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    ),
                 )
-            phases["ranked_fts"] = self._elapsed_ms(phase)
-        except RepositoryError as error:
-            raise ProjectAgentError(str(error)) from error
-        registry = _SourceRegistry()
-        postgres = self._build_postgres_context(
-            project=project, context=database_context, registry=registry
-        )
-        for key in ("retrieved_tasks", "retrieved_documents", "retrieved_risks"):
-            postgres.pop(key, None)
-        retrieved = retrieve(
-            catalog,
-            fts_hits=fts_hits,
-            semantic_hits=semantic_hits,
-            query=query,
-            target_chars=self.config.chunk_target_chars,
-            overlap_chars=self.config.chunk_overlap_chars,
-            limit=self.config.retrieval_limit,
-        )
+        finally:
+            if deps is not None and deps.write_gate is not None:
+                deps.write_gate.close()
+            await progress.close()
+
+    async def ask_personal(
+        self,
+        *,
+        question: str,
+        history: list[KnowledgeChatMessageSchema],
+        memory: str,
+        actor: dict[str, Any],
+        execution: AgentToolContext,
+        action_history: list[dict[str, Any]] | None = None,
+        page_context: dict[str, Any] | None = None,
+        conversation_id: str | None = None,
+        on_progress: ProgressSink | None = None,
+    ) -> KnowledgeAnswerSchema:
+        """Ответ Веры в личном виджете, когда страница не указывает на проект.
+
+        Каталога и RAG проекта здесь нет: модель видит только результаты
+        личных инструментов (мои задачи, поиск по всем проектам, потоки,
+        разовые задачи) и run_project_action для проекта по ключу.
+
+        Args:
+            question: Текущий вопрос пользователя.
+            history: Недавние реплики диалога виджета.
+            memory: Краткая память ранней части разговора.
+            actor: Пользователь из серверного контекста.
+            execution: Доверенная область инструментов без проекта.
+            action_history: Сохранённые результаты действий этого обсуждения.
+            page_context: Страница, с которой пользователь написал.
+            conversation_id: Идентификатор диалога для журнала выполнения.
+            on_progress: Запись живого статуса ответа; сбой записи ответ не роняет.
+        Returns:
+            Ответ без карточек источников: объекты названы ключами в тексте.
+        Raises:
+            ProjectAgentError: При ошибке чтения данных.
+            KnowledgeProviderError: Если модель не смогла подготовить ответ.
+        """
+        started = perf_counter()
+        question = question.strip()
+        phases: dict[str, float | None] = {"write_intent": None}
+        mode = TimMode.WIDGET_PERSONAL
+        tool_context = replace(execution, project_id=None, mode=mode)
         content = {
+            "mode": mode.value,
             "current_date": date.today().isoformat(),
             "question": question,
-            "retrieval_query": query,
-            "dialog_history": [message.model_dump() for message in history[-10:]],
+            "page_context": page_context or {},
+            "dialog_history": [message.model_dump() for message in history],
             "dialog_memory": memory,
             "current_participant": actor,
-            "current_postgres_state": postgres,
-            "catalog": {
-                "counts": catalog.counts,
-                "file_issues": file_issues(catalog)[:5],
-                "file_issues_total": len(file_issues(catalog)),
-                "semantic_available": semantic_available,
-            },
-            "retrieval_context": retrieved,
-            "read_results": [],
-            "available_tools": [
-                item
-                for item in self.tools.describe(include_parameters=False)
-                if tool_context.can_write or not item["mutating"]
-            ],
-            "tool_schema_lookup": {
-                "name": "get_tool_schemas",
-                "arguments": {"names": ["имя нужного инструмента"]},
-            },
             "writes_allowed": tool_context.can_write,
             "previous_actions": action_history or [],
-            "uploaded_files": uploaded_files or [],
         }
+        system_prompt = TIM_BASE_PROMPTS[mode]
         budget = AgentContextBudget(
-            system_prompt=PROJECT_AGENT_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             max_tokens=self.config.context_tokens,
             history_tokens=self.config.history_tokens,
         )
         budget.prepare(content)
-        self._register_views(content, catalog, registry)
-        phase = perf_counter()
-        output = AgentOutput()
-        context_rounds = []
-        serialized = ""
-        try:
-            for round_index in range(self.config.tool_rounds + 1):
-                content["remaining_read_rounds"] = self.config.tool_rounds - round_index
-                before = budget.tokens(content)
-                serialized = budget.fit(content)
-                context_rounds.append(
-                    {
-                        "round": round_index,
-                        "before_tokens_estimate": before,
-                        "input_tokens_estimate": budget.tokens(content),
-                        "chars": len(serialized),
-                    }
+        deps = TimDeps(
+            execution=tool_context,
+            executor=self.tools,
+            system_prompt=system_prompt,
+            content=content,
+            budget=budget,
+            tool_rounds=self.config.tool_rounds,
+            defer_workflows=True,
+            write_gate_factory=(
+                lambda: self._write_gate(
+                    question=question, history=history, memory=memory, phases=phases
                 )
-                output = await self.llm_client.get_structured_response(
-                    system_prompt=PROJECT_AGENT_SYSTEM_PROMPT,
-                    content=serialized,
-                    schema=AgentOutput,
-                    max_completion_tokens=4000,
-                )
-                calls = output.tool_calls + [
-                    AgentToolRequest(
-                        name=request.name,
-                        arguments=request.model_dump(mode="json", exclude={"name"}),
-                    )
-                    for request in output.reads
-                ]
-                if not calls or round_index == self.config.tool_rounds:
-                    break
-                results = [
-                    (request, await self.tools.execute(tool_context, request)) for request in calls
-                ]
-                async with self.scope() as db:
-                    await self._require_project(db, project_id=project_id)
-                    catalog = build_catalog(
-                        project_id, await db.sources.get_project_rows(project_id)
-                    )
-                    for request, result in results:
-                        self._register_views(result, catalog, registry)
-                        budget.add_result(
-                            content, request=request.model_dump(mode="json"), result=result
-                        )
-            selected = []
-            seen_sources = set()
-            for handle in output.source_ids:
-                source = registry.resolve(handle)
-                if (
-                    source
-                    and source.source_id in catalog.sources
-                    and source.source_id not in seen_sources
-                ):
-                    current_source = catalog.sources[source.source_id]
-                    selected.append(
-                        source.model_copy(
-                            update={
-                                "title": current_source.title,
-                                "card": source_card(current_source, catalog),
-                            }
-                        )
-                    )
-                    seen_sources.add(source.source_id)
-            answer = output.answer.strip() or (
-                ""
-                if selected and not (output.reads or output.tool_calls)
-                else "Не удалось завершить проверку источников. Уточните вопрос или сузьте перечень объектов."
             )
-            if (output.reads or output.tool_calls) and output.answer.strip():
-                answer += "\n\nПроверка контекста неполная: часть запрошенных источников осталась непрочитанной."
-            return KnowledgeAnswerSchema(answer=answer, sources=selected)
+            if tool_context.can_write
+            else None,
+            progress=ProgressReporter(on_progress),
+        )
+        run: TimRunResult | None = None
+        try:
+            run = await self.runtime.run(
+                deps,
+                metadata={
+                    "channel": "web",
+                    "mode": mode.value,
+                    "conversation_id": conversation_id,
+                },
+            )
+            if run.output is None:
+                return KnowledgeAnswerSchema(answer=INCOMPLETE_ANSWER, sources=[])
+            answer = run.output.answer.strip() or (
+                "Не удалось завершить проверку данных. Уточните вопрос."
+            )
+            return KnowledgeAnswerSchema(answer=answer, sources=[])
+        except AgentRunError as error:
+            raise KnowledgeProviderError(str(error)) from error
         except ClientError as error:
             raise KnowledgeProviderError(str(error)) from error
         except RepositoryError as error:
@@ -466,22 +583,27 @@ class ProjectAgentService:
         except ValueError as error:
             raise ProjectAgentError(str(error)) from error
         finally:
-            phases["llm"] = self._elapsed_ms(phase)
+            if deps.write_gate is not None:
+                deps.write_gate.close()
+            await deps.progress.close()
             logger.info(
-                "Метрики Project Agent: %s",
+                "Метрики Веры: %s",
                 json.dumps(
                     {
-                        "event": "project_agent.ask",
-                        "project_id": project_id,
-                        "phases_ms": phases,
+                        "event": "tim.ask_personal",
                         "total_ms": self._elapsed_ms(started),
-                        "context_chars": len(serialized),
-                        "context_rounds": context_rounds,
-                        "context_budget_tokens_estimate": self.config.context_tokens,
+                        "phases_ms": phases,
+                        "agent": runtime_metrics(run) if run else None,
                     },
                     ensure_ascii=False,
+                    default=str,
                 ),
             )
+
+    def task_link_template(self) -> str | None:
+        """Адрес карточки задачи в интерфейсе с местом для ключа; None без APP_PUBLIC_URL."""
+        base = self.config.app_public_url.rstrip("/")
+        return f"{base}/?task={{key}}" if base else None
 
     @staticmethod
     def _register_views(value, catalog, registry) -> None:
@@ -583,26 +705,58 @@ class ProjectAgentService:
         except (KnowledgeEventsServiceError, UnitOfWorkRepositoryError) as error:
             raise KnowledgeServiceError(str(error)) from error
 
-    async def _select_tools(
+    def _write_gate(
+        self,
+        *,
+        question: str,
+        history: list[KnowledgeChatMessageSchema],
+        memory: str,
+        phases: dict[str, float | None],
+        verbatim: str | None = None,
+    ) -> WriteGate:
+        """Запускает проверку перед первым изменяющим инструментом вопроса."""
+        started = perf_counter()
+
+        async def decide() -> bool:
+            try:
+                return await self._classify_write_intent(
+                    question=question, history=history, memory=memory, verbatim=verbatim
+                )
+            except Exception:
+                # Сбой проверки — не повод отказать в ответе: агент ответит на
+                # чтение, а изменение не выполнится (как и прежде при сбое).
+                logger.warning("⚠️ Проверка поручения на запись не удалась.", exc_info=True)
+                return False
+            finally:
+                phases["write_intent"] = self._elapsed_ms(started)
+
+        return WriteGate(decide())
+
+    async def _classify_write_intent(
         self,
         *,
         question: str,
         history: list[KnowledgeChatMessageSchema],
         memory: str = "",
-    ) -> AgentToolPlan:
-        """Просит модель выбрать только необходимые structured tools."""
+        verbatim: str | None = None,
+    ) -> bool:
+        """Спрашивает модель, поручил ли участник изменить данные в текущем вопросе."""
         recent = {
+            "question": question,
             "dialog_history": [message.model_dump() for message in history[-10:]],
             "dialog_memory": memory,
         }
         AgentContextBudget(
-            system_prompt=PROJECT_AGENT_TOOL_SELECTION_PROMPT,
+            system_prompt=PROJECT_AGENT_WRITE_INTENT_PROMPT,
             max_tokens=self.config.context_tokens,
             history_tokens=self.config.history_tokens,
         ).prepare(recent)
+        payload: dict[str, Any] = {"question": question}
+        if verbatim is not None:
+            payload["participant_verbatim"] = verbatim
         content = json.dumps(
             {
-                "question": question,
+                **payload,
                 "dialog_memory": recent["dialog_memory"],
                 "history": [
                     {"role": message["role"], "content": message["content"][:TEXT_FRAGMENT_LIMIT]}
@@ -611,166 +765,73 @@ class ProjectAgentService:
             },
             ensure_ascii=False,
         )
-        try:
-            return await self.llm_client.get_structured_response(
-                system_prompt=PROJECT_AGENT_TOOL_SELECTION_PROMPT,
-                content=content,
-                schema=AgentToolPlan,
-                max_completion_tokens=700,
-            )
-        except ClientError as error:
-            raise KnowledgeProviderError(str(error)) from error
-        except Exception as error:
-            raise ProjectAgentError(str(error)) from error
-
-    async def _load_structured_tools(
-        self,
-        db: ProjectAgentScope,
-        *,
-        project: Project,
-        stages: list[Any],
-        ranked_tasks: list[Any],
-        ranked_documents: list[Any],
-        nodes: list[Any],
-        tool_plan: AgentToolPlan,
-    ) -> _AgentDatabaseContext:
-        """Выполняет выбранные моделью ограниченные запросы PostgreSQL."""
-        context = _AgentDatabaseContext(
-            stages=stages,
-            ranked_tasks=ranked_tasks,
-            ranked_documents=ranked_documents,
-            nodes=nodes,
+        result = await self.llm_client.get_structured_response(
+            system_prompt=PROJECT_AGENT_WRITE_INTENT_PROMPT,
+            content=content,
+            schema=WriteIntent,
+            max_completion_tokens=700,
         )
-        stages_by_name = {stage.name.casefold(): stage for stage in stages}
-        project_id = project.id
-        current_date = date.today()
-        seen: set[tuple[Any, ...]] = set()
-        for tool_call in tool_plan.calls:
-            normalized_stage = tool_call.stage_name.strip() if tool_call.stage_name else None
-            key = (
-                tool_call.name,
-                normalized_stage.casefold() if normalized_stage is not None else None,
-                tool_call.date_from,
-                tool_call.date_to,
-                tool_call.task_key,
-                tool_call.proposed_start_date,
-                tool_call.proposed_due_date,
-                tool_call.shift_days,
+        return result.write_intent
+
+    async def _semantic_search(
+        self, project_id: int, query: str, phases: dict[str, float | None]
+    ) -> tuple[list[KnowledgeSearchHit], bool]:
+        """Векторный поиск по проекту; недоступный индекс — не ошибка ответа."""
+        if not self.config.knowledge_enabled:
+            return [], False
+        phase = perf_counter()
+        try:
+            vector = await self.embedding_client.get_embedding(query)
+            phases["embedding"] = self._elapsed_ms(phase)
+            phase = perf_counter()
+            hits = await self.qdrant_client.search(
+                project_id=project_id,
+                vector=vector,
+                limit=self.config.semantic_limit,
+                score_threshold=self.config.score_threshold,
+                entity_type=None,
             )
-            if key in seen:
-                continue
-            seen.add(key)
-            if tool_call.name is StructuredToolName.PROJECT_STATISTICS:
-                context.statistics = await db.tasks.get_project_statistics(
-                    project_id=project_id,
-                    today=current_date,
-                )
-            elif tool_call.name is StructuredToolName.REGISTERED_RISKS:
-                context.risk_summary = build_risk_summary(
-                    await db.risks.get_aggregates(
-                        project_ids={project_id},
-                        filters=ProjectRiskFilters(),
-                        today=current_date,
-                    )
-                )
-                context.registered_risks = await db.risks.get_page(
-                    project_id=project_id,
-                    filters=ProjectRiskFilters(),
-                    page=1,
-                    page_size=MAX_TOOL_TASKS,
-                )
-            elif tool_call.name is StructuredToolName.TASKS_BY_STATUS:
-                stage = (
-                    stages_by_name.get(normalized_stage.casefold()) if normalized_stage else None
-                )
-                tasks = (
-                    await db.tasks.get_by_stage_limited(
-                        project_id=project_id,
-                        stage_id=stage.id,
-                        limit=MAX_TOOL_TASKS,
-                    )
-                    if stage is not None
-                    else []
-                )
-                context.tasks_by_status.append((normalized_stage or "", stage, tasks))
-            elif tool_call.name is StructuredToolName.OVERDUE_TASKS:
-                context.overdue_tasks = await db.tasks.get_overdue_limited(
-                    project_id=project_id,
-                    today=current_date,
-                    limit=MAX_TOOL_TASKS,
-                )
-            elif tool_call.name is StructuredToolName.PROJECT_STRUCTURE:
-                context.structure_counts = await db.tasks.get_wbs_counts(project_id)
-            elif tool_call.name is StructuredToolName.RECENT_PROJECT_ACTIVITY:
-                context.activity = await db.activity.get_recent_by_project(
-                    project_id,
-                    limit=30,
-                )
-                activity_tasks = await db.tasks.get_by_ids(
-                    {item.task_id for item in context.activity}
-                )
-                context.activity_tasks = {task.id: task for task in activity_tasks}
-            elif tool_call.name in {
-                StructuredToolName.CALENDAR,
-                StructuredToolName.UPCOMING_DEADLINES,
-                StructuredToolName.PROJECT_RISKS,
-                StructuredToolName.SCHEDULE_DRIFT,
-            }:
-                date_from, date_to = _agent_calendar_range(
-                    tool_call=tool_call,
-                    project=project,
-                    current_date=current_date,
-                )
-                context.calendar_results[tool_call.name] = await db.calendar.get_range(
-                    project_id=project_id,
-                    date_from=date_from,
-                    date_to=date_to,
-                    today=current_date,
-                )
-            elif tool_call.name is StructuredToolName.MILESTONES:
-                context.milestones = (await db.milestones.get_by_project(project_id))[
-                    :MAX_TOOL_TASKS
-                ]
-            elif tool_call.name is StructuredToolName.PREVIEW_SCHEDULE_CHANGE:
-                task_number = _task_number(tool_call.task_key, project.key)
-                if task_number is None:
-                    context.scenario_preview = {
-                        "error": "Для preview нужен ключ задачи текущего проекта."
-                    }
-                    continue
-                task = await db.tasks.get_by_project_number(
-                    project_id,
-                    task_number,
-                )
-                if task is None:
-                    context.scenario_preview = {"error": "Задача для preview не найдена."}
-                    continue
-                start_date, due_date = _proposed_tool_dates(task, tool_call)
-                if start_date == task.start_date and due_date == task.due_date:
-                    context.scenario_preview = {"error": "Для preview не передано изменение дат."}
-                    continue
-                context.scenario_preview = await db.scenario.preview(
-                    project_id,
-                    [
-                        {
-                            "task_id": task.id,
-                            "start_date": start_date,
-                            "due_date": due_date,
-                        }
-                    ],
-                )
-        return context
+            phases["qdrant"] = self._elapsed_ms(phase)
+            return hits, True
+        except ClientError:
+            phases["qdrant" if phases["embedding"] is not None else "embedding"] = self._elapsed_ms(
+                phase
+            )
+            logger.warning(
+                "Семантический поиск проекта %s недоступен; читаю PostgreSQL.",
+                project_id,
+                exc_info=True,
+            )
+            return [], False
+
+    async def _load_project_base(
+        self, project_id: int, query: str, phases: dict[str, float | None]
+    ) -> tuple[Project, Any, list[Any], list[Any]]:
+        """Проект, каталог источников, полнотекстовый поиск и стадии — одной короткой сессией."""
+        phase = perf_counter()
+        try:
+            async with self.scope() as db:
+                project = await self._require_project(db, project_id=project_id)
+                catalog = build_catalog(project_id, await db.sources.get_project_rows(project_id))
+                fts_hits = await db.sources.search(project_id, query, entity_type=None, limit=30)
+                stages = await db.stages.get_by_project(project_id)
+        except RepositoryError as error:
+            raise ProjectAgentError(str(error)) from error
+        phases["ranked_fts"] = self._elapsed_ms(phase)
+        return project, catalog, fts_hits, stages
 
     def _build_postgres_context(
         self,
         *,
         project: Project,
-        context: _AgentDatabaseContext,
+        stages: list[Any],
         registry: _SourceRegistry,
     ) -> dict[str, Any]:
-        """Собирает ограниченный JSON-совместимый срез актуальных данных."""
-        stage_by_id = {stage.id: stage for stage in context.stages}
-        wbs_paths = build_wbs_paths(context.nodes)
+        """Паспорт проекта и его стадии — актуальная база ответа из PostgreSQL.
+
+        Остальное (сводки, просрочки, календарь, риски) агент читает сам
+        инструментами — раньше это подкладывал планировщик до старта агента.
+        """
         project_source = KnowledgeSourceSchema(
             source_id=f"project:{project.id}",
             entity_type="project",
@@ -778,7 +839,7 @@ class ProjectAgentService:
             title=f"{project.key} · {project.name}"[:512],
             excerpt=(project.description_md or "")[:SOURCE_EXCERPT_LIMIT] or None,
         )
-        result: dict[str, Any] = {
+        return {
             "project": {
                 "source_handle": registry.register(project_source),
                 "key": project.key,
@@ -789,527 +850,6 @@ class ProjectAgentService:
                 "description": (project.description_md or "")[:PROJECT_DESCRIPTION_LIMIT],
             },
             "stages": [
-                {
-                    "name": stage.name[:255],
-                    "is_done_stage": stage.is_done_stage,
-                }
-                for stage in context.stages
-            ],
-            "retrieved_tasks": [
-                self._task_context(
-                    task=task,
-                    project=project,
-                    stage_by_id=stage_by_id,
-                    wbs_paths=wbs_paths,
-                    registry=registry,
-                )
-                for task in context.ranked_tasks[:MAX_RETRIEVED_TASKS]
-            ],
-            "retrieved_documents": [
-                self._document_context(document=document, registry=registry)
-                for document in context.ranked_documents[:MAX_RETRIEVED_DOCUMENTS]
-            ],
-            "tool_results": {},
-            "retrieved_risks": [
-                self._risk_context(risk, registry) for risk in context.ranked_risks
+                {"name": stage.name[:255], "is_done_stage": stage.is_done_stage} for stage in stages
             ],
         }
-        tools: dict[str, Any] = result["tool_results"]
-        if context.risk_summary is not None:
-            tools[StructuredToolName.REGISTERED_RISKS.value] = {
-                "summary": context.risk_summary.model_dump(mode="json"),
-                "items": [self._risk_context(risk, registry) for risk in context.registered_risks],
-                "truncated": context.risk_summary.total_risks > len(context.registered_risks),
-            }
-        if context.statistics is not None:
-            statistics = context.statistics
-            tools[StructuredToolName.PROJECT_STATISTICS.value] = {
-                "total": statistics.total,
-                "overdue": statistics.overdue,
-                "by_stage": {
-                    stage_by_id[stage_id].name: count
-                    for stage_id, count in statistics.by_stage.items()
-                    if stage_id in stage_by_id
-                },
-                "by_priority": statistics.by_priority,
-                "by_assignee": statistics.by_assignee,
-            }
-        if context.tasks_by_status:
-            tools[StructuredToolName.TASKS_BY_STATUS.value] = [
-                {
-                    "requested_stage": requested_stage,
-                    "matched_stage": stage.name if stage is not None else None,
-                    "tasks": [
-                        self._task_context(
-                            task=task,
-                            project=project,
-                            stage_by_id=stage_by_id,
-                            wbs_paths=wbs_paths,
-                            registry=registry,
-                        )
-                        for task in tasks[:MAX_TOOL_TASKS]
-                    ],
-                }
-                for requested_stage, stage, tasks in context.tasks_by_status
-            ]
-        if context.overdue_tasks:
-            tools[StructuredToolName.OVERDUE_TASKS.value] = [
-                self._task_context(
-                    task=task,
-                    project=project,
-                    stage_by_id=stage_by_id,
-                    wbs_paths=wbs_paths,
-                    registry=registry,
-                )
-                for task in context.overdue_tasks[:MAX_TOOL_TASKS]
-            ]
-        if context.structure_counts is not None:
-            tools[StructuredToolName.PROJECT_STRUCTURE.value] = [
-                {
-                    "path": wbs_paths.get(node.id, node.title)[:TEXT_FRAGMENT_LIMIT],
-                    "tasks_count": context.structure_counts.get(node.id, 0),
-                }
-                for node in context.nodes
-            ]
-        if context.activity:
-            activity_rows: list[dict[str, Any]] = []
-            for item in context.activity[:30]:
-                task = context.activity_tasks.get(item.task_id)
-                if task is None:
-                    continue
-                activity_rows.append(
-                    {
-                        "source_handle": registry.register(self._task_source(task, project)),
-                        "task_key": build_task_key(project.key, task.number),
-                        "created_at": item.created_at.isoformat(),
-                        "event_type": item.event_type.value,
-                        "from_value": (item.from_value or "")[:TEXT_FRAGMENT_LIMIT],
-                        "to_value": (item.to_value or "")[:TEXT_FRAGMENT_LIMIT],
-                    }
-                )
-            tools[StructuredToolName.RECENT_PROJECT_ACTIVITY.value] = activity_rows
-        for tool_name, calendar in context.calendar_results.items():
-            tools[tool_name.value] = self._calendar_tool_context(
-                tool_name=tool_name,
-                calendar=calendar,
-                registry=registry,
-            )
-        if context.milestones:
-            tools[StructuredToolName.MILESTONES.value] = [
-                self._milestone_context(milestone, registry)
-                for milestone in context.milestones[:MAX_TOOL_TASKS]
-            ]
-        if context.scenario_preview is not None:
-            tools[StructuredToolName.PREVIEW_SCHEDULE_CHANGE.value] = (
-                self._scenario_context(context.scenario_preview, registry)
-                if not isinstance(context.scenario_preview, dict)
-                else context.scenario_preview
-            )
-        return result
-
-    def _calendar_tool_context(
-        self,
-        *,
-        tool_name: StructuredToolName,
-        calendar: Any,
-        registry: _SourceRegistry,
-    ) -> dict[str, Any]:
-        """Сериализует результат детерминированного CalendarService."""
-        tasks = calendar.tasks
-        if tool_name is StructuredToolName.PROJECT_RISKS:
-            tasks = [task for task in tasks if task.risk_reasons]
-        elif tool_name is StructuredToolName.SCHEDULE_DRIFT:
-            tasks = [task for task in tasks if task.drift_days not in {None, 0}]
-        return {
-            "range": calendar.range.model_dump(mode="json"),
-            "summary": calendar.summary.model_dump(mode="json"),
-            "tasks": [
-                {
-                    "source_handle": registry.register(
-                        KnowledgeSourceSchema(
-                            source_id=f"task:{task.id}",
-                            entity_type="task",
-                            entity_id=task.id,
-                            task_id=task.id,
-                            title=f"{task.key} · {task.title}"[:512],
-                        )
-                    ),
-                    "task_key": task.key,
-                    "title": task.title[:512],
-                    "start_date": str(task.start_date) if task.start_date else None,
-                    "due_date": str(task.due_date) if task.due_date else None,
-                    "baseline_start_date": (
-                        str(task.baseline_start_date) if task.baseline_start_date else None
-                    ),
-                    "baseline_due_date": (
-                        str(task.baseline_due_date) if task.baseline_due_date else None
-                    ),
-                    "drift_days": task.drift_days,
-                    "assignee": task.assignee,
-                    "is_done": task.is_done,
-                    "risk_level": task.risk_level,
-                    "risk_reasons": [
-                        reason.model_dump(mode="json", exclude_none=True)
-                        for reason in task.risk_reasons
-                    ],
-                }
-                for task in tasks[:MAX_TOOL_TASKS]
-            ],
-            "milestones": [
-                self._calendar_milestone_context(milestone, registry)
-                for milestone in calendar.milestones[:MAX_TOOL_TASKS]
-            ],
-        }
-
-    @staticmethod
-    def _calendar_milestone_context(
-        milestone: Any,
-        registry: _SourceRegistry,
-    ) -> dict[str, Any]:
-        result = {
-            "title": milestone.title[:512],
-            "due_date": str(milestone.due_date),
-            "status": milestone.status.value,
-            "is_system": milestone.is_system,
-        }
-        if milestone.id is not None:
-            result["source_handle"] = registry.register(
-                KnowledgeSourceSchema(
-                    source_id=f"milestone:{milestone.id}",
-                    entity_type="milestone",
-                    entity_id=milestone.id,
-                    title=milestone.title[:512],
-                    excerpt=(milestone.description_md or "")[:SOURCE_EXCERPT_LIMIT] or None,
-                )
-            )
-        return result
-
-    @staticmethod
-    def _milestone_context(milestone: Any, registry: _SourceRegistry) -> dict[str, Any]:
-        source = KnowledgeSourceSchema(
-            source_id=f"milestone:{milestone.id}",
-            entity_type="milestone",
-            entity_id=milestone.id,
-            title=milestone.title[:512],
-            excerpt=(milestone.description_md or "")[:SOURCE_EXCERPT_LIMIT] or None,
-        )
-        return {
-            "source_handle": registry.register(source),
-            "title": milestone.title[:512],
-            "description": (milestone.description_md or "")[:TEXT_FRAGMENT_LIMIT],
-            "due_date": str(milestone.due_date),
-            "status": milestone.status.value,
-        }
-
-    @staticmethod
-    def _scenario_context(preview: Any, registry: _SourceRegistry) -> dict[str, Any]:
-        return {
-            "can_apply": preview.can_apply,
-            "consequences_count": preview.consequences_count,
-            "conflicts": [item.model_dump(mode="json") for item in preview.conflicts],
-            "changes": [
-                {
-                    "source_handle": registry.register(
-                        KnowledgeSourceSchema(
-                            source_id=f"task:{change.task_id}",
-                            entity_type="task",
-                            entity_id=change.task_id,
-                            task_id=change.task_id,
-                            title=f"{change.task_key} · {change.task_title}"[:512],
-                        )
-                    ),
-                    "task_key": change.task_key,
-                    "title": change.task_title[:512],
-                    "source": change.source.value,
-                    "current": change.current.model_dump(mode="json"),
-                    "proposed": change.proposed.model_dump(mode="json"),
-                    "reasons": [
-                        reason.model_dump(mode="json", exclude_none=True)
-                        for reason in change.reasons
-                    ],
-                }
-                for change in preview.changes[:MAX_TOOL_TASKS]
-            ],
-        }
-
-    def _task_context(
-        self,
-        *,
-        task: Any,
-        project: Project,
-        stage_by_id: dict[int, Any],
-        wbs_paths: dict[int, str],
-        registry: _SourceRegistry,
-    ) -> dict[str, Any]:
-        """Сериализует одну retrieved-задачу с ограниченными строками."""
-        stage = stage_by_id.get(task.stage_id)
-        return {
-            "kind": "task",
-            "source_handle": registry.register(self._task_source(task, project)),
-            "task_key": build_task_key(project.key, task.number),
-            "title": task.title[:512],
-            "description": (task.description_md or "")[:TEXT_FRAGMENT_LIMIT],
-            "checklist": checklist_context(getattr(task, "checklist", None), limit=10, chars=200),
-            "stage": stage.name[:255] if stage is not None else None,
-            "is_done": bool(stage and stage.is_done_stage),
-            "priority": task.priority.value,
-            "role": task.role.value if task.role else None,
-            "assignee": task.assignee,
-            "due_date": str(task.due_date) if task.due_date else None,
-            "wbs_path": (
-                wbs_paths.get(task.wbs_node_id, "")[:TEXT_FRAGMENT_LIMIT]
-                if task.wbs_node_id
-                else None
-            ),
-        }
-
-    def _document_context(
-        self,
-        *,
-        document: Any,
-        registry: _SourceRegistry,
-    ) -> dict[str, Any]:
-        """Сериализует один найденный PostgreSQL-документ."""
-        return {
-            "kind": "document",
-            "source_handle": registry.register(self._document_source(document)),
-            "title": document.title[:512],
-            "slug": document.slug[:255],
-            "content": (document.content_md or "")[:TEXT_FRAGMENT_LIMIT],
-        }
-
-    @staticmethod
-    def _task_source(task: Any, project: Project) -> KnowledgeSourceSchema:
-        """Строит серверные метаданные источника задачи."""
-        task_key = build_task_key(project.key, task.number)
-        return KnowledgeSourceSchema(
-            source_id=f"task:{task.id}",
-            entity_type="task",
-            entity_id=task.id,
-            task_id=task.id,
-            title=f"{task_key} · {task.title}"[:512],
-            excerpt=(task.description_md or "")[:SOURCE_EXCERPT_LIMIT] or None,
-        )
-
-    @staticmethod
-    def _document_source(document: Any) -> KnowledgeSourceSchema:
-        """Строит серверные метаданные источника wiki-документа."""
-        return KnowledgeSourceSchema(
-            source_id=f"document:{document.id}",
-            entity_type="document",
-            entity_id=document.id,
-            title=document.title[:512],
-            excerpt=(document.content_md or "")[:SOURCE_EXCERPT_LIMIT] or None,
-            document_slug=document.slug[:255],
-        )
-
-    @staticmethod
-    def _risk_context(risk: Any, registry: _SourceRegistry) -> dict[str, Any]:
-        """Сериализует текущую запись реестра и проверяемый источник риска."""
-        source = KnowledgeSourceSchema(
-            source_id=f"risk:{risk.id}",
-            entity_type="risk",
-            entity_id=risk.id,
-            title=f"{risk.key} · {risk.title}",
-            excerpt=risk.description[:SOURCE_EXCERPT_LIMIT],
-        )
-        data = ProjectRiskSchema.model_validate(risk).model_dump(mode="json")
-        for name in ("description", "mitigation_plan", "response_plan"):
-            data[name] = data[name][:TEXT_FRAGMENT_LIMIT]
-        return {
-            "kind": "current_registered_risk",
-            "source_handle": registry.register(source),
-            **data,
-        }
-
-    def _build_semantic_context(
-        self,
-        hits: list[KnowledgeSearchHit],
-        registry: _SourceRegistry,
-        *,
-        semantic_risks: dict[int, Any] | None = None,
-        semantic_tasks: dict[int, dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Преобразует Qdrant hits в JSON с непредсказуемыми source handles."""
-        result: list[dict[str, Any]] = []
-        seen_sources: set[str] = set()
-        for hit in hits:
-            payload = hit.payload
-            source_id = str(payload.get("source_id") or "")
-            entity_type = str(payload.get("entity_type") or "")
-            try:
-                entity_id = int(str(payload.get("entity_id")))
-            except ValueError:
-                continue
-            if entity_type not in {
-                "project",
-                "task",
-                "document",
-                "comment",
-                "attachment",
-                "milestone",
-                "risk",
-            }:
-                continue
-            if source_id != f"{entity_type}:{entity_id}":
-                continue
-            if source_id in seen_sources:
-                continue
-            seen_sources.add(source_id)
-            if entity_type == "task" and semantic_tasks is not None:
-                current = semantic_tasks.get(entity_id)
-                if current is not None:
-                    result.append({**current, "score": round(hit.score, 6)})
-                continue
-            if entity_type == "risk":
-                risk = (semantic_risks or {}).get(entity_id)
-                if risk is not None:
-                    result.append(
-                        {**self._risk_context(risk, registry), "score": round(hit.score, 6)}
-                    )
-                continue
-            excerpt = str(payload.get("text") or "")[:TEXT_FRAGMENT_LIMIT]
-            source = registry.update(
-                source_id,
-                score=hit.score,
-                excerpt=excerpt[:SOURCE_EXCERPT_LIMIT] or None,
-            )
-            if source is None:
-                task_id_value = payload.get("task_id")
-                try:
-                    task_id = int(str(task_id_value)) if task_id_value else None
-                except ValueError:
-                    task_id = None
-                source = KnowledgeSourceSchema(
-                    source_id=source_id,
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    title=str(payload.get("title") or source_id)[:512],
-                    excerpt=excerpt[:SOURCE_EXCERPT_LIMIT] or None,
-                    score=hit.score,
-                    task_id=task_id,
-                    document_slug=(
-                        str(payload.get("document_slug"))[:255]
-                        if payload.get("document_slug")
-                        else None
-                    ),
-                )
-            handle = registry.register(source)
-            result.append(
-                {
-                    "kind": "semantic_fragment",
-                    "source_handle": handle,
-                    "score": round(hit.score, 6),
-                    "text": excerpt,
-                }
-            )
-        return result
-
-    def _build_hybrid_context(
-        self,
-        *,
-        task_candidates: list[dict[str, Any]],
-        document_candidates: list[dict[str, Any]],
-        semantic_candidates: list[dict[str, Any]],
-        registry: _SourceRegistry,
-        risk_candidates: list[dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Объединяет PostgreSQL FTS и Qdrant-кандидатов по RRF."""
-
-        def source_ids(candidates: list[dict[str, Any]]) -> list[str]:
-            result: list[str] = []
-            for candidate in candidates:
-                source = registry.resolve(candidate["source_handle"])
-                if source is not None:
-                    result.append(source.source_id)
-            return result
-
-        scores = reciprocal_rank_fusion(
-            [
-                source_ids(task_candidates),
-                source_ids(document_candidates),
-                source_ids(risk_candidates or []),
-                source_ids(semantic_candidates),
-            ]
-        )
-        lexical_by_source: dict[str, dict[str, Any]] = {}
-        for candidate in [*task_candidates, *document_candidates, *(risk_candidates or [])]:
-            source = registry.resolve(candidate["source_handle"])
-            if source is not None:
-                lexical_by_source.setdefault(source.source_id, candidate)
-        semantic_by_source: dict[str, dict[str, Any]] = {}
-        for candidate in semantic_candidates:
-            source = registry.resolve(candidate["source_handle"])
-            if source is not None:
-                semantic_by_source.setdefault(source.source_id, candidate)
-
-        result: list[dict[str, Any]] = []
-        for source_id, score in scores.items():
-            handle = registry.get_handle(source_id)
-            source = registry.resolve(handle) if handle is not None else None
-            if handle is None or source is None:
-                continue
-            lexical = lexical_by_source.get(source_id)
-            semantic = semantic_by_source.get(source_id)
-            result.append(
-                {
-                    "source_handle": handle,
-                    "entity_type": source.entity_type,
-                    "rrf_score": round(score, 8),
-                    "current_data": lexical,
-                    "semantic_fragment": semantic,
-                }
-            )
-            if len(result) >= MAX_RETRIEVAL_CONTEXT:
-                break
-        return result
-
-
-def _agent_calendar_range(
-    *,
-    tool_call: AgentToolCall,
-    project: Project,
-    current_date: date,
-) -> tuple[date, date]:
-    """Возвращает ограниченный диапазон для выбранного calendar tool."""
-    if tool_call.name is StructuredToolName.UPCOMING_DEADLINES:
-        return current_date, current_date + timedelta(days=30)
-    if tool_call.name is StructuredToolName.PROJECT_RISKS:
-        return current_date - timedelta(days=90), current_date + timedelta(days=90)
-    if tool_call.name is StructuredToolName.SCHEDULE_DRIFT:
-        date_from = project.start_date or current_date - timedelta(days=185)
-        date_to = project.due_date or current_date + timedelta(days=185)
-    else:
-        date_from = tool_call.date_from or current_date - timedelta(days=30)
-        date_to = tool_call.date_to or current_date + timedelta(days=60)
-    if date_to < date_from:
-        date_from = current_date - timedelta(days=30)
-        date_to = current_date + timedelta(days=60)
-    if (date_to - date_from).days > MAX_CALENDAR_RANGE_DAYS:
-        date_to = date_from + timedelta(days=MAX_CALENDAR_RANGE_DAYS)
-    return date_from, date_to
-
-
-def _task_number(task_key: str | None, project_key: str) -> int | None:
-    """Разбирает ключ задачи только текущего проекта."""
-    if task_key is None:
-        return None
-    prefix, separator, number = task_key.strip().upper().rpartition("-")
-    if separator != "-" or prefix != project_key.upper() or not number.isdigit():
-        return None
-    return int(number)
-
-
-def _proposed_tool_dates(task: Any, tool_call: AgentToolCall) -> tuple[date | None, date | None]:
-    """Применяет сдвиг и явные даты к текущему интервалу задачи."""
-    start_date = task.start_date
-    due_date = task.due_date
-    if tool_call.shift_days is not None:
-        delta = timedelta(days=tool_call.shift_days)
-        start_date = start_date + delta if start_date is not None else None
-        due_date = due_date + delta if due_date is not None else None
-    if tool_call.proposed_start_date is not None:
-        start_date = tool_call.proposed_start_date
-    if tool_call.proposed_due_date is not None:
-        due_date = tool_call.proposed_due_date
-    return start_date, due_date

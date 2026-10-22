@@ -133,3 +133,33 @@ StageAccessDep = Annotated[AccessGrant, Depends(require_stage_access)]
 DocumentAccessDep = Annotated[AccessGrant, Depends(require_document_access)]
 CommentAccessDep = Annotated[AccessGrant, Depends(require_comment_access)]
 LinkAccessDep = Annotated[AccessGrant, Depends(require_link_access)]
+
+
+async def require_task_deletion(
+    task_id: TaskIdPath,
+    principal: PrincipalDep,
+    service: AccessServiceDep,
+) -> AccessGrant:
+    try:
+        return await service.ensure_task_deletion(task_id=task_id, user_id=principal.user_id)
+    except AccessServiceError as error:
+        raise _as_http_error(error) from error
+
+
+TaskDeletionAccessDep = Annotated[AccessGrant, Depends(require_task_deletion)]
+
+
+async def require_comment_authorship(
+    comment_id: CommentIdPath,
+    principal: PrincipalDep,
+    service: AccessServiceDep,
+) -> AccessGrant:
+    try:
+        return await service.ensure_comment_authorship(
+            comment_id=comment_id, user_id=principal.user_id
+        )
+    except AccessServiceError as error:
+        raise _as_http_error(error) from error
+
+
+CommentAuthorshipDep = Annotated[AccessGrant, Depends(require_comment_authorship)]

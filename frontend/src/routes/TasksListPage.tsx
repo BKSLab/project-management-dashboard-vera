@@ -58,7 +58,7 @@ export function TasksListPage() {
             .filter((task) => priorityFilter === "" || task.priority === priorityFilter)
             .sort((first, second) => {
                 const stageDelta =
-                    (stageOrder.get(first.stage_id) ?? 0) - (stageOrder.get(second.stage_id) ?? 0);
+                    (stageOrder.get(first.stage_id ?? 0) ?? 0) - (stageOrder.get(second.stage_id ?? 0) ?? 0);
                 return stageDelta !== 0 ? stageDelta : first.position - second.position;
             });
     }, [tasksQuery.data, stagesQuery.data, stageFilter, priorityFilter]);
@@ -160,7 +160,7 @@ export function TasksListPage() {
                             </thead>
                             <tbody>
                                 {rows.map((task) => {
-                                    const stage = stagesById.get(task.stage_id);
+                                    const stage = stagesById.get(task.stage_id ?? 0);
                                     return (
                                         <tr
                                             key={task.id}

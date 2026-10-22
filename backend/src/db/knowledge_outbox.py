@@ -37,24 +37,34 @@ $$ LANGUAGE plpgsql;
 """
 
 
-def install_outbox(connection, rules=None):
-    """Устанавливает единую функцию и триггеры выбранной версии реестра."""
+def outbox_statements(rules=None) -> list[str]:
+    """Возвращает DDL функции и триггеров outbox для текущего реестра знаний.
+
+    Тот же список SQL вписывается в базовую миграцию: так миграция и
+    ``create_all`` в тестах создают одинаковые триггеры, а тест сверяет их.
+    """
     if rules is None:
         from src.knowledge.catalog import POLICIES
 
         rules = [
             (rule.table, rule.scope, rule.fields) for rule in POLICIES if rule.invalidates_index
         ]
-    connection.execute(text(OUTBOX_FUNCTION))
+    statements = [OUTBOX_FUNCTION.strip()]
     for table, scope, fields in rules:
         watched = [field for field in fields if field not in {"created_at", "updated_at"}]
         columns = ", ".join(f'"{name}"' for name in watched)
-        connection.execute(text(f'DROP TRIGGER IF EXISTS knowledge_changed ON "{table}"'))
-        connection.execute(
-            text(
-                f"CREATE TRIGGER knowledge_changed AFTER INSERT OR DELETE OR UPDATE OF {columns} ON \"{table}\" FOR EACH ROW EXECUTE FUNCTION knowledge_project_changed('{scope}')"
-            )
+        statements.append(f'DROP TRIGGER IF EXISTS knowledge_changed ON "{table}"')
+        statements.append(
+            f"CREATE TRIGGER knowledge_changed AFTER INSERT OR DELETE OR UPDATE OF {columns} "
+            f"ON \"{table}\" FOR EACH ROW EXECUTE FUNCTION knowledge_project_changed('{scope}')"
         )
+    return statements
+
+
+def install_outbox(connection, rules=None):
+    """Устанавливает единую функцию и триггеры выбранной версии реестра."""
+    for statement in outbox_statements(rules):
+        connection.execute(text(statement))
 
 
 def register_outbox_ddl(metadata):

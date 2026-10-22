@@ -52,6 +52,7 @@ from src.prompts.analytics import (
 from src.schemas.analytics import (
     AnalyticsContextSchema,
     AnalyticsDraftSchema,
+    AnalyticsEntityCountSchema,
     AnalyticsFindingSchema,
     AnalyticsHealth,
     AnalyticsProgressSchema,
@@ -64,12 +65,13 @@ from src.schemas.analytics import (
 from src.schemas.project_risks import ProjectRiskFilters, ProjectRiskSchema
 from src.services.db_scope import AnalyticsDbScope, AnalyticsDbScopeFactory
 from src.services.project_risks import build_risk_summary
-from src.services.tasks import build_task_key
+from src.services.tasks import MY_TASK_ROLES, PERSONAL_TASK_KEY, build_task_key
 from src.utils.checklists import checklist_context
 from src.utils.deadlines import DUE_SOON_DAYS, is_task_due_soon, is_task_overdue
 
 logger = logging.getLogger(__name__)
 
+OUTSIDE_TASKS_LIMIT = 40
 MAX_COMPLETION_TOKENS = 6000
 # Порог, за которым срез перестраивается по ужатым лимитам. Считаем в символах:
 # точный подсчёт токенов потребовал бы токенизатора конкретной модели, а нам
@@ -174,6 +176,17 @@ class _ProjectSlice:
     activity_total: int = 0
 
 
+@dataclass(slots=True)
+class _OutsideTasks:
+    """Открытые задачи пользователя вне проектов: потоки и разовые."""
+
+    tasks: list[Task] = field(default_factory=list)
+    my_roles: dict[int, set[Any]] = field(default_factory=dict)
+
+    def key(self, task: Task) -> str:
+        """Отображаемый ключ: по ключу потока или ``T`` у разовой задачи."""
+        return build_task_key(project_key=PERSONAL_TASK_KEY, number=task.number)
+
 class AnalyticsService:
     """Аналитический свод дашборда: разбор состояния работ моделью.
 
@@ -277,6 +290,7 @@ class AnalyticsService:
                     await self._collect_project(db, project=project, scope=scope)
                     for project in projects
                 ]
+                outside = await self._collect_outside_tasks(db, user_id=actor_id) if scope is AnalyticsScope.PORTFOLIO else _OutsideTasks()
         except RepositoryErrors as error:
             logger.error("❌ Ошибка сбора данных для аналитического свода.", exc_info=True)
             raise AnalyticsServiceError(str(error)) from error
@@ -292,13 +306,13 @@ class AnalyticsService:
             or item.project.start_date
             or item.project.due_date
             for item in slices
-        ):
+        ) and not outside.tasks:
             raise AnalyticsEmptyScopeError(
-                error_details=f"В области анализа (project_id={project_id}) нет данных проекта.",
+                error_details=f"В области анализа (project_id={project_id}) нет проектов в работе и открытых разовых задач.",
             )
 
         signals = _build_signals(slices=slices, today=today)
-        content, context = _build_content(slices=slices, scope=scope, signals=signals, today=today)
+        content, context = _build_content(slices=slices, scope=scope, signals=signals, today=today, outside=outside)
 
         system_prompt = (
             ANALYTICS_PROJECT_SYSTEM_PROMPT
@@ -319,7 +333,7 @@ class AnalyticsService:
             logger.error("❌ Модель не вернула аналитический свод.", exc_info=True)
             raise AnalyticsGenerationError(str(error)) from error
 
-        payload = _resolve_draft(draft=draft, slices=slices, today=today)
+        payload = _resolve_draft(draft=draft, slices=slices, today=today, outside=outside)
         duration_ms = round((perf_counter() - started_at) * 1000)
 
         # Вторая короткая DB-фаза: результат сохраняется уже после того,
@@ -377,21 +391,31 @@ class AnalyticsService:
         available = [
             project for project in await db.projects.get_all() if project.id in allowed_ids
         ]
-        if not available:
-            raise AnalyticsEmptyScopeError(
-                error_details=f"У пользователя id={user_id} нет доступных проектов.",
-            )
-
         projects = [project for project in available if project.status in PORTFOLIO_STATUSES]
-        if not projects:
-            raise AnalyticsEmptyScopeError(
-                error_details=(
-                    f"У пользователя id={user_id} нет проектов в работе: "
-                    f"доступно {len(available)}, все вне статуса "
-                    f"{', '.join(sorted(status.value for status in PORTFOLIO_STATUSES))}."
-                ),
-            )
         return projects
+
+    @staticmethod
+    async def _collect_outside_tasks(db: AnalyticsDbScope, *, user_id: int) -> _OutsideTasks:
+        """Читает открытые разовые задачи пользователя вне проектов."""
+        tasks = [
+            task
+            for task in await db.tasks.get_for_person(
+                user_id=user_id,
+                roles=set(MY_TASK_ROLES["all"]),
+                include_closed=False,
+                limit=OUTSIDE_TASKS_LIMIT,
+                outside_projects_only=True,
+            )
+            if task.project_id is None
+        ]
+        my_roles = (
+            await db.participants.get_person_roles(
+                task_ids=[task.id for task in tasks], user_id=user_id
+            )
+            if tasks
+            else {}
+        )
+        return _OutsideTasks(tasks=tasks, my_roles=my_roles)
 
     @staticmethod
     async def _collect_project(
@@ -557,6 +581,7 @@ _ENTITY_LABELS = {
     "participants": "ролевые назначения задач",
     "attachments": "метаданные вложений",
     "dependencies": "зависимости задач",
+    "outside_tasks": "разовые задачи",
 }
 
 
@@ -565,6 +590,7 @@ def _build_content(
     scope: AnalyticsScope,
     signals: AnalyticsSignalsSchema,
     today: date,
+    outside: _OutsideTasks | None = None,
 ) -> tuple[str, AnalyticsContextSchema]:
     """Собирает оба анализа из одинаковых источников в пределах бюджета.
 
@@ -580,6 +606,9 @@ def _build_content(
         payload, context = _render(
             slices=slices, limits=limits, scope=scope, signals=signals, today=today
         )
+        if outside is not None and outside.tasks:
+            payload["outside_projects"] = _render_outside(outside, limits=limits, today=today)
+            context.entity_counts["outside_tasks"] = AnalyticsEntityCountSchema(total=len(outside.tasks), included=len(outside.tasks))
         if compressed:
             context.truncated = True
             context.omitted.append(
@@ -1150,6 +1179,7 @@ def _resolve_draft(
     draft: AnalyticsDraftSchema,
     slices: list[_ProjectSlice],
     today: date,
+    outside: _OutsideTasks | None = None,
 ) -> dict[str, Any]:
     """Заменяет ключи из ответа модели проверенными ссылками на задачи.
 
@@ -1175,6 +1205,11 @@ def _resolve_draft(
                     today=today,
                 ),
             )
+
+    for task in outside.tasks if outside is not None else []:
+        key = outside.key(task)
+        if key not in tasks_by_key:
+            tasks_by_key[key] = AnalyticsTaskRefSchema(id=task.id, key=key, title=task.title, project_key=PERSONAL_TASK_KEY, due_date=task.due_date, is_overdue=is_task_overdue(due_date=task.due_date, is_done=False, today=today))
 
     def refs(task_keys: list[str]) -> list[AnalyticsTaskRefSchema]:
         seen: set[str] = set()
@@ -1258,3 +1293,45 @@ def _to_report_schema(report: AnalyticsReport, project: Project | None) -> Analy
         signals=payload.get("signals", {}),
         context=report.context_summary or {},
     )
+
+
+def _render_outside(outside: _OutsideTasks, *, limits: _Limits, today: date) -> dict[str, Any]:
+    """Короткие карточки задач пользователя в потоках и разовых.
+
+    Счётчики считаются здесь же: signals среза относятся только к проектам,
+    а смешивать с ними задачи без стадий и вех значило бы исказить показатели
+    карточек проектов.
+    """
+    soon_until = today + timedelta(days=DUE_SOON_DAYS)
+    rendered = []
+    overdue = due_soon = no_due = 0
+    for task in outside.tasks:
+        entry: dict[str, Any] = {
+            "key": outside.key(task),
+            "title": _cut(task.title, limits.description_chars),
+            "status": task.status.value if task.status else None,
+            "priority": task.priority.value,
+            "assignee": task.assignee or None,
+            "due": _iso(task.due_date),
+            "updated": _iso(task.updated_at),
+            "my_roles": sorted(role.value for role in outside.my_roles.get(task.id, set())),
+        }
+        if is_task_overdue(due_date=task.due_date, is_done=False, today=today):
+            entry["overdue_days"] = (today - task.due_date).days
+            overdue += 1
+        elif is_task_due_soon(
+            due_date=task.due_date, is_done=False, today=today, soon_until=soon_until
+        ):
+            entry["due_soon"] = True
+            due_soon += 1
+        if task.due_date is None:
+            no_due += 1
+        rendered.append(entry)
+    return {
+        "open_tasks": len(rendered),
+        "overdue_tasks": overdue,
+        "due_soon_tasks": due_soon,
+        "no_due_date_tasks": no_due,
+        "limit": OUTSIDE_TASKS_LIMIT,
+        "tasks": rendered,
+    }

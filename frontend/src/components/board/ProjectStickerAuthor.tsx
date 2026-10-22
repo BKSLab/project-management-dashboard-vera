@@ -9,7 +9,7 @@ import { UserAvatar } from "@/components/users/UserAvatar";
 import { Tooltip } from "@/components/ui/Tooltip";
 
 interface ProjectStickerAuthorProps {
-    projectId: number;
+    projectId?: number;
     sticker: ProjectSticker;
     members: ProjectMember[];
 }
@@ -19,10 +19,11 @@ export function ProjectStickerAuthor({
     sticker,
     members,
 }: ProjectStickerAuthorProps) {
+    const resolvedProjectId = projectId ?? sticker.project_id;
     const author = resolveStickerAuthor(sticker, members);
     const label = stickerAuthorLabel(author);
-    const avatarUrl = author.kind === "current" && author.user?.has_avatar
-        ? apiUrl(endpoints.projectMemberAvatar(projectId, author.user.id))
+    const avatarUrl = resolvedProjectId != null && author.kind === "current" && author.user?.has_avatar
+        ? apiUrl(endpoints.projectMemberAvatar(resolvedProjectId!, author.user.id))
         : undefined;
 
     return (

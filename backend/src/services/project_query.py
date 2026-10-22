@@ -24,6 +24,7 @@ from src.knowledge.documents import build_wbs_paths
 from src.schemas.knowledge import KnowledgeReadRequest
 from src.services.db_scope import ProjectQueryScope, ProjectQueryScopeFactory
 from src.utils.checklists import checklist_context
+from src.utils.task_filters import TaskFilters, task_matches
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,23 @@ class TaskSummaryDto:
     assignee: str | None
     due_date: date | None
     checklist: dict | None = None
+    task_id: int | None = None
+    start_date: date | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TaskPageDto:
+    """Страница списка задач: элементы и сколько всего подошло."""
+
+    items: list[TaskSummaryDto]
+    total: int
+    offset: int
+    limit: int
+
+    @property
+    def has_more(self) -> bool:
+        """Есть ли задачи за пределами страницы."""
+        return self.offset + len(self.items) < self.total
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +109,7 @@ class CommentDto:
     author: str
     created_at: datetime
     body: str | None
+    comment_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,18 +326,39 @@ class ProjectQueryService:
         assignee: str | None = None,
         only_open: bool = False,
         limit: int,
-    ) -> list[TaskSummaryDto]:
-        """Возвращает задачи проекта с фильтрами.
+        offset: int = 0,
+        query: str | None = None,
+        filters: TaskFilters | None = None,
+    ) -> TaskPageDto:
+        """Возвращает страницу задач проекта с фильтрами.
+
+        Args:
+            project_id: Проект.
+            stage_name: Название стадии.
+            assignee: Имя исполнителя целиком.
+            only_open: Только незавершённые.
+            limit: Размер страницы.
+            offset: Сколько подошедших задач пропустить.
+            query: Текст — лексический поиск по задачам и комментариям.
+            filters: Остальные фильтры (приоритет, сроки, завершённость).
 
         Raises:
             ProjectStageNotFoundError: Если стадия с таким названием не найдена.
             ProjectsServiceError: Если прочитать задачи не удалось.
         """
+        text = query.strip() if query else ""
         try:
             async with self.scope() as db:
                 project = await self._require_project(db, project_id=project_id)
                 stages = await db.stages.get_by_project(project_id)
-                tasks = await db.tasks.get_by_project(project_id=project_id)
+                matching_ids = (
+                    await db.tasks.search_ids(project_id=project_id, search=text) if text else None
+                )
+                tasks = (
+                    []
+                    if matching_ids is not None and not matching_ids
+                    else await db.tasks.get_by_project(project_id=project_id, task_ids=matching_ids)
+                )
         except RepositoryError as error:
             logger.error("❌ Не удалось получить задачи проекта id=%s.", project_id, exc_info=True)
             raise ProjectsServiceError(str(error)) from error
@@ -333,19 +373,30 @@ class ProjectQueryService:
                     known=[item.name for item in stages],
                 )
             tasks = [task for task in tasks if task.stage_id in matched]
-        if assignee is not None:
-            wanted_assignee = assignee.strip().casefold()
-            tasks = [task for task in tasks if (task.assignee or "").casefold() == wanted_assignee]
-        if only_open:
-            tasks = [
-                task
-                for task in tasks
-                if not (task.stage_id in stage_by_id and stage_by_id[task.stage_id].is_done_stage)
-            ]
-        return [
-            _task_summary(task, project_key=project.key, stage=stage_by_id.get(task.stage_id))
-            for task in tasks[:limit]
+        combined = filters or TaskFilters()
+        if assignee is not None or only_open:
+            combined = TaskFilters(
+                assignee=assignee if assignee is not None else combined.assignee,
+                priority=combined.priority,
+                is_done=False if only_open else combined.is_done,
+                due_from=combined.due_from,
+                due_to=combined.due_to,
+                without_due_date=combined.without_due_date,
+            )
+        done_stage_ids = {item.id for item in stages if item.is_done_stage}
+        tasks = [
+            task for task in tasks if task_matches(task, combined, done_stage_ids=done_stage_ids)
         ]
+        page = tasks[offset : offset + limit]
+        return TaskPageDto(
+            items=[
+                _task_summary(task, project_key=project.key, stage=stage_by_id.get(task.stage_id))
+                for task in page
+            ],
+            total=len(tasks),
+            offset=offset,
+            limit=limit,
+        )
 
     async def get_task_details(self, *, task_id: int) -> TaskDetailsDto:
         """Возвращает подробную карточку задачи."""
@@ -392,6 +443,7 @@ class ProjectQueryService:
                 author=comment.author_name,
                 created_at=comment.created_at,
                 body=comment.body_md,
+                comment_id=comment.id,
             )
             for comment in comments[:limit]
         ]
@@ -574,4 +626,6 @@ def _task_summary(task, *, project_key: str, stage) -> TaskSummaryDto:
         priority=task.priority.value,
         assignee=task.assignee,
         due_date=task.due_date,
+        task_id=task.id,
+        start_date=getattr(task, "start_date", None),
     )

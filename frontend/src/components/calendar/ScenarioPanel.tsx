@@ -49,7 +49,7 @@ export function ScenarioPanel({
                         {preview.changes.map((change) => (
                             <div
                                 key={change.task_id}
-                                className="rounded-[var(--radius-control)] bg-white/[0.035] px-2 py-1.5"
+                                className="rounded-[var(--radius-control)] bg-surface-2 px-2 py-1.5"
                             >
                                 <div className="flex items-center gap-1.5 text-[10px]">
                                     <span className="font-mono text-accent">{change.task_key}</span>

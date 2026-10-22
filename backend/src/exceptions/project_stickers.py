@@ -51,3 +51,21 @@ class ProjectStickerTaskMismatchError(ProjectStickersServiceError):
         super().__init__(
             error_details=f"Задачи не принадлежат проекту стикера: {sorted(task_ids)}."
         )
+
+
+class FreeBoardTaskLinksError(ProjectStickersServiceError):
+    """Связь стикера с задачами запрошена на доске без проекта."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    detail = "Привязка к задачам доступна только на доске проекта."
+
+    def __init__(self):
+        super().__init__(error_details="У свободной доски нет проекта, задачи недоступны.")
+
+
+class ProjectStickerLockedError(ProjectStickersServiceError):
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    detail = "Сначала разблокируйте стикер или связанные с ним стрелки."
+
+    def __init__(self):
+        super().__init__(error_details=self.detail)

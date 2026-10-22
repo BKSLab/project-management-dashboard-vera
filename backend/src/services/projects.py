@@ -6,6 +6,7 @@ from src.db.models.project_members import ProjectRole
 from src.db.models.project_stages import ProjectStage
 from src.db.models.tasks import Task
 from src.exceptions.knowledge import KnowledgeEventsServiceError
+from src.exceptions.project_boards import ProjectBoardsRepositoryError
 from src.exceptions.project_stages import ProjectStagesRepositoryError
 from src.exceptions.projects import (
     ProjectDeadlineConflictError,
@@ -21,6 +22,7 @@ from src.exceptions.storage import TaskAttachmentStorageError
 from src.exceptions.tasks import TasksRepositoryError
 from src.exceptions.unit_of_work import UnitOfWorkRepositoryError
 from src.exceptions.users import UsersRepositoryError
+from src.repositories.project_boards import ProjectBoardsRepository
 from src.repositories.project_deadline_changes import ProjectDeadlineChangesRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_stages import ProjectStagesRepository
@@ -36,6 +38,7 @@ from src.schemas.projects import (
     ProjectStatsSchema,
     StageBreakdownSchema,
 )
+from src.services.board_defaults import ensure_default_board
 from src.services.knowledge_events import KnowledgeEvents
 from src.storage.task_attachments import TaskAttachmentStorage
 from src.utils.deadlines import DUE_SOON_DAYS, is_task_due_soon, is_task_overdue
@@ -56,6 +59,7 @@ RepositoryErrors = (
     UsersRepositoryError,
     ProjectsRepositoryError,
     ProjectStagesRepositoryError,
+    ProjectBoardsRepositoryError,
     TasksRepositoryError,
     KnowledgeEventsServiceError,
     UnitOfWorkRepositoryError,
@@ -76,6 +80,7 @@ class ProjectsService:
         knowledge_events: KnowledgeEvents,
         users_repository: UsersRepository,
         deadline_changes_repository: ProjectDeadlineChangesRepository,
+        boards_repository: ProjectBoardsRepository | None = None,
     ):
         self.projects_repository = projects_repository
         self.members_repository = members_repository
@@ -86,6 +91,7 @@ class ProjectsService:
         self.knowledge_events = knowledge_events
         self.users_repository = users_repository
         self.deadline_changes_repository = deadline_changes_repository
+        self.boards_repository = boards_repository
 
     def get_defaults(self) -> ProjectDefaultsSchema:
         """Возвращает стандартные стадии из того же источника, что использует создание."""
@@ -201,6 +207,8 @@ class ProjectsService:
             if payload.get("due_date") is not None:
                 await self._record_deadline(project.id, None, payload["due_date"], owner_id, None)
             await self.knowledge_events.reindex_project(project.id)
+            if self.boards_repository is not None:
+                await ensure_default_board(self.boards_repository, project.id, created_by_user_id=owner_id)
             await self.unit_of_work.commit()
             logger.info("✅ Проект %s создан с командой и стадиями.", project.key)
             return ProjectSchema.model_validate(project)

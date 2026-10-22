@@ -34,3 +34,21 @@ class AgentMessageConflictError(AgentConversationsServiceError):
 
     status_code = 409
     detail = "Сообщение уже изменилось. Обновите диалог и повторите действие."
+
+
+class AgentRequestBusyError(AgentConversationBusyError):
+    """В беседе внешнего канала ещё готовится ответ на прошлый вопрос."""
+
+    def __init__(self, request_id: str) -> None:
+        super().__init__(f"active request_id={request_id}")
+        self.request_id = request_id
+        self.detail = (
+            "Предыдущий вопрос этой беседы ещё обрабатывается "
+            f"(request_id={request_id}). Дождитесь результата и повторите вопрос."
+        )
+
+
+class AgentRequestNotFoundError(AgentConversationNotFoundError):
+    """Вопроса нет или его задал другой ключ либо сотрудник — это неразличимо."""
+
+    detail = "Запрос не найден."

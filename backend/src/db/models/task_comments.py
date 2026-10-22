@@ -11,6 +11,7 @@ from .base import Base
 
 if TYPE_CHECKING:
     from .tasks import Task
+    from .users import User
 
 
 class TaskComment(Base):
@@ -32,11 +33,18 @@ class TaskComment(Base):
         doc="Задача комментария.",
         comment="Идентификатор задачи, к которой относится комментарий.",
     )
+    author_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        doc="Автор комментария — локальный пользователь.",
+        comment="Автор комментария; NULL — пользователь удалён, подпись осталась в author_name.",
+    )
     author_name: Mapped[str | None] = mapped_column(
         String(length=255),
         nullable=True,
-        doc="Подпись автора.",
-        comment="Необязательная свободная подпись автора комментария.",
+        doc="Полное имя автора на момент написания.",
+        comment="Снимок полного имени автора: для полнотекстового поиска и удалённых авторов.",
     )
     body_md: Mapped[str] = mapped_column(
         Text,
@@ -64,6 +72,7 @@ class TaskComment(Base):
     )
 
     task: Mapped[Task] = relationship("Task", back_populates="comments")
+    author: Mapped[User | None] = relationship("User", lazy="raise_on_sql")
 
     def __repr__(self) -> str:
         return f"<TaskComment(id={self.id}, task_id={self.task_id})>"

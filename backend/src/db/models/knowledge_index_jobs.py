@@ -14,6 +14,7 @@ class KnowledgeEntityType(str, enum.Enum):
 
     PROJECT = "PROJECT"
     TASK = "TASK"
+    TASK_REPORT = "TASK_REPORT"
     DOCUMENT = "DOCUMENT"
     COMMENT = "COMMENT"
     ATTACHMENT = "ATTACHMENT"

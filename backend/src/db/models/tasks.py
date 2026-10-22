@@ -4,6 +4,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    CheckConstraint,
     Computed,
     Date,
     DateTime,
@@ -15,11 +16,12 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.schemas.enums import TaskPriority, TaskRole
+from src.schemas.enums import TaskPriority, TaskRole, TaskStatus
 
 from .base import Base, TimestampMixin
 
@@ -50,8 +52,12 @@ class Task(Base, TimestampMixin):
     __tablename__ = "tasks"
     __table_args__ = (
         UniqueConstraint("project_id", "number", name="uq_tasks_project_number"),
+        CheckConstraint("project_id IS NOT NULL OR (wbs_node_id IS NULL AND wbs_position IS NULL AND canvas_x IS NULL AND canvas_y IS NULL)", name="ck_tasks_personal_no_wbs"),
         Index("ix_tasks_search_vector", "search_vector", postgresql_using="gin"),
         Index("ix_tasks_project_due_date", "project_id", "due_date"),
+        CheckConstraint("(project_id IS NULL) = (stage_id IS NULL)", name="ck_tasks_stage_in_project"),
+        CheckConstraint("(project_id IS NULL) = (status IS NOT NULL)", name="ck_tasks_status_outside_project"),
+        Index("uq_tasks_personal_number", "number", unique=True, postgresql_where=text("project_id IS NULL")),
     )
 
     id: Mapped[int] = mapped_column(
@@ -59,19 +65,41 @@ class Task(Base, TimestampMixin):
         doc="Идентификатор задачи.",
         comment="Уникальный идентификатор задачи.",
     )
-    project_id: Mapped[int] = mapped_column(
+    project_id: Mapped[int | None] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
         doc="Проект, которому принадлежит задача.",
         comment="Идентификатор проекта-владельца задачи.",
     )
-    stage_id: Mapped[int] = mapped_column(
+    stage_id: Mapped[int | None] = mapped_column(
         ForeignKey("project_stages.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
         index=True,
         doc="Текущая стадия задачи. Стадия принадлежит тому же проекту.",
         comment="Идентификатор текущей стадии задачи.",
+    )
+    status: Mapped[TaskStatus | None] = mapped_column(
+        Enum(TaskStatus, name="task_status"),
+        nullable=True,
+        doc="Состояние задачи вне проекта; у проектной задачи его задаёт стадия.",
+        comment="Статус разовой задачи; NULL у проектной задачи.",
+    )
+    attention_revision: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default="1",
+        default=1,
+        doc="Версия содержимого задачи для персонального просмотра.",
+        comment="Монотонная версия; обновляется триггерами вместе с содержимым.",
+    )
+    attention_deadline_revision: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default="1",
+        default=1,
+        doc="Версия срока и перехода между открытым и закрытым состоянием.",
+        comment="Отдельная версия нарушения срока; обычные комментарии её не меняют.",
     )
     wbs_node_id: Mapped[int | None] = mapped_column(
         ForeignKey("wbs_nodes.id", ondelete="SET NULL"),
@@ -202,8 +230,8 @@ class Task(Base, TimestampMixin):
         comment="Взвешенный FTS-вектор заголовка и описания задачи.",
     )
 
-    project: Mapped[Project] = relationship("Project", back_populates="tasks")
-    stage: Mapped[ProjectStage] = relationship("ProjectStage", back_populates="tasks")
+    project: Mapped[Project | None] = relationship("Project", back_populates="tasks")
+    stage: Mapped[ProjectStage | None] = relationship("ProjectStage", back_populates="tasks")
     wbs_node: Mapped[WbsNode | None] = relationship("WbsNode", back_populates="tasks")
     comments: Mapped[list[TaskComment]] = relationship(
         "TaskComment",

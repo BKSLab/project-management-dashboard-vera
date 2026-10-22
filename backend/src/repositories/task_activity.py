@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.models.task_activity import TaskActivity, TaskActivityEventType
 from src.db.models.tasks import Task
 from src.exceptions.task_activity import TaskActivityRepositoryError
+from src.utils.request_actor import current_request_actor
 
 logger = logging.getLogger(__name__)
 
@@ -144,12 +145,18 @@ class TaskActivityRepository:
         Raises:
             TaskActivityRepositoryError: Если сохранить событие не удалось.
         """
+        # Автор берётся из контекста запроса: его ставит аутентификация
+        # HTTP и MCP, поэтому ни один сценарий не может забыть подпись.
+        actor = current_request_actor()
         try:
             activity = TaskActivity(
                 task_id=task_id,
                 event_type=event_type,
                 from_value=from_value,
                 to_value=to_value,
+                actor_user_id=actor.user_id if actor else None,
+                actor_name=actor.name if actor else None,
+                via_api_key_label=actor.via_api_key_label if actor else None,
             )
             self.db_session.add(activity)
             await self.db_session.flush()

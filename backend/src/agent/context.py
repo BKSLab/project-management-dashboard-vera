@@ -1,7 +1,20 @@
 """Ограниченная рабочая память агента без дополнительных вызовов модели."""
 
 import json
+import re
 from copy import deepcopy
+
+_HISTORY_OMISSION = "\n… [часть реплики опущена] …\n"
+_HISTORY_FACT = re.compile(
+    r"\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}[./]\d{1,2}[./]\d{2,4}|"
+    r"(?:task|project|document|risk|action|board|milestone):[\w.-]+|"
+    r"[a-z][a-z0-9_]*-\d+|"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|"
+    r"срок\w*|дедлайн\w*|решили|договорились|решени\w*|"
+    r"подтверждени\w*|ожида\w*|осталось|не выполнен\w*|"
+    r"deadline|due_date|pending|completed|decision|confirmation(?:_id|_url)?)\b",
+    re.IGNORECASE,
+)
 
 
 def encode(value) -> str:
@@ -22,6 +35,167 @@ def clip_text(text: str, tokens: int) -> str:
     return text.encode("utf-8")[: max(0, tokens) * 3].decode("utf-8", errors="ignore")
 
 
+def _exact_excerpts(text: str, tokens: int, *, marker: str = _HISTORY_OMISSION) -> str:
+    """Точные фрагменты с обоих краёв и вокруг явных дат/ID/решений, без пересказа."""
+    if estimate_tokens(text) <= tokens:
+        return text
+    if tokens <= estimate_tokens(marker):
+        return clip_text(marker.strip(), tokens)
+    edge_tokens = max(1, (tokens - estimate_tokens(marker)) // 6)
+    head = clip_text(text, edge_tokens)
+    tail = text.encode("utf-8")[-edge_tokens * 3 :].decode("utf-8", errors="ignore")
+    spans = [(0, len(head)), (len(text) - len(tail), len(text))]
+
+    def render(selected: list[tuple[int, int]]) -> str:
+        merged: list[list[int]] = []
+        for start, end in sorted(selected):
+            if merged and start <= merged[-1][1]:
+                merged[-1][1] = max(end, merged[-1][1])
+            else:
+                merged.append([start, end])
+        return marker.join(text[start:end] for start, end in merged)
+
+    # Граница предложения даёт контекст значения, но не тащит весь отчёт одной строкой.
+    matches = list(_HISTORY_FACT.finditer(text))
+    for match in reversed(matches):
+        if any(start <= match.start() and match.end() <= end for start, end in spans):
+            continue
+        start = max(0, match.start() - 100)
+        end = min(len(text), match.end() + 100)
+        for separator in ("\n", ". ", "; "):
+            boundary = text.rfind(separator, start, match.start())
+            if boundary >= 0:
+                start = max(start, boundary + len(separator))
+            boundary = text.find(separator, match.end(), end)
+            if boundary >= 0:
+                end = min(end, boundary + (1 if separator == ". " else 0))
+        candidate = [*spans, (start, end)]
+        if estimate_tokens(render(candidate)) <= tokens:
+            spans = candidate
+    return render(spans)
+
+
+def _history_receipts(value):
+    if isinstance(value, dict):
+        if (
+            isinstance(value.get("status"), str)
+            and value["status"] in {"pending", "completed", "rejected", "failed"}
+            and ("tool_name" in value or "confirmation_id" in value)
+        ):
+            yield value
+        for item in value.values():
+            yield from _history_receipts(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _history_receipts(item)
+
+
+def compact_dialogue_history(
+    history: list[dict], *, max_tokens: int = 2000, preserve_latest_user: bool = True
+) -> list[dict]:
+    """Готовит ограниченную копию истории только для контекста модели.
+
+    Сохраняет хронологию, последнее поручение целиком и точные выдержки старых
+    фактов вместо сгенерированной сводки. Все pending-квитанции и последний
+    результат записи сохраняются вместе с метаданными. SQL-история не меняется.
+
+    Args:
+        history: Словари сообщений с role/content, от старых к новым.
+        max_tokens: Лимит estimate_tokens(encode(result)), включая JSON.
+        preserve_latest_user: False допустим для уже старых порций памяти;
+            тогда их последний user тоже может быть сокращён.
+
+    Returns:
+        Независимая копия выбранных сообщений с маркерами сокращения текста.
+        Число удалённых целиком сообщений — len(history) - len(result);
+        вызывающий код передаёт его модели отдельно.
+
+    Raises:
+        ValueError: Последнее поручение или обязательные квитанции не помещаются.
+    """
+    if max_tokens < estimate_tokens(encode([])):
+        raise ValueError("Бюджет истории должен вмещать хотя бы пустой список.")
+    messages = deepcopy(history)
+    if estimate_tokens(encode(messages)) <= max_tokens:
+        return messages
+    latest_user = next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].get("role") == "user"
+        ),
+        None,
+    )
+    receipts = [(index, list(_history_receipts(item))) for index, item in enumerate(messages)]
+    protected = {
+        index for index, items in receipts if any(item["status"] == "pending" for item in items)
+    }
+    latest_outcome = next(
+        (
+            index
+            for index, items in reversed(receipts)
+            if any(item["status"] != "pending" for item in items)
+        ),
+        None,
+    )
+    if latest_outcome is not None:
+        protected.add(latest_outcome)
+    if preserve_latest_user and latest_user is not None:
+        protected.add(latest_user)
+    selected: dict[int, dict] = {}
+    per_message = min(400, max(100, max_tokens // 3))
+
+    def ordered() -> list[dict]:
+        return [selected[index] for index in sorted(selected)]
+
+    def shortened(message: dict, limit: int) -> dict | None:
+        if estimate_tokens(encode(message)) <= limit:
+            return message
+        text = message.get("content")
+        if not isinstance(text, str):
+            return None
+        result = {**message, "content": ""}
+        text_tokens = limit - estimate_tokens(encode(result)) - 2
+        if text_tokens < 30:
+            return None
+        while text_tokens >= 30:
+            result["content"] = _exact_excerpts(text, text_tokens)
+            overflow = estimate_tokens(encode(result)) - limit
+            if overflow <= 0:
+                return result
+            text_tokens -= max(1, overflow)
+        return None
+
+    for index in sorted(protected):
+        item = messages[index]
+        if not (preserve_latest_user and index == latest_user):
+            item = shortened(
+                item, max(per_message, estimate_tokens(encode({**item, "content": ""})) + 40)
+            )
+        if item is None:
+            raise ValueError("Обязательные квитанции не помещаются в бюджет истории.")
+        selected[index] = item
+    if estimate_tokens(encode(ordered())) > max_tokens:
+        raise ValueError("Последнее поручение и квитанции превышают бюджет истории.")
+
+    def priority(index: int) -> tuple[int, int]:
+        message = messages[index]
+        return (
+            2 * bool(_HISTORY_FACT.search(str(message.get("content", ""))))
+            + (message.get("role") == "user"),
+            index,
+        )
+
+    for index in sorted(set(range(len(messages))) - protected, key=priority, reverse=True):
+        available = max_tokens - estimate_tokens(encode(ordered())) - 1
+        item = shortened(messages[index], min(per_message, available))
+        if item is not None:
+            selected[index] = item
+            if estimate_tokens(encode(ordered())) > max_tokens:
+                del selected[index]
+    return ordered()
+
+
 def result_key(request: dict, result: dict) -> str:
     """Порядок аргументов и явное offset=0 не создают вторую копию страницы."""
     action = result.get("action")
@@ -38,10 +212,12 @@ def result_key(request: dict, result: dict) -> str:
 def compact_action(action: dict) -> dict:
     """Квитанция сохраняет факт записи; большие параметры остаются в БД и UI."""
     result = {
-        key: action[key] for key in ("id", "tool_name", "title", "status", "error") if key in action
+        key: deepcopy(value)
+        for key, value in action.items()
+        if key not in {"arguments", "preview", "result"}
     }
     result["result"] = compact_fields(action.get("result", {}))
-    if action.get("status") == "pending":
+    if action.get("status") == "pending" and "confirmation" not in result:
         result["confirmation"] = "Параметры и решение доступны участнику в карточке действия."
     return result
 
@@ -62,6 +238,10 @@ def compact_fields(value):
                 "checklist",
             }:
                 omitted.append(key)
+            elif key in {"id", "status", "participant_decision", "confirmation"} or key.endswith(
+                ("_id", "_ids", "_url")
+            ):
+                result[key] = deepcopy(item)
             else:
                 result[key] = compact_fields(item)
         if omitted:
@@ -87,38 +267,43 @@ class AgentContextBudget:
     def prepare(self, content: dict) -> None:
         """Ограничивает историю по объёму, а не только по числу сообщений."""
         history = content.get("dialog_history", [])
-        kept = []
-        remaining = self.history_tokens
-        for message in reversed(history):
-            cost = estimate_tokens(encode(message))
-            if cost > remaining:
-                if not kept and remaining > 80:
-                    # Ссылки на показанные карточки находятся в конце реплики.
-                    # Сохраняем оба края, чтобы не потерять ID для уточняющего вопроса.
-                    edge_bytes = max(0, (remaining - 40) * 3 // 2)
-                    raw = message["content"].encode("utf-8")
-                    message = {
-                        **message,
-                        "content": raw[:edge_bytes].decode("utf-8", errors="ignore")
-                        + "… [середина реплики сокращена] …"
-                        + raw[-edge_bytes:].decode("utf-8", errors="ignore"),
-                    }
-                    kept.append(message)
-                break
-            kept.append(message)
-            remaining -= cost
-        content["dialog_history"] = list(reversed(kept))
+        kept = compact_dialogue_history(
+            history,
+            max_tokens=self.history_tokens,
+            # Текущее поручение хранится отдельно и не сокращается при fit.
+            preserve_latest_user=not bool(content.get("question")),
+        )
+        content["dialog_history"] = kept
         if len(kept) < len(history):
-            content["dialog_history_omitted"] = len(history) - len(kept)
+            content["dialog_history_omitted"] = (
+                content.get("dialog_history_omitted", 0) + len(history) - len(kept)
+            )
         memory = content.get("dialog_memory", "")
         if estimate_tokens(memory) > self.history_tokens // 2:
-            content["dialog_memory"] = (
-                clip_text(memory, self.history_tokens // 2) + "… [память сокращена]"
+            content["dialog_memory"] = _exact_excerpts(
+                memory, self.history_tokens // 2, marker="\n… [память сокращена] …\n"
             )
         actions = content.get("previous_actions", [])
-        content["previous_actions"] = [compact_action(item) for item in actions[-20:]]
-        if len(actions) > 20:
-            content["previous_actions_omitted"] = len(actions) - 20
+        latest_outcome = next(
+            (
+                index
+                for index in range(len(actions) - 1, -1, -1)
+                if actions[index].get("status") != "pending"
+            ),
+            None,
+        )
+        kept_actions = [
+            item
+            for index, item in enumerate(actions)
+            if index >= len(actions) - 20
+            or item.get("status") == "pending"
+            or index == latest_outcome
+        ]
+        content["previous_actions"] = [compact_action(item) for item in kept_actions]
+        if len(kept_actions) < len(actions):
+            content["previous_actions_omitted"] = (
+                content.get("previous_actions_omitted", 0) + len(actions) - len(kept_actions)
+            )
         content["context_policy"] = (
             "Описания нужны для отбора. Точные условия проверяй read_source/get_document. "
             "omitted/compacted означают сокращение, а не отсутствие данных. "
@@ -166,6 +351,23 @@ class AgentContextBudget:
     def fit(self, content: dict) -> str:
         """Применяется перед КАЖДЫМ раундом, включая накопленные ответы инструментов."""
         while self.tokens(content) > self.max_tokens:
+            history = content.get("dialog_history", [])
+            if history:
+                try:
+                    kept = compact_dialogue_history(
+                        history,
+                        max_tokens=max(80, estimate_tokens(encode(history)) // 2),
+                        preserve_latest_user=not bool(content.get("question")),
+                    )
+                except ValueError:
+                    kept = history
+                if kept != history:
+                    content["dialog_history"] = kept
+                    if len(kept) < len(history):
+                        content["dialog_history_omitted"] = (
+                            content.get("dialog_history_omitted", 0) + len(history) - len(kept)
+                        )
+                    continue
             if self._shrink_lists(content):
                 continue
             # Отработанные большие чтения уступают место последнему результату.
@@ -182,15 +384,20 @@ class AgentContextBudget:
                     break
             if compacted:
                 continue
-            receipts = [
+            previous_actions = content.get("previous_actions", [])
+            receipts = previous_actions + [
                 entry["result"]["action"]
                 for entry in content.get("read_results", [])
                 if "action" in entry["result"]
             ]
-            receipts += content.get("previous_actions", [])
+            latest_outcome = next(
+                (action for action in reversed(receipts) if action.get("status") != "pending"), None
+            )
             for action in receipts:
                 if (
-                    not action.get("result_compacted")
+                    action is not latest_outcome
+                    and action.get("status") != "pending"
+                    and not action.get("result_compacted")
                     and estimate_tokens(encode(action.get("result", {}))) > 160
                 ):
                     references = []
@@ -221,9 +428,16 @@ class AgentContextBudget:
                     break
             if compacted:
                 continue
-            actions = content.get("previous_actions", [])
-            if len(actions) > 1:
-                actions.pop(0)
+            disposable_action = next(
+                (
+                    action
+                    for action in previous_actions
+                    if action is not latest_outcome and action.get("status") != "pending"
+                ),
+                None,
+            )
+            if disposable_action is not None:
+                previous_actions.remove(disposable_action)
                 content["previous_actions_omitted"] = content.get("previous_actions_omitted", 0) + 1
                 continue
             if self._shrink_text(content):
@@ -279,6 +493,7 @@ class AgentContextBudget:
                     "properties",
                     "arguments",
                     "previous_actions",
+                    "dialog_history",
                 }:
                     continue
                 if isinstance(item, list):
@@ -295,7 +510,7 @@ class AgentContextBudget:
         _, parent, key, _ = max(candidates, key=lambda item: item[0])
         items = parent[key]
         keep = max(1, len(items) // 2)
-        parent[key] = items[-keep:] if key == "dialog_history" else items[:keep]
+        parent[key] = items[:keep]
         parent[f"{key}_omitted"] = parent.get(f"{key}_omitted", 0) + len(items) - keep
         if key == "items" and "next_offset" in parent:
             # Старт страницы добавляется источником, не вычисляется по общей длине.
@@ -316,6 +531,8 @@ class AgentContextBudget:
                         "tools",
                         "arguments",
                         "action",
+                        "previous_actions",
+                        "dialog_history",
                     }:
                         continue
                     if isinstance(item, str) and len(item) > 400:
@@ -331,7 +548,12 @@ class AgentContextBudget:
             return False
         _, parent, key = max(candidates, key=lambda item: item[0])
         text = parent[key]
-        parent[key] = text[: max(200, len(text) // 2)]
+        if key == "dialog_memory":
+            parent[key] = _exact_excerpts(
+                text, max(80, estimate_tokens(text) // 2), marker="\n… [память сокращена] …\n"
+            )
+        else:
+            parent[key] = text[: max(200, len(text) // 2)]
         parent[f"{key}_truncated"] = True
         if key in {"text", "content_md"} and "offset" in parent:
             parent["next_offset"] = parent["offset"] + len(parent[key])

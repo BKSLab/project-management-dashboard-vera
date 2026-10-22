@@ -68,6 +68,40 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  # Опциональный отдельный MCP. Существующий /mcp в backend сохраняется.
+  mcp:
+    profiles: ["mcp"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: ./backend/.env
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8021
+      CHAT_REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "src.mcp_server.worker"]
+    restart: unless-stopped
+    volumes:
+      - ./data/uploads:/app/uploads
+    ports:
+      - "127.0.0.1:8021:8021"
+    networks:
+      - dashboard_network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8021/health/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   # ── Frontend (Vite SPA, собранная статика отдаётся nginx внутри образа) ────
   frontend:

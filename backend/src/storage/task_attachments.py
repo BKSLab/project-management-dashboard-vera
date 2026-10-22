@@ -109,3 +109,29 @@ class TaskAttachmentStorage:
         finally:
             temporary.unlink(missing_ok=True)
         return PurePosixPath("tasks", str(task_id), file_name).as_posix()
+
+    async def save_in(self, directory: PurePosixPath, extension: str, content: bytes) -> str:
+        """Atomically save a local file in a validated uploads subdirectory."""
+        relative = PurePosixPath(directory)
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            raise TaskAttachmentStorageError("Invalid storage directory.")
+        if not extension.startswith(".") or not extension[1:].isalnum():
+            raise TaskAttachmentStorageError("Invalid file extension.")
+        root = self.root.resolve()
+        target = (root / Path(*relative.parts)).resolve()
+        if root not in target.parents:
+            raise TaskAttachmentStorageError("Storage directory is outside uploads.")
+        def save():
+            target.mkdir(parents=True, exist_ok=True)
+            name = f"{uuid.uuid4().hex}{extension}"
+            temporary = target / f".{name}.tmp"
+            try:
+                temporary.write_bytes(content)
+                os.replace(temporary, target / name)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return (relative / name).as_posix()
+        try:
+            return await asyncio.to_thread(save)
+        except OSError as error:
+            raise TaskAttachmentStorageError(str(error)) from error

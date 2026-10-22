@@ -26,11 +26,19 @@ from src.repositories.agent_files import AgentFilesRepository
 from src.repositories.agent_messages import AgentMessagesRepository
 from src.repositories.agent_tool_runs import AgentToolRunsRepository
 from src.repositories.analytics_reports import AnalyticsReportsRepository
+from src.repositories.api_keys import ApiKeysRepository
+from src.repositories.board_shapes import BoardShapesRepository
+from src.repositories.chat_agent_turns import ChatAgentTurnsRepository
+from src.repositories.chat_events import ChatEventsRepository
+from src.repositories.chat_messages import ChatMessagesRepository
+from src.repositories.chat_participants import ChatParticipantsRepository
 from src.repositories.document_links import DocumentLinksRepository
 from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.knowledge_sources import KnowledgeSourcesRepository
 from src.repositories.milestones import MilestonesRepository
+from src.repositories.project_boards import ProjectBoardsRepository
+from src.repositories.project_chats import ProjectChatsRepository
 from src.repositories.project_members import ProjectMembersRepository
 from src.repositories.project_risks import ProjectRiskRepository
 from src.repositories.project_stages import ProjectStagesRepository
@@ -196,6 +204,29 @@ class AgentConversationScope:
     users: UsersRepository
     access: AccessService
     unit_of_work: UnitOfWork
+    projects: ProjectsRepository | None = None
+    api_keys: ApiKeysRepository | None = None
+    boards: ProjectBoardsRepository | None = None
+    board_shapes: BoardShapesRepository | None = None
+    board_stickers: ProjectStickersRepository | None = None
 
 
 AgentConversationScopeFactory = Callable[[], AbstractAsyncContextManager[AgentConversationScope]]
+
+
+@dataclass(frozen=True, slots=True)
+class TimChatScope:
+    """Короткая транзакция очереди ответов Веры в общем проектном чате."""
+
+    chats: ProjectChatsRepository
+    messages: ChatMessagesRepository
+    events: ChatEventsRepository
+    participants: ChatParticipantsRepository
+    turns: ChatAgentTurnsRepository
+    runs: AgentToolRunsRepository
+    users: UsersRepository
+    access: AccessService
+    unit_of_work: UnitOfWork
+
+
+TimChatScopeFactory = Callable[[], AbstractAsyncContextManager[TimChatScope]]

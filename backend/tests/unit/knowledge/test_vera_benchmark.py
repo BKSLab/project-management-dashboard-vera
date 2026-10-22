@@ -1,0 +1,124 @@
+from datetime import date
+
+from scripts.vera_benchmark import cases, checks, mentions_date
+
+
+def test_live_suite_has_repeatable_prompts_and_smalltalk_repetitions():
+    suite = cases(date(2026, 10, 22))
+    assert len(suite) == len({case["id"] for case in suite}) == 14
+    assert suite == cases(date(2026, 10, 22))
+    for first, second in zip(suite[:3], suite[3:6], strict=True):
+        assert first["text"] == second["text"]
+        assert first["kind"] == second["kind"] == "smalltalk"
+    assert "2026-11-01" in next(case["text"] for case in suite if case["id"] == "mixed")
+
+
+def test_claimed_creation_does_not_pass_without_a_real_task_and_matching_fields():
+    case = {"kind": "create"}
+    original = {"id": 1, "title": "Original", "due_date": None, "priority": "LOW"}
+    answer = {
+        "status": "completed",
+        "content": "Создала.",
+        "actions": [{"tool_name": "create_task", "status": "completed"}],
+    }
+    result = checks(case, answer, [original], [original], {})
+    assert not result["exactly_one_task"] and not result["requested_task"]
+
+    created = {"id": 2, "title": "Заметки проверки", "due_date": None, "priority": "MEDIUM"}
+    assert all(checks(case, answer, [original], [original, created], {}).values())
+    result = checks(case, answer, [original], [{**original, "priority": "HIGH"}, created], {})
+    assert not result["existing_tasks_unchanged"]
+    answer["actions"].append({"tool_name": "update_project", "status": "completed"})
+    result = checks(case, answer, [original], [original, created], {})
+    assert not result["only_requested_action"]
+
+
+def test_read_and_pending_checks_detect_mutation_and_unapproved_deletion():
+    task = {"id": 2, "title": "Task"}
+    answer = {"status": "completed", "content": "Привет!", "actions": []}
+    result = checks({"kind": "smalltalk", "id": "hello"}, answer, [task], [], {})
+    assert not result["tasks_unchanged"]
+
+    pending = {"tool_name": "delete_task", "status": "pending", "arguments": {"task_id": 2}}
+    answer["actions"] = [pending]
+    assert all(
+        checks({"kind": "delete_pending"}, answer, [task], [task], {"future_id": 2}).values()
+    )
+    answer["actions"] = [{**pending, "status": "completed"}]
+    result = checks({"kind": "delete_pending"}, answer, [task], [], {"future_id": 2})
+    assert not result["task_still_exists"] and not result["no_completed_deletion"]
+
+
+def test_fact_checks_reject_wrong_year_and_task_key_prefixes():
+    for text in ("2026-10-19", "19.10.2026", "19 октября 2026"):
+        assert mentions_date(text, "2026-10-19")
+    for text in ("2027-10-19", "19.10.2027", "19 октября 2027"):
+        assert not mentions_date(text, "2026-10-19")
+    answer = {
+        "status": "completed",
+        "content": "VERAEVAL-10, В работе, презентация, 19.10.2026",
+        "actions": [],
+    }
+    result = checks({"kind": "read"}, answer, [], [], {"overdue_date": "2026-10-19"})
+    assert not result["task_key"]
+    answer["content"] = "VERAEVAL-1, VERAEVAL-2, VERAEVAL-3: 19.10.2026"
+    result = checks({"kind": "overdue"}, answer, [], [], {"overdue_date": "2026-10-19"})
+    assert not result["exact_overdue_tasks"]
+
+
+async def test_unknown_project_post_result_retains_fixture_user(monkeypatch, tmp_path):
+    """Потеря ответа после commit проекта не запускает SQL cascade удаления."""
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
+    import pytest
+
+    from scripts import vera_benchmark
+
+    db = MagicMock()
+    db.scalar = AsyncMock(side_effect=[None, None])
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
+    db.execute = AsyncMock()
+    db.add.side_effect = lambda user: setattr(user, "id", 991)
+    scope = MagicMock()
+    scope.__aenter__ = AsyncMock(return_value=db)
+    scope.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr("src.db.session.async_session_factory", lambda: scope)
+    monkeypatch.setattr("src.db.session.engine", SimpleNamespace(dispose=AsyncMock()))
+    monkeypatch.setattr(
+        "src.core.settings.get_settings",
+        lambda: SimpleNamespace(
+            llm=SimpleNamespace(
+                agent_model="test", base_url="http://fixture.invalid", llm_timeout=30, llm_retries=1
+            ),
+            agent=SimpleNamespace(model_dump=lambda: {}),
+            auth=SimpleNamespace(session_cookie_name="session"),
+        ),
+    )
+    monkeypatch.setattr("src.utils.tokens.create_access_token", lambda user_id: "fixture-token")
+    committed = []
+
+    def response(request):
+        assert request.url.path == "/api/v1/projects"
+        committed.append(True)
+        raise httpx.ReadTimeout("Connection lost after server commit")
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        vera_benchmark.httpx,
+        "AsyncClient",
+        lambda **kwargs: client(transport=httpx.MockTransport(response), **kwargs),
+    )
+    output = tmp_path / "baseline.json"
+    with pytest.raises(httpx.ReadTimeout):
+        await vera_benchmark.run(
+            SimpleNamespace(as_of="2026-10-22", output=str(output), label="test", wait=1)
+        )
+    assert committed
+    db.execute.assert_not_awaited()
+    result = json.loads(output.read_text(encoding="utf-8"))
+    assert result["fixture_user_id"] == 991
+    assert result["cleanup"] == "fixture_retained_after_error"

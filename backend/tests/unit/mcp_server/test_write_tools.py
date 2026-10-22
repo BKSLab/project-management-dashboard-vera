@@ -33,6 +33,7 @@ DONE = StageRefDto(stage_id=12, name="Готово", is_done_stage=True)
 def saved_task(**overrides) -> SimpleNamespace:
     """Задача в том виде, в каком её возвращает доменный сервис."""
     values = {
+        "id": TASK_ID,
         "key": TASK_KEY,
         "title": "Задача",
         "start_date": None,
@@ -190,6 +191,7 @@ async def test_update_task_touches_only_given_fields_and_clears_by_empty_value(w
     assert services.tasks.update_task.await_args.kwargs == {
         "task_id": TASK_ID,
         "data": {"title": "Другой"},
+        "updated_by_user_id": 1,
     }
     assert result == {"task_key": TASK_KEY, "updated_fields": ["title"]}
     # Пустая строка снимает исполнителя и не ищет пользователя.
@@ -251,30 +253,22 @@ async def test_delete_task_requires_explicit_confirmation(write_tools) -> None:
     assert result == {"task_key": TASK_KEY, "deleted": True}
 
 
-async def test_add_comment_resolves_its_author(write_tools) -> None:
-    """Автором становится владелец токена, если явный автор не указан."""
-    # Без подписи автором становится владелец токена.
+async def test_add_comment_is_written_by_token_owner(write_tools) -> None:
+    """Автор комментария — владелец токена; подписать чужим именем нельзя."""
     services = write_tools()
     services.comments.add_comment.return_value = SimpleNamespace(
+        id=5,
         author_name="Тестов Тест",
         created_at=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
     )
 
     result = await wt.add_comment(FakeContext(), task_key=TASK_KEY, body="Текст")
 
-    assert services.comments.add_comment.await_args.kwargs["author_name"] == "Тестов Тест"
+    assert services.comments.add_comment.await_args.kwargs["author_id"] == 1
+    assert "author_name" not in services.comments.add_comment.await_args.kwargs
+    assert result["author"] == "Тестов Тест"
     assert result["task_key"] == TASK_KEY
     assert result["created_at"] == "2026-09-01T10:00:00+00:00"
-    # Явная подпись сохраняется как есть.
-    services = write_tools()
-    services.comments.add_comment.return_value = SimpleNamespace(
-        author_name="Аналитик",
-        created_at=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
-    )
-
-    await wt.add_comment(FakeContext(), task_key=TASK_KEY, body="Текст", author="  Аналитик ")
-
-    assert services.comments.add_comment.await_args.kwargs["author_name"] == "Аналитик"
 
 
 async def test_set_task_dates_and_milestones_use_domain_services(write_tools) -> None:
@@ -296,6 +290,7 @@ async def test_set_task_dates_and_milestones_use_domain_services(write_tools) ->
     assert services.tasks.update_task.await_args.kwargs == {
         "task_id": TASK_ID,
         "data": {"start_date": date(2026, 9, 1), "due_date": date(2026, 10, 1)},
+        "updated_by_user_id": 1,
     }
     assert result["updated_fields"] == ["due_date", "start_date"]
     assert result["due_date"] == "2026-10-01"

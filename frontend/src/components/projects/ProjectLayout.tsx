@@ -5,7 +5,8 @@ import { api, endpoints, queryKeys } from "@/lib/api";
 import type { ProjectStats } from "@/lib/types";
 import { cn } from "@/lib/cn";
 import { useProjectFromRoute } from "@/lib/useProject";
-import { ProjectStatusBadge, StatusDot } from "@/components/ui/Badge";
+import { ProjectIcon } from "@/components/projects/ProjectIcon";
+import { ProjectStatusBadge } from "@/components/ui/Badge";
 import { IconButton } from "@/components/ui/Button";
 import { ProgressBar } from "@/components/ui/Progress";
 import { EmptyState, ErrorMessage, Skeleton } from "@/components/ui/States";
@@ -22,7 +23,6 @@ const TABS = [
     { path: "whiteboard", label: "Доска", end: false },
     { path: "docs", label: "Документы", end: false },
     { path: "chat", label: "Чат", end: false },
-    { path: "agent", label: "Агент", end: false },
 ];
 
 /**
@@ -74,13 +74,7 @@ export function ProjectLayout() {
                 <div className="mx-auto flex w-full max-w-6xl flex-col gap-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="flex min-w-0 items-start gap-2.5">
-                            {project.icon ? (
-                                <span aria-hidden="true" className="mt-0.5 text-lg leading-none">
-                                    {project.icon}
-                                </span>
-                            ) : (
-                                <StatusDot color={project.color} className="mt-2.5 size-2" />
-                            )}
+                            <ProjectIcon project={project} size={22} />
                             <div className="flex min-w-0 flex-col gap-1">
                                 <div className="flex flex-wrap items-center gap-2">
                                     <h1 className="truncate text-xl font-semibold tracking-[-0.025em] text-primary">

@@ -6,6 +6,7 @@ from sqlalchemy import Result, func, insert, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db.models.agent_conversations import AgentConversation
 from src.db.models.agent_messages import AgentMessage
 from src.exceptions.agent_conversations import AgentMessagesRepositoryError
 
@@ -15,6 +16,12 @@ class AgentMessagesRepository:
 
     def __init__(self, db_session: AsyncSession) -> None:
         self.db_session = db_session
+
+    async def get_by_id(self, message_id: int) -> AgentMessage | None:
+        """Читает реплику без блокировки: нужен только её диалог."""
+        return (
+            await self._execute(select(AgentMessage).where(AgentMessage.id == message_id))
+        ).scalar_one_or_none()
 
     async def get_for_update(self, message_id: int) -> AgentMessage | None:
         """Блокирует реплику на короткое время действия или решения участника."""
@@ -80,6 +87,22 @@ class AgentMessagesRepository:
                 )
             ).scalars()
         )
+
+    async def get_answer_by_request(
+        self, request_id: UUID, *, user_id: int | None = None, api_key_id: UUID | None = None
+    ) -> AgentMessage | None:
+        """Результат в области локального владельца и предъявленного ключа."""
+        statement = select(AgentMessage).where(
+            AgentMessage.request_id == request_id, AgentMessage.role == "assistant"
+        )
+        if user_id is not None:
+            statement = statement.join(AgentConversation).where(
+                AgentConversation.user_id == user_id,
+                AgentConversation.channel == "api",
+                AgentConversation.api_key_id.is_(None) if api_key_id is None
+                else AgentConversation.api_key_id == api_key_id,
+            )
+        return (await self._execute(statement.order_by(AgentMessage.id).limit(1))).scalar_one_or_none()
 
     async def get_active(self, conversation_id: int) -> AgentMessage | None:
         """Находит незавершённый ответ диалога.
@@ -194,7 +217,7 @@ class AgentMessagesRepository:
             .with_for_update(skip_locked=True)
             .scalar_subquery()
         )
-        return (
+        message = (
             await self._execute(
                 update(AgentMessage)
                 .where(AgentMessage.id == candidate)
@@ -203,10 +226,13 @@ class AgentMessagesRepository:
                     run_id=run_id,
                     started_at=func.now(),
                     error=None,
+                    progress=None,
                 )
                 .returning(AgentMessage)
             )
         ).scalar_one_or_none()
+
+        return message
 
     async def finish(self, message_id: int, run_id: UUID, data: dict[str, Any]) -> bool:
         """Завершает только свою ещё активную попытку.
@@ -227,7 +253,35 @@ class AgentMessagesRepository:
                 AgentMessage.run_id == run_id,
                 AgentMessage.status == "processing",
             )
-            .values(**data, completed_at=func.now())
+            .values(**data, progress=None, completed_at=func.now())
+            .returning(AgentMessage.request_id)
+        )
+        request_id = result.scalar_one_or_none()
+        return request_id is not None
+
+    async def set_progress(self, message_id: int, run_id: UUID, progress: str) -> bool:
+        """Пишет живой статус только своей ещё активной попытки.
+
+        Завершённый ответ статус не получает: поздняя запись после ``finish``
+        ничего не меняет.
+
+        Args:
+            message_id: Ответ задания.
+            run_id: Владелец попытки.
+            progress: Что Вера делает сейчас.
+        Returns:
+            True, если статус записан.
+        Raises:
+            AgentMessagesRepositoryError: При ошибке PostgreSQL.
+        """
+        result = await self._execute(
+            update(AgentMessage)
+            .where(
+                AgentMessage.id == message_id,
+                AgentMessage.run_id == run_id,
+                AgentMessage.status == "processing",
+            )
+            .values(progress=progress)
         )
         return result.rowcount > 0
 
@@ -248,10 +302,11 @@ class AgentMessagesRepository:
             .values(
                 status="failed",
                 error="Подготовка ответа прервалась. Можно повторить запрос.",
+                progress=None,
                 completed_at=func.now(),
             )
+            .returning(AgentMessage.request_id)
         )
-
     async def retry(self, message_id: int) -> AgentMessage:
         """Возвращает проверенный сервисом неудачный ответ в очередь.
 

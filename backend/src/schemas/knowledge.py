@@ -46,6 +46,9 @@ class KnowledgeSourceCardSchema(BaseModel):
     assignee: str | None = None
     due_date: str | None = None
     summary: str | None = None
+    login: str | None = None
+    avatar_url: str | None = None
+    role: str | None = None
 
 
 class KnowledgeSourceSchema(BaseModel):

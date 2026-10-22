@@ -1,3 +1,8 @@
+import { MyApiKeysPage } from "@/routes/MyApiKeysPage";
+import { MyTasksPage } from "@/routes/MyTasksPage";
+import { TaskAttentionProvider } from "@/components/tasks/TaskAttentionProvider";
+import { TimWidget } from "@/components/tim/TimWidget";
+import { AgentConfirmModal } from "@/components/agent/AgentConfirmModal";
 import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
@@ -15,6 +20,7 @@ import { DocumentDetailPage } from "@/routes/DocumentDetailPage";
 import { ProjectSettingsPage } from "@/routes/ProjectSettingsPage";
 import { ProjectAgentPage } from "@/routes/ProjectAgentPage";
 import { ProjectChatPage } from "@/routes/ProjectChatPage";
+import { ProjectChatRedirect } from "@/components/chat/ProjectChatRedirect";
 import { ProjectPulsePage } from "@/routes/ProjectPulsePage";
 import { ProjectRisksPage } from "@/routes/ProjectRisksPage";
 import { McpPage } from "@/routes/McpPage";
@@ -41,6 +47,10 @@ const ProjectBoardPage = lazy(() =>
         default: module.ProjectBoardPage,
     })),
 );
+const FreeBoardsPage = lazy(() =>
+    import("@/routes/FreeBoardsPage").then((module) => ({ default: module.FreeBoardsPage })),
+);
+const MyCalendarPage = lazy(() => import("@/routes/MyCalendarPage"));
 
 function StructureFallback() {
     return (
@@ -77,55 +87,64 @@ function ProjectBoardFallback() {
 function ProtectedApp() {
     return (
         <AuthGuard>
-            <ChatWorkspace>
-            <AppShell>
-                <Routes>
-                    <Route path="/" element={<DashboardPage />} />
-                    <Route path="/projects" element={<ProjectsPage />} />
-                    <Route path="/projects/new" element={<NewProjectPage />} />
-                    <Route path="/profile" element={<ProfilePage />} />
-                    <Route path="/mcp" element={<McpPage />} />
-                    <Route path="/projects/:projectKey" element={<ProjectLayout />}>
-                        <Route index element={<ProjectPulsePage />} />
-                        <Route path="team" element={<ProjectTeamPage />} />
-                        <Route path="board" element={<BoardPage />} />
-                        <Route path="tasks" element={<TasksListPage />} />
-                        <Route path="risks" element={<ProjectRisksPage />} />
-                        <Route
-                            path="calendar"
-                            element={
-                                <Suspense fallback={<CalendarFallback />}>
-                                    <ProjectCalendarPage />
-                                </Suspense>
-                            }
-                        />
-                        <Route
-                            path="structure"
-                            element={
-                                <Suspense fallback={<StructureFallback />}>
-                                    <StructurePage />
-                                </Suspense>
-                            }
-                        />
-                        <Route
-                            path="whiteboard"
-                            element={
-                                <Suspense fallback={<ProjectBoardFallback />}>
-                                    <ProjectBoardPage />
-                                </Suspense>
-                            }
-                        />
-                        <Route path="docs" element={<ProjectDocumentsPage />} />
-                        <Route path="docs/:slug" element={<DocumentDetailPage />} />
-                        <Route path="agent" element={<ProjectAgentPage />} />
-                        <Route path="chat" element={<ProjectChatPage />} />
-                        <Route path="knowledge" element={<Navigate to="../agent" replace />} />
-                        <Route path="settings" element={<ProjectSettingsPage />} />
-                    </Route>
-                    <Route path="*" element={<NotFoundPage />} />
-                </Routes>
-            </AppShell>
-            </ChatWorkspace>
+            <TaskAttentionProvider>
+                <ChatWorkspace>
+                    <AppShell>
+                        <Routes>
+                            <Route path="/" element={<DashboardPage />} />
+                            <Route path="/boards" element={<Suspense fallback={<ProjectBoardFallback />}><FreeBoardsPage /></Suspense>} />
+                            <Route path="/my-tasks" element={<MyTasksPage />} />
+                            <Route path="/calendar" element={<Suspense fallback={<CalendarFallback />}><MyCalendarPage /></Suspense>} />
+                            <Route path="/my/tasks" element={<Navigate to="/my-tasks" replace />} />
+                            <Route path="/projects" element={<ProjectsPage />} />
+                            <Route path="/projects/new" element={<NewProjectPage />} />
+                            <Route path="/profile" element={<ProfilePage />} />
+                            <Route path="/my-api-keys" element={<MyApiKeysPage />} />
+                            <Route path="/mcp" element={<McpPage />} />
+                            <Route path="/projects/:projectKey" element={<ProjectLayout />}>
+                                <Route index element={<ProjectPulsePage />} />
+                                <Route path="team" element={<ProjectTeamPage />} />
+                                <Route path="board" element={<BoardPage />} />
+                                <Route path="tasks" element={<TasksListPage />} />
+                                <Route path="risks" element={<ProjectRisksPage />} />
+                                <Route
+                                    path="calendar"
+                                    element={
+                                        <Suspense fallback={<CalendarFallback />}>
+                                            <ProjectCalendarPage />
+                                        </Suspense>
+                                    }
+                                />
+                                <Route
+                                    path="structure"
+                                    element={
+                                        <Suspense fallback={<StructureFallback />}>
+                                            <StructurePage />
+                                        </Suspense>
+                                    }
+                                />
+                                <Route
+                                    path="whiteboard"
+                                    element={
+                                        <Suspense fallback={<ProjectBoardFallback />}>
+                                            <ProjectBoardPage />
+                                        </Suspense>
+                                    }
+                                />
+                                <Route path="docs" element={<ProjectDocumentsPage />} />
+                                <Route path="docs/:slug" element={<DocumentDetailPage />} />
+                                <Route path="agent" element={<ProjectAgentPage />} />
+                                <Route path="chat" element={<ProjectChatPage />} />
+                                <Route path="knowledge" element={<ProjectChatRedirect view="knowledge" />} />
+                                <Route path="settings" element={<ProjectSettingsPage />} />
+                            </Route>
+                            <Route path="*" element={<NotFoundPage />} />
+                        </Routes>
+                    </AppShell>
+                    <TimWidget />
+                    <AgentConfirmModal />
+                </ChatWorkspace>
+            </TaskAttentionProvider>
         </AuthGuard>
     );
 }

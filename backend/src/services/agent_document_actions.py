@@ -1,14 +1,17 @@
 """Документы, связи и файлы через доменные сценарии проекта."""
 
-import asyncio
 from pathlib import PurePath
 
 from src.agent.tools import AgentToolContext
 from src.exceptions.agent_tools import AgentToolAccessError, AgentToolConflictError
+from src.exceptions.storage import TaskAttachmentStorageError
+from src.exceptions.task_attachments import TaskAttachmentsServiceError
 from src.schemas import project_tool_inputs as inputs
 from src.services.agent_action_helpers import checked_document, checked_task, page
 from src.services.agent_files import uploaded_content
 from src.services.agent_tool_scope import AgentProjectToolScope
+from src.services.task_attachments import TaskAttachmentsService
+from src.storage.agent_tool_files import read_local_file
 
 
 async def attach_uploaded_file(
@@ -16,9 +19,7 @@ async def attach_uploaded_file(
 ) -> dict:
     """Прикрепляет к задаче копию отправленного участником файла."""
     await checked_task(db, ctx, args.task_id)
-    metadata, content = await uploaded_content(
-        db, file_id=args.file_id, project_id=ctx.project_id, user_id=ctx.user_id
-    )
+    metadata, content = await uploaded_content(db, file_id=args.file_id, user_id=ctx.user_id)
     item = await db.attachments.upload_attachment(
         task_id=args.task_id,
         file_name=metadata.original_name,
@@ -135,7 +136,10 @@ async def copy_attachment(
     source = await db.attachments.get_attachment_content(
         task_id=args.task_id, attachment_id=args.attachment_id
     )
-    content = await asyncio.to_thread(source.path.read_bytes)
+    try:
+        content = await read_local_file(source.path, limit=TaskAttachmentsService.MAX_FILE_SIZE)
+    except TaskAttachmentStorageError as error:
+        raise TaskAttachmentsServiceError(str(error)) from error
     item = await db.attachments.upload_attachment(
         task_id=args.target_task_id,
         file_name=source.original_name,

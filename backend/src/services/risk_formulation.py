@@ -3,6 +3,7 @@
 import json
 
 from src.clients.llm import LlmClient
+from src.exceptions.api_keys import ApiKeyRouteNotAllowedError
 from src.exceptions.clients import ClientError
 from src.exceptions.knowledge import KnowledgeProviderError
 from src.exceptions.project_risks import ProjectRiskServiceError
@@ -38,6 +39,8 @@ class RiskFormulationService:
             principal = await db.auth.resolve_principal(
                 session_token=session_token, bearer_secret=bearer_secret
             )
+            if getattr(principal, "api_key", None) is not None:
+                raise ApiKeyRouteNotAllowedError('risk formulation')
             await db.access.ensure_project_access(project_id=project_id, user_id=principal.user_id)
             if await db.projects.get_by_id(project_id) is None:
                 raise ProjectNotFoundError(project_id)

@@ -19,6 +19,7 @@ from pathlib import Path
 from src.exceptions.access import AccessServiceError
 from src.exceptions.auth import AuthServiceError
 from src.exceptions.task_attachments import TaskAttachmentsServiceError
+from src.utils.api_scopes import SCOPE_TASKS_READ
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,8 @@ class AttachmentDownloadService:
                 session_token=session_token,
                 bearer_secret=bearer_secret,
             )
+            if getattr(principal, "api_key", None) is not None:
+                principal.require(SCOPE_TASKS_READ)
             await unit.ensure_task_access(task_id=task_id, user_id=principal.user_id)
             content = await unit.load_attachment_content(
                 task_id=task_id,

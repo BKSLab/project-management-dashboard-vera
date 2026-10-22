@@ -100,6 +100,7 @@ async def agent_env(postgres_container):
             service=service, responder=responder, llm=llm, factory=factory, engine=engine
         )
     finally:
+        await service.drain()
         await engine.dispose()
         async with admin.connect() as connection:
             await connection.execute(text(f'DROP DATABASE "{database}"'))

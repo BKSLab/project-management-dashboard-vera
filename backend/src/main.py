@@ -10,20 +10,33 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.middleware.api_key_usage import ApiKeyUsageMiddleware
+from src.api.middleware.request_actor import RequestActorMiddleware
 from src.api.v1.endpoints.agent_conversations import router as agent_conversations_router
+from src.api.v1.endpoints.agent_pending import router as agent_pending_router
+from src.api.v1.endpoints.agent_requests import router as agent_requests_router
 from src.api.v1.endpoints.analytics import router as analytics_router
 from src.api.v1.endpoints.api_tokens import router as api_tokens_router
 from src.api.v1.endpoints.auth import router as auth_router
+from src.api.v1.endpoints.board_editor import router as board_editor_router
+from src.api.v1.endpoints.board_shapes import router as board_shapes_router
 from src.api.v1.endpoints.calendar import router as calendar_router
+from src.api.v1.endpoints.calendar_feed import router as calendar_feed_router
 from src.api.v1.endpoints.calendar_scenarios import router as calendar_scenarios_router
+from src.api.v1.endpoints.calendar_workload import router as calendar_workload_router
 from src.api.v1.endpoints.dashboard import router as dashboard_router
 from src.api.v1.endpoints.document_links import router as document_links_router
 from src.api.v1.endpoints.documents import router as documents_router
+from src.api.v1.endpoints.free_boards import router as free_boards_router
 from src.api.v1.endpoints.knowledge import router as knowledge_router
 from src.api.v1.endpoints.milestones import router as milestones_router
+from src.api.v1.endpoints.my_calendar import router as my_calendar_router
+from src.api.v1.endpoints.personal_api_keys import router as personal_api_keys_router
+from src.api.v1.endpoints.project_boards import router as project_boards_router
 from src.api.v1.endpoints.project_chat_ws import router as project_chat_ws_router
 from src.api.v1.endpoints.project_chats import download_router as chat_download_router
 from src.api.v1.endpoints.project_chats import router as project_chats_router
+from src.api.v1.endpoints.project_icons import router as project_icons_router
 from src.api.v1.endpoints.project_members import router as project_members_router
 from src.api.v1.endpoints.project_risks import router as project_risks_router
 from src.api.v1.endpoints.project_stages import router as project_stages_router
@@ -33,11 +46,17 @@ from src.api.v1.endpoints.risk_formulation import router as risk_formulation_rou
 from src.api.v1.endpoints.risk_suggestions import router as risk_suggestions_router
 from src.api.v1.endpoints.task_activity import router as task_activity_router
 from src.api.v1.endpoints.task_attachments import router as task_attachments_router
+from src.api.v1.endpoints.task_attention import router as task_attention_router
+from src.api.v1.endpoints.task_attention_ws import router as task_attention_ws_router
 from src.api.v1.endpoints.task_checklists import router as task_checklists_router
 from src.api.v1.endpoints.task_comments import router as task_comments_router
 from src.api.v1.endpoints.task_dependencies import router as task_dependencies_router
 from src.api.v1.endpoints.task_documents import router as task_documents_router
+from src.api.v1.endpoints.task_moves import router as task_moves_router
+from src.api.v1.endpoints.task_reports import router as task_reports_router
 from src.api.v1.endpoints.tasks import router as tasks_router
+from src.api.v1.endpoints.tim import chat_router as tim_chat_router
+from src.api.v1.endpoints.tim import router as tim_router
 from src.api.v1.endpoints.users import router as users_router
 from src.api.v1.endpoints.wbs_nodes import router as wbs_nodes_router
 from src.core.app_state import (
@@ -48,7 +67,9 @@ from src.core.app_state import (
 from src.core.config_logger import configure_logging
 from src.core.settings import get_settings
 from src.db.session import async_session_factory, engine
+from src.dependencies.scopes import build_api_key_usage_recorder
 from src.dependencies.services import build_agent_worker
+from src.dependencies.task_attention import build_task_attention_runtime
 from src.exceptions.clients import VectorStoreClientError
 from src.knowledge.composition import build_knowledge_worker
 from src.knowledge.runtime import (
@@ -118,8 +139,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, object]]:
     )
     agent_task = asyncio.create_task(agent_worker.run(worker_stop), name="project-agent-worker")
     chat_runtime = build_chat_runtime(settings=settings, session_factory=async_session_factory)
+    attention_runtime = build_task_attention_runtime(settings=settings, session_factory=async_session_factory)
     try:
         await chat_runtime.start()
+        await attention_runtime.start()
         # Сессионный менеджер MCP обязан работать всё время жизни приложения:
         # смонтированное ASGI-приложение своего lifespan не получает.
         async with mcp_server.session_manager.run():
@@ -130,8 +153,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, object]]:
                 SETTINGS_STATE_KEY: settings,
                 SESSION_FACTORY_STATE_KEY: async_session_factory,
                 CHAT_RUNTIME_KEY: chat_runtime,
+                "task_attention_runtime": attention_runtime,
             }
     finally:
+        await attention_runtime.close()
         await chat_runtime.close()
         worker_stop.set()
         agent_task.cancel()
@@ -151,6 +176,9 @@ app = FastAPI(
     version=settings.app.app_version,
     lifespan=lifespan,
 )
+
+app.add_middleware(RequestActorMiddleware)
+app.add_middleware(ApiKeyUsageMiddleware, recorder=build_api_key_usage_recorder(async_session_factory))
 
 app.add_middleware(
     CORSMiddleware,
@@ -190,6 +218,21 @@ async def validation_exception_handler(
 
 
 for api_router in (
+    project_boards_router,
+    free_boards_router,
+    board_shapes_router,
+    board_editor_router,
+    task_reports_router,
+    task_moves_router,
+    task_attention_router,
+    task_attention_ws_router,
+    project_icons_router,
+    personal_api_keys_router,
+    agent_requests_router,
+    agent_pending_router,
+    tim_router,
+    tim_chat_router,
+
     project_risks_router,
     risk_suggestions_router,
     risk_formulation_router,
@@ -200,6 +243,9 @@ for api_router in (
     dashboard_router,
     analytics_router,
     calendar_router,
+    my_calendar_router,
+    calendar_workload_router,
+    calendar_feed_router,
     calendar_scenarios_router,
     milestones_router,
     projects_router,
@@ -228,3 +274,19 @@ for api_router in (
 # соединения и не вписывается в контур обычных JSON-эндпоинтов.
 mcp_app = build_mcp_app(settings=settings)
 app.mount(settings.app.mcp_path, mcp_app)
+
+
+@app.get("/health/live", include_in_schema=False)
+async def health_live() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+async def health_ready() -> JSONResponse:
+    from sqlalchemy import text
+    try:
+        async with async_session_factory() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception:
+        return JSONResponse({"status": "unavailable"}, status_code=503)
+    return JSONResponse({"status": "ok"})

@@ -36,6 +36,7 @@ class AgentMessage(Base):
         ),
         Index("ix_agent_messages_conversation", "conversation_id", "id"),
         Index("ix_agent_messages_queue", "status", "id"),
+        Index("ix_agent_messages_request_result", "request_id", "role"),
         Index(
             "uq_agent_conversation_active",
             "conversation_id",
@@ -71,8 +72,33 @@ class AgentMessage(Base):
         doc="Метаданные файлов, выбранных участником при отправке.",
         comment="Метаданные файлов, выбранных участником при отправке.",
     )
+    page_context: Mapped[dict | None] = mapped_column(
+        JSONB,
+        doc="Страница, с которой пользователь написал Тиму: route, project_key, task_id, board_id.",
+        comment="Контекст страницы виджета: route, project_key, task_id, board_id.",
+    )
+    verbatim: Mapped[str | None] = mapped_column(
+        Text,
+        doc="Дословная реплика пользователя; только она разрешает агенту запись.",
+        comment="Дословная реплика пользователя; только она разрешает агенту запись.",
+    )
+    key_scopes: Mapped[list | None] = mapped_column(
+        JSONB,
+        doc="Права сервисного ключа на момент вопроса; None — вопрос из интерфейса.",
+        comment="Права сервисного ключа на момент вопроса; NULL — вопрос из интерфейса.",
+    )
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        doc="Проект, в котором агент ответил в беседе по трекеру.",
+        comment="Проект, в котором агент ответил в беседе по трекеру; NULL — обзор.",
+    )
     status: Mapped[str] = mapped_column(
         String(16), doc="Состояние подготовки ответа.", comment="Состояние подготовки ответа."
+    )
+    progress: Mapped[str | None] = mapped_column(
+        String(200),
+        doc="Что Тим делает сейчас, пока готовит ответ; None — статуса нет или ответ завершён.",
+        comment="Что Тим делает сейчас, пока готовит ответ; NULL — статуса нет или ответ завершён.",
     )
     error: Mapped[str | None] = mapped_column(
         Text, doc="Безопасное описание ошибки.", comment="Безопасное описание ошибки."

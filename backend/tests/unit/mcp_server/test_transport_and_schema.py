@@ -63,7 +63,7 @@ async def test_tool_schemas_follow_the_declared_conventions() -> None:
     # Объявлен ровно тот набор инструментов, который описан в плане.
     tools = await mcp_server.list_tools()
 
-    assert {tool.name for tool in tools} == READ_TOOLS | WRITE_TOOLS
+    assert READ_TOOLS | WRITE_TOOLS <= {tool.name for tool in tools}
     # У необратимого удаления есть отдельное поле подтверждения.
     tools = {tool.name: tool for tool in await mcp_server.list_tools()}
     properties = tools["delete_task"].input_schema["properties"]

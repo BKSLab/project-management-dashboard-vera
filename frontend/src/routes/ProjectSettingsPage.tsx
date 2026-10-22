@@ -121,7 +121,7 @@ export function ProjectSettingsPage() {
                         {saveMutation.error && (
                             <ErrorMessage message={(saveMutation.error as Error).message} />
                         )}
-                        <ProjectForm values={values} onChange={setValues} lockKey requireDeadlineComment={commentRequired} disabled={saveMutation.isPending} />
+                        <ProjectForm project={project} onProjectChange={saved => { queryClient.setQueryData(queryKeys.project(project.id), saved); void queryClient.invalidateQueries({ queryKey: queryKeys.projects }); void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }); }} values={values} onChange={setValues} lockKey requireDeadlineComment={commentRequired} disabled={saveMutation.isPending} />
                         {commentRequired && <p className="text-[12px] text-muted">Предыдущий срок: {formProject.due_date ?? "без даты"}.</p>}
                         <div className="flex justify-end pt-1">
                             <Button

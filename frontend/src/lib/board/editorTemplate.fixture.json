@@ -1,0 +1,73 @@
+{
+  "id": "mixed-selection",
+  "name": "Схема с группой",
+  "objects": [
+    {
+      "type": "shape",
+      "object_id": "t0",
+      "data": {
+        "kind": "rect",
+        "x": 0,
+        "y": 0,
+        "w": 100,
+        "h": 80,
+        "label": "Узел",
+        "z_index": 0
+      }
+    },
+    {
+      "type": "sticker",
+      "object_id": "t1",
+      "data": {
+        "body": "Заметка",
+        "color": "#fff19a",
+        "canvas_x": 200,
+        "canvas_y": 100,
+        "width": 230,
+        "height": 230,
+        "task_ids": [],
+        "z_index": 1
+      }
+    },
+    {
+      "type": "shape",
+      "object_id": "t2",
+      "data": {
+        "kind": "arrow",
+        "points": [
+          [
+            100,
+            40
+          ],
+          [
+            200,
+            215
+          ]
+        ],
+        "start_ref": {
+          "object_id": "t0",
+          "anchor": "right"
+        },
+        "end_ref": {
+          "object_id": "t1",
+          "anchor": "left"
+        },
+        "label": "Связь",
+        "z_index": 2
+      }
+    }
+  ],
+  "groups": [
+    {
+      "id": "g0",
+      "name": "Узлы",
+      "members": [
+        "t0",
+        "t1"
+      ]
+    }
+  ],
+  "locked": [
+    "t1"
+  ]
+}

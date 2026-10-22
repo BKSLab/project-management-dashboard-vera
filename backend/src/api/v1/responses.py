@@ -16,3 +16,6 @@ SERVER_ERROR_RESPONSE = {
     "description": "Внутренняя ошибка обработки запроса.",
     "content": {"application/json": {"example": {"detail": "Внутренняя ошибка."}}},
 }
+
+
+FORBIDDEN_RESPONSE = {"description": "Недостаточно прав для этой операции.", "content": {"application/json": {"example": {"detail": "Недостаточно прав."}}}}

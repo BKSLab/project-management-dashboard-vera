@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { PROJECT_COLORS, PROJECT_STATUS_LABELS } from "@/lib/types";
-import type { ProjectStatus } from "@/lib/types";
+import type { Project, ProjectStatus } from "@/lib/types";
 import { PROJECT_KEY_PATTERN, type ProjectFormValues } from "@/lib/projectForm";
+import { ProjectIconPicker } from "@/components/projects/ProjectIconPicker";
 import { Field, Input, Select, Textarea } from "@/components/ui/Field";
 
 interface ProjectFormProps {
@@ -12,9 +13,13 @@ interface ProjectFormProps {
     lockKey?: boolean;
     requireDeadlineComment?: boolean;
     disabled?: boolean;
+    project?: Project;
+    onProjectChange?: (project: Project) => void;
+    pendingImage?: File | null;
+    onPendingImageChange?: (file: File | null) => void;
 }
 
-export function ProjectForm({ values, onChange, lockKey = false, requireDeadlineComment = false, disabled = false }: ProjectFormProps) {
+export function ProjectForm({ values, onChange, lockKey = false, requireDeadlineComment = false, disabled = false, project, onProjectChange, pendingImage, onPendingImageChange }: ProjectFormProps) {
     const [keyTouched, setKeyTouched] = useState(false);
     const keyError =
         keyTouched && values.key !== "" && !PROJECT_KEY_PATTERN.test(values.key)
@@ -132,17 +137,7 @@ export function ProjectForm({ values, onChange, lockKey = false, requireDeadline
             )}
 
             <div className="grid gap-4 sm:grid-cols-[120px_1fr]">
-                <Field label="Иконка" hint="Эмодзи">
-                    {(id) => (
-                        <Input
-                            id={id}
-                            value={values.icon}
-                            maxLength={4}
-                            placeholder="🚀"
-                            onChange={(event) => update({ icon: event.target.value })}
-                        />
-                    )}
-                </Field>
+                <Field label="Иконка">{() => <ProjectIconPicker value={values.icon} color={values.color} onChange={icon => update({ icon })} disabled={disabled} project={project} onProjectChange={onProjectChange} pendingImage={pendingImage} onPendingImageChange={onPendingImageChange} />}</Field>
 
                 <fieldset className="flex flex-col gap-1.5">
                     <legend className="mb-1.5 text-xs font-medium text-secondary">Цвет</legend>

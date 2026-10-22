@@ -5,12 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from src.api.v1.responses import (
     CONFLICT_RESPONSE,
+    FORBIDDEN_RESPONSE,
     NOT_FOUND_RESPONSE,
     SERVER_ERROR_RESPONSE,
     VALIDATION_RESPONSE,
 )
-from src.dependencies.access import require_comment_access, require_task_access
-from src.dependencies.auth import require_write_scope
+from src.dependencies.access import require_comment_authorship, require_task_access
+from src.dependencies.auth import PrincipalDep, require_write_scope
 from src.dependencies.services import TaskCommentsServiceDep
 from src.exceptions.task_comments import TaskCommentsServiceError
 from src.exceptions.tasks import TasksServiceError
@@ -22,13 +23,17 @@ logger = logging.getLogger(__name__)
 
 @router.patch(
     "/comments/{comment_id}",
-    dependencies=[Depends(require_comment_access), Depends(require_write_scope)],
+    dependencies=[Depends(require_comment_authorship), Depends(require_write_scope)],
     response_model=CommentSchema,
     summary="Изменить комментарий",
-    description="Меняет текст без смены автора. Прочитанный текст должен совпасть с текущим; иначе возвращается конфликт.",
+    description=(
+        "Меняет текст без смены автора. Доступно автору и владельцу проекта. Прочитанный "
+        "текст должен совпасть с текущим; иначе возвращается конфликт."
+    ),
     operation_id="updateTaskComment",
     response_description="Изменённый комментарий.",
     responses={
+        403: FORBIDDEN_RESPONSE,
         404: NOT_FOUND_RESPONSE,
         409: CONFLICT_RESPONSE,
         422: VALIDATION_RESPONSE,
@@ -112,13 +117,15 @@ async def get_comments(
 async def add_comment(
     task_id: Annotated[int, Path(gt=0, description="Идентификатор задачи канбана.")],
     data: CommentCreateSchema,
+    principal: PrincipalDep,
     service: TaskCommentsServiceDep,
 ) -> CommentSchema:
-    """Добавляет комментарий к задаче.
+    """Добавляет комментарий к задаче от имени текущего пользователя.
 
     Args:
         task_id: Идентификатор задачи.
-        data: Автор и текст комментария.
+        data: Текст комментария.
+        principal: Текущий пользователь — автор комментария.
         service: Сервис комментариев задач.
 
     Returns:
@@ -127,11 +134,11 @@ async def add_comment(
     Raises:
         HTTPException: Если задача не найдена или комментарий сохранить не удалось.
     """
-    logger.info("🚀 Запрос POST /tasks/%s/comments. Автор: %s.", task_id, data.author_name)
+    logger.info("🚀 Запрос POST /tasks/%s/comments. Автор id=%s.", task_id, principal.user_id)
     try:
         result = await service.add_comment(
             task_id=task_id,
-            author_name=data.author_name,
+            author_id=principal.user_id,
             body_md=data.body_md,
         )
         logger.info("✅ Комментарий id=%s добавлен к задаче id=%s.", result.id, task_id)
@@ -145,13 +152,18 @@ async def add_comment(
 
 @router.delete(
     path="/comments/{comment_id}",
-    dependencies=[Depends(require_write_scope), Depends(require_comment_access)],
+    dependencies=[Depends(require_write_scope), Depends(require_comment_authorship)],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить комментарий задачи",
-    description="Удаляет комментарий по его идентификатору.",
+    description="Удаляет комментарий. Доступно автору и владельцу проекта.",
     operation_id="deleteTaskComment",
     response_description="Комментарий удалён.",
-    responses={404: NOT_FOUND_RESPONSE, 422: VALIDATION_RESPONSE, 500: SERVER_ERROR_RESPONSE},
+    responses={
+        403: FORBIDDEN_RESPONSE,
+        404: NOT_FOUND_RESPONSE,
+        422: VALIDATION_RESPONSE,
+        500: SERVER_ERROR_RESPONSE,
+    },
 )
 async def delete_comment(
     comment_id: Annotated[int, Path(gt=0, description="Идентификатор комментария.")],

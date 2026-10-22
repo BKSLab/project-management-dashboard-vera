@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from src.agent.tim import PROJECT_MODES, TimMode
 from src.agent.tools import AgentToolContext
 
 if TYPE_CHECKING:
@@ -26,3 +27,7 @@ class ProjectAction:
     mutating: bool = True
     requires_confirmation: bool = False
     owner_only: bool = False
+    needs_project: bool = True
+    """False — личное действие Веры вне проекта (мои задачи, разовые)."""
+    modes: frozenset[TimMode] = PROJECT_MODES
+    """Режимы Веры, в которых действие доступно модели; MCP режимы не проверяет."""

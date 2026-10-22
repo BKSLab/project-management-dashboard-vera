@@ -29,7 +29,12 @@ from src.repositories.agent_files import AgentFilesRepository
 from src.repositories.agent_messages import AgentMessagesRepository
 from src.repositories.agent_tool_runs import AgentToolRunsRepository
 from src.repositories.analytics_reports import AnalyticsReportsRepository
+from src.repositories.api_key_usage import ApiKeyUsageRepository
+from src.repositories.api_keys import ApiKeysRepository
 from src.repositories.api_tokens import ApiTokensRepository
+from src.repositories.board_editor import BoardEditorRepository
+from src.repositories.board_shapes import BoardShapesRepository
+from src.repositories.chat_agent_turns import ChatAgentTurnsRepository
 from src.repositories.chat_attachments import ChatAttachmentsRepository
 from src.repositories.chat_entity_lookup import ChatEntityLookupRepository
 from src.repositories.chat_events import ChatEventsRepository
@@ -44,6 +49,7 @@ from src.repositories.documents import DocumentsRepository
 from src.repositories.knowledge_index_jobs import KnowledgeIndexJobsRepository
 from src.repositories.knowledge_sources import KnowledgeSourcesRepository
 from src.repositories.milestones import MilestonesRepository
+from src.repositories.project_boards import ProjectBoardsRepository
 from src.repositories.project_chats import ProjectChatsRepository
 from src.repositories.project_deadline_changes import ProjectDeadlineChangesRepository
 from src.repositories.project_members import ProjectMembersRepository
@@ -56,17 +62,20 @@ from src.repositories.task_attachments import TaskAttachmentsRepository
 from src.repositories.task_comments import TaskCommentsRepository
 from src.repositories.task_dependencies import TaskDependenciesRepository
 from src.repositories.task_participants import TaskParticipantsRepository
+from src.repositories.task_reports import TaskReportsRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import AgentToolUnitOfWork, UnitOfWork
 from src.repositories.users import UsersRepository
 from src.repositories.wbs_nodes import WbsNodesRepository
 from src.services.access import AccessService
 from src.services.agent_tool_scope import AgentProjectToolScope, AgentProjectToolScopeFactory
+from src.services.api_key_usage import ApiKeyUsageService
 from src.services.attachment_download import (
     AttachmentDownloadScope,
     AttachmentDownloadService,
 )
 from src.services.auth import AuthService
+from src.services.board_shapes import BoardShapesService
 from src.services.calendar import CalendarService
 from src.services.calendar_scenarios import CalendarScenarioService
 from src.services.chat_scope import ChatScope, ChatScopeFactory
@@ -79,12 +88,15 @@ from src.services.db_scope import (
     ProjectQueryScopeFactory,
     TaskDescriptionScope,
     TaskDocumentImportScope,
+    TimChatScope,
+    TimChatScopeFactory,
     WbsSuggestionScope,
 )
 from src.services.document_links import DocumentLinksService
 from src.services.documents import DocumentsService
 from src.services.knowledge_events import KnowledgeEvents
 from src.services.milestones import MilestonesService
+from src.services.project_boards import ProjectBoardsService
 from src.services.project_members import ProjectMembersService
 from src.services.project_risks import ProjectRiskService
 from src.services.project_stages import ProjectStagesService
@@ -98,6 +110,7 @@ from src.services.task_checklist_suggestions import (
 )
 from src.services.task_comments import TaskCommentsService
 from src.services.task_dependencies import TaskDependenciesService
+from src.services.task_reports import TaskReportsService
 from src.services.tasks import TasksService
 from src.services.users import UsersService
 from src.services.wbs_nodes import WbsNodesService
@@ -146,9 +159,12 @@ def build_chat_scope(
                 auth=AuthService(
                     UsersRepository(session),
                     tokens_repository=ApiTokensRepository(session),
+                    api_keys_repository=ApiKeysRepository(session),
                     invite_code=invite_code,
                 ),
                 unit_of_work=UnitOfWork(session),
+                turns=ChatAgentTurnsRepository(session),
+                runs=AgentToolRunsRepository(session),
             )
 
     return scope
@@ -215,6 +231,7 @@ def build_agent_project_tool_scope(
                                 deadline_changes_repository=ProjectDeadlineChangesRepository(
                                     session
                                 ),
+                                boards_repository=ProjectBoardsRepository(session),
                             ),
                             tasks=TasksService(
                                 tasks_repository=tasks,
@@ -228,6 +245,8 @@ def build_agent_project_tool_scope(
                                 unit_of_work=domain_uow,
                                 attachment_storage=files,
                                 knowledge_events=events,
+                                users_repository=UsersRepository(session),
+                                reports_repository=TaskReportsRepository(session),
                             ),
                             comments=TaskCommentsService(
                                 comments_repository=comments,
@@ -235,6 +254,7 @@ def build_agent_project_tool_scope(
                                 activity_repository=activity,
                                 unit_of_work=domain_uow,
                                 knowledge_events=events,
+                                users_repository=UsersRepository(session),
                             ),
                             members=ProjectMembersService(
                                 members_repository=members,
@@ -253,6 +273,9 @@ def build_agent_project_tool_scope(
                                 stickers_repository=ProjectStickersRepository(session),
                                 tasks_repository=tasks,
                                 unit_of_work=domain_uow,
+                                boards_repository=ProjectBoardsRepository(session),
+                                shapes_repository=BoardShapesRepository(session),
+                                editor_repository=BoardEditorRepository(session),
                             ),
                             stages=ProjectStagesService(
                                 stages_repository=stages,
@@ -336,6 +359,33 @@ def build_agent_project_tool_scope(
                             unit_of_work=unit_of_work,
                             uploads=AgentFilesRepository(session),
                             upload_storage=upload_storage,
+                            boards=ProjectBoardsService(
+                                boards_repository=ProjectBoardsRepository(session),
+                                stickers_repository=ProjectStickersRepository(session),
+                                shapes_repository=BoardShapesRepository(session),
+                                unit_of_work=domain_uow,
+                            ),
+                            board_shapes=BoardShapesService(
+                                boards_repository=ProjectBoardsRepository(session),
+                                shapes_repository=BoardShapesRepository(session),
+                                stickers_repository=ProjectStickersRepository(session),
+                                tasks_repository=tasks,
+                                unit_of_work=domain_uow,
+                                editor_repository=BoardEditorRepository(session),
+                            ),
+                            reports=TaskReportsService(
+                                reports=TaskReportsRepository(session),
+                                tasks=tasks,
+                                comments=comments,
+                                access=access,
+                                unit_of_work=domain_uow,
+                                projects=projects,
+                            ),
+                            turns=ChatAgentTurnsRepository(session),
+                            project_rows=projects,
+                            task_rows=tasks,
+                            activity_rows=activity,
+                            api_keys=ApiKeysRepository(session),
                         )
                     finally:
                         if not unit_of_work.committed:
@@ -379,6 +429,11 @@ def build_agent_conversation_scope(
                     links_repository=DocumentLinksRepository(session),
                 ),
                 unit_of_work=UnitOfWork(session),
+                projects=ProjectsRepository(session),
+                api_keys=ApiKeysRepository(session),
+                boards=ProjectBoardsRepository(session),
+                board_shapes=BoardShapesRepository(session),
+                board_stickers=ProjectStickersRepository(session),
             )
 
     return scope
@@ -438,6 +493,7 @@ def build_checklist_suggestion_scope(
                 auth=AuthService(
                     users_repository=UsersRepository(session),
                     tokens_repository=ApiTokensRepository(session),
+                    api_keys_repository=ApiKeysRepository(session),
                     invite_code=settings.auth.registration_invite_code.get_secret_value(),
                 ),
                 access=AccessService(
@@ -485,6 +541,7 @@ def build_risk_suggestion_scope(
                 auth=AuthService(
                     users_repository=UsersRepository(session),
                     tokens_repository=ApiTokensRepository(session),
+                    api_keys_repository=ApiKeysRepository(session),
                     invite_code=settings.auth.registration_invite_code.get_secret_value(),
                 ),
                 access=AccessService(
@@ -542,6 +599,7 @@ def build_attachment_download_scope(
                 auth_service=AuthService(
                     users_repository=UsersRepository(session),
                     tokens_repository=ApiTokensRepository(session),
+                    api_keys_repository=ApiKeysRepository(session),
                     invite_code=settings.auth.registration_invite_code.get_secret_value(),
                 ),
                 access_service=AccessService(
@@ -843,3 +901,42 @@ TaskDocumentImportScopeDep = Annotated[
     Callable[[], AbstractAsyncContextManager[TaskDocumentImportScope]],
     Depends(get_task_document_import_scope),
 ]
+
+
+def build_tim_chat_scope(*, session_factory: SessionFactory) -> TimChatScopeFactory:
+    @asynccontextmanager
+    async def scope() -> AsyncIterator[TimChatScope]:
+        async with session_factory() as session:
+            yield TimChatScope(
+                chats=ProjectChatsRepository(session),
+                messages=ChatMessagesRepository(session),
+                events=ChatEventsRepository(session),
+                participants=ChatParticipantsRepository(session),
+                turns=ChatAgentTurnsRepository(session),
+                runs=AgentToolRunsRepository(session),
+                users=UsersRepository(session),
+                access=AccessService(
+                    members_repository=ProjectMembersRepository(session),
+                    tasks_repository=TasksRepository(session),
+                    stages_repository=ProjectStagesRepository(session),
+                    documents_repository=DocumentsRepository(session),
+                    comments_repository=TaskCommentsRepository(session),
+                    links_repository=DocumentLinksRepository(session),
+                ),
+                unit_of_work=UnitOfWork(session),
+            )
+
+    return scope
+
+
+def build_api_key_usage_recorder(session_factory: SessionFactory):
+    async def record(**fields):
+        try:
+            async with session_factory() as session:
+                await ApiKeyUsageService(ApiKeyUsageRepository(session)).record(**fields)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("Не удалось записать обращение по API-ключу.")
+
+    return record

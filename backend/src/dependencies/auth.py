@@ -9,14 +9,17 @@
 import logging
 from typing import Annotated
 
-from fastapi import Cookie, Depends, Header, HTTPException
+from fastapi import Cookie, Depends, Header, HTTPException, Request
 
+from src.api.v1.api_key_routes import extra_scopes, required_scope
 from src.core.settings import get_settings
 from src.dependencies.services import AuthServiceDep
+from src.exceptions.api_keys import ApiKeyRouteNotAllowedError
 from src.exceptions.api_tokens import InsufficientTokenScopeError
 from src.exceptions.auth import AuthServiceError
 from src.services.auth import Principal
 from src.utils.api_tokens import extract_bearer_secret
+from src.utils.request_actor import set_request_actor
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,7 @@ async def get_principal(
     service: AuthServiceDep,
     session_cookie: SessionCookieDep = None,
     authorization: AuthorizationHeaderDep = None,
+    request: Request = None,
 ) -> Principal:
     """Определяет принципала запроса и переводит отказ в HTTP-ответ.
 
@@ -45,10 +49,23 @@ async def get_principal(
         HTTPException: Если аутентификация не пройдена или пользователь отключён.
     """
     try:
-        return await service.resolve_principal(
+        principal = await service.resolve_principal(
             session_token=session_cookie,
             bearer_secret=extract_bearer_secret(authorization),
         )
+        if principal.api_key is not None and request is not None:
+            request.state.api_key = principal.api_key
+            request.state.api_key_actor_login = principal.username
+            route = request.scope.get("route")
+            path = getattr(route, "path", request.url.path)
+            scope = required_scope(request.method, path)
+            if scope is None:
+                raise ApiKeyRouteNotAllowedError(f"{request.method} {path}")
+            principal.require(scope)
+            for extra in extra_scopes(request.method, path):
+                principal.require(extra)
+        set_request_actor(principal.request_actor())
+        return principal
     except AuthServiceError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 

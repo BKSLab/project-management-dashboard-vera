@@ -20,6 +20,7 @@ from src.mcp_server import context as ctx
 from src.mcp_server import server as srv
 from src.mcp_server import write_tools as wt
 from src.mcp_server.context import READ_ONLY_TOKEN, ToolContext
+from src.mcp_server.registry import current_tool_call
 from src.mcp_server.services import ToolServices
 from src.services.access import AccessGrant, AccessService
 from src.services.agent_actions import AgentActionsService
@@ -112,8 +113,11 @@ def tools(services: ToolServices, monkeypatch: pytest.MonkeyPatch):
         return services
 
     @asynccontextmanager
-    async def fake_tool_context(context, *, require_write: bool = False):
+    async def fake_tool_context(context, *, require_write: bool | None = None):
         principal = make_principal(state["scope"])
+        if require_write is None:
+            call = current_tool_call()
+            require_write = bool(call and call.spec.write)
         if require_write and not principal.can_write:
             raise ToolError(READ_ONLY_TOKEN)
         yield ToolContext(
@@ -123,8 +127,8 @@ def tools(services: ToolServices, monkeypatch: pytest.MonkeyPatch):
             settings=get_settings(),
         )
 
-    from src.mcp_server import project_tools, risk_tools
+    from src.mcp_server import project_tools, risk_tools, task_tools
 
-    for module in (srv, wt, ctx, risk_tools, project_tools):
+    for module in (srv, wt, ctx, risk_tools, project_tools, task_tools):
         monkeypatch.setattr(module, "tool_context", fake_tool_context, raising=False)
     return install

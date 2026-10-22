@@ -11,6 +11,7 @@ def source_card(source: ProjectSource, catalog: ProjectCatalog) -> KnowledgeSour
     key = None
     status = data.get("status")
     assignee = data.get("assignee")
+    member_user = next((row for row in catalog.rows.get("users", []) if row["id"] == data.get("user_id")), {}) if source.kind is SourceType.MEMBER else {}
     if source.kind is SourceType.TASK:
         if project and data.get("number") is not None:
             key = f"{project.properties.get('key', '')}-{data['number']}"
@@ -28,15 +29,20 @@ def source_card(source: ProjectSource, catalog: ProjectCatalog) -> KnowledgeSour
             if user["id"] in user_ids
         ]
         assignee = ", ".join(names) or assignee
+    elif source.kind is SourceType.TASK_REPORT:
+        key = data.get("task_key")
     elif source.kind is SourceType.RISK:
         key = f"RISK-{source.entity_id}"
     elif source.kind is SourceType.PROJECT:
         key = data.get("key")
     return KnowledgeSourceCardSchema(
+        login=member_user.get("username"),
+        avatar_url=(f"/api/v1/projects/{source.project_id}/members/{member_user['id']}/avatar" if member_user else None),
+        role=data.get("role") if source.kind is SourceType.MEMBER else None,
         key=key,
         status=status,
         priority=data.get("priority"),
         assignee=assignee,
         due_date=str(data["due_date"]) if data.get("due_date") else None,
-        summary=(data.get("description_md") or "")[:240] or None,
+        summary=(data.get("body_md") or data.get("description_md") or "")[:240] or None,
     )

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-export type ChatPanel = "agent" | "team";
+export type ChatPanel = "team";
 interface ChatDockState {
     projects: Record<number, number>;
     panel: ChatPanel | null;

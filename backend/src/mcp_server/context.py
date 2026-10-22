@@ -27,16 +27,20 @@ from src.exceptions.auth import AuthServiceError
 from src.exceptions.projects import ProjectNotFoundError, ProjectsServiceError
 from src.exceptions.tasks import TaskNotFoundError
 from src.knowledge.runtime import KnowledgeRuntime
+from src.mcp_server.registry import current_tool_call
 from src.mcp_server.services import ToolServices, build_tool_services
+from src.services.access import AccessGrant
 from src.services.auth import Principal
 from src.services.project_query import ResolvedTask
 from src.utils.api_tokens import extract_bearer_secret
+from src.utils.request_actor import reset_request_actor, set_request_actor
 
 logger = logging.getLogger(__name__)
 
 NOT_AUTHENTICATED = "Требуется действующий токен доступа."
 PROJECT_NOT_AVAILABLE = "Проект недоступен."
 TASK_NOT_AVAILABLE = "Задача недоступна."
+READ_ONLY_PROJECT = "Проект доступен только для чтения."
 READ_ONLY_TOKEN = "Токен выдан только на чтение."
 RESOURCES_MISSING = "Сервер запущен без ресурсов приложения."
 
@@ -53,11 +57,13 @@ class ToolContext:
     services: ToolServices
     runtime: KnowledgeRuntime
     settings: Settings
+    writes: bool = False
+    grant: AccessGrant | None = None
 
 
 @asynccontextmanager
 async def tool_context(
-    context: Context, *, require_write: bool = False
+    context: Context, *, require_write: bool | None = None
 ) -> AsyncIterator[ToolContext]:
     """Определяет пользователя вызова и собирает сервисы инструмента.
 
@@ -71,7 +77,10 @@ async def tool_context(
     Raises:
         ToolError: Если токен не предъявлен, недействителен или недостаточен.
     """
+    call = current_tool_call()
+    writes = require_write if require_write is not None else bool(call and call.spec.write)
     authorization = _authorization_header(context)
+    api_key = _header(context, "x-api-key")
     runtime, settings, session_factory = _app_resources(context)
     async with session_factory() as session:
         services = build_tool_services(
@@ -82,7 +91,7 @@ async def tool_context(
         try:
             principal = await services.auth.resolve_principal(
                 session_token=None,
-                bearer_secret=extract_bearer_secret(authorization),
+                bearer_secret=api_key or extract_bearer_secret(authorization),
             )
         except AuthServiceError as error:
             # Клиенту не сообщается, чем именно плох токен: отозванный,
@@ -90,14 +99,26 @@ async def tool_context(
             logger.info("ℹ️ MCP-вызов отклонён на аутентификации: %s.", error.status_code)
             raise ToolError(NOT_AUTHENTICATED) from error
 
-        if require_write and not principal.can_write:
+        if call is not None:
+            call.principal = principal
+            call.session_factory = session_factory
+            try:
+                principal.require(call.spec.scope)
+            except AuthServiceError as error:
+                raise ToolError(error.detail) from error
+            if call.actor and call.actor.casefold() != principal.username.casefold():
+                raise ToolError("Действие можно выполнить только от имени владельца ключа.")
+        elif getattr(principal, "api_key", None) is not None:
+            raise ToolError("Инструмент не зарегистрирован в каталоге прав.")
+        if writes and not principal.can_write:
             raise ToolError(READ_ONLY_TOKEN)
-        yield ToolContext(
-            principal=principal,
-            services=services,
-            runtime=runtime,
-            settings=settings,
-        )
+        actor_token = set_request_actor(principal.request_actor())
+        try:
+            yield ToolContext(principal=principal, services=services, runtime=runtime,
+                              settings=settings, writes=writes)
+        finally:
+            reset_request_actor(actor_token)
+
 
 
 async def resolve_project(tools: ToolContext, project_key: str) -> int:
@@ -161,10 +182,12 @@ async def ensure_project_access(tools: ToolContext, project_id: int) -> None:
     выяснялось бы существование чужих проектов.
     """
     try:
-        await tools.services.access.ensure_project_access(
+        tools.grant = await tools.services.access.ensure_project_access(
             project_id=project_id,
             user_id=tools.principal.user_id,
         )
+        if tools.writes and not tools.grant.can_write:
+            raise ToolError(READ_ONLY_PROJECT)
     except AccessServiceError as error:
         raise ToolError(PROJECT_NOT_AVAILABLE) from error
 
@@ -202,5 +225,12 @@ def _authorization_header(context: Context) -> str | None:
         return None
     for name, value in headers.items():
         if name.lower() == "authorization":
+            return value
+    return None
+
+
+def _header(context: Context, name: str) -> str | None:
+    for key, value in (context.headers or {}).items():
+        if key.lower() == name:
             return value
     return None

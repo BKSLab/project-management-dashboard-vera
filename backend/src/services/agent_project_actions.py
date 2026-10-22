@@ -1,4 +1,4 @@
-"""Паспорт, команда, стикеры и реестр рисков проекта."""
+"""Паспорт, команда, доски, стикеры и реестр рисков проекта."""
 
 from src.agent.tools import AgentToolContext
 from src.schemas import project_tool_inputs as inputs
@@ -37,7 +37,10 @@ async def list_members(
     db: AgentProjectToolScope, ctx: AgentToolContext, args: inputs.PageInput
 ) -> dict:
     """Читает публичные карточки участников без личных контактов."""
-    return page(await db.members.get_member_list(ctx.project_id), args)
+    result = page(await db.members.get_member_list(ctx.project_id), args)
+    for item in result["items"]:
+        item["source_id"] = f"member:{item['id']}"
+    return result
 
 
 async def add_member(
@@ -67,11 +70,20 @@ async def transfer_ownership(
     return {"project": item.model_dump(mode="json"), "source_id": f"project:{ctx.project_id}"}
 
 
-async def list_stickers(
-    db: AgentProjectToolScope, ctx: AgentToolContext, args: inputs.PageInput
+async def list_boards(
+    db: AgentProjectToolScope, ctx: AgentToolContext, args: inputs.EmptyInput
 ) -> dict:
-    """Возвращает стикеры вместе с ревизиями, координатами и связями."""
-    return page(await db.stickers.list_stickers(ctx.project_id), args)
+    """Возвращает доски проекта в порядке вкладок."""
+    items = await db.boards.list_boards(ctx.project_id, user_id=ctx.user_id)
+    return {"items": [item.model_dump(mode="json") for item in items], "total": len(items)}
+
+
+async def list_stickers(
+    db: AgentProjectToolScope, ctx: AgentToolContext, args: inputs.StickerListInput
+) -> dict:
+    """Возвращает стикеры доски вместе с ревизиями, координатами и связями."""
+    items = await db.stickers.list_stickers(ctx.project_id, args.board_id, user_id=ctx.user_id)
+    return page(items, args)
 
 
 async def create_sticker(
@@ -80,6 +92,7 @@ async def create_sticker(
     """Создаёт стикер с реальным авторством участника."""
     item = await db.stickers.create_sticker(
         project_id=ctx.project_id,
+        board_id=args.board_id,
         data=args,
         author_id=ctx.user_id,
         author_username=ctx.username,
@@ -93,7 +106,10 @@ async def update_sticker(
 ) -> dict:
     """Меняет стикер с проверкой ревизии."""
     item = await db.stickers.update_sticker(
-        project_id=ctx.project_id, sticker_id=args.sticker_id, data=args.changes
+        project_id=ctx.project_id,
+        board_id=args.board_id,
+        sticker_id=args.sticker_id,
+        data=args.changes,
     )
     return {"sticker": item.model_dump(mode="json"), "source_id": f"sticker:{item.id}"}
 
@@ -101,9 +117,12 @@ async def update_sticker(
 async def move_sticker(
     db: AgentProjectToolScope, ctx: AgentToolContext, args: inputs.StickerMoveInput
 ) -> dict:
-    """Меняет координаты и размер стикера."""
+    """Меняет координаты, размер и слой стикера."""
     item = await db.stickers.move_sticker(
-        project_id=ctx.project_id, sticker_id=args.sticker_id, data=args.position
+        project_id=ctx.project_id,
+        board_id=args.board_id,
+        sticker_id=args.sticker_id,
+        data=args.position,
     )
     return {"sticker": item.model_dump(mode="json"), "source_id": f"sticker:{item.id}"}
 
@@ -113,7 +132,10 @@ async def delete_sticker(
 ) -> dict:
     """Удаляет прочитанную ревизию стикера."""
     await db.stickers.delete_sticker(
-        project_id=ctx.project_id, sticker_id=args.sticker_id, revision=args.revision
+        project_id=ctx.project_id,
+        board_id=args.board_id,
+        sticker_id=args.sticker_id,
+        revision=args.revision,
     )
     return {"deleted": True, "sticker_id": args.sticker_id}
 

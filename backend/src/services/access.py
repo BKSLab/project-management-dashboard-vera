@@ -42,9 +42,10 @@ class AccessGrant:
         is_owner: Является ли пользователь владельцем проекта.
     """
 
-    project_id: int
+    project_id: int | None
     resource_id: int
     is_owner: bool
+    can_write: bool = True
 
 
 class AccessService:
@@ -112,12 +113,38 @@ class AccessService:
         task = await self._load(self.tasks_repository.get_by_id, task_id=task_id)
         if task is None:
             raise ResourceNotAvailableError(resource="Задача", resource_id=task_id)
+        if task.project_id is None:
+            visible, owner = await self._load(
+                self.tasks_repository.personal_access, task_id=task_id, user_id=user_id
+            )
+            if not visible:
+                raise ResourceNotAvailableError(resource="Задача", resource_id=task_id)
+            return AccessGrant(project_id=None, resource_id=task_id, is_owner=owner)
         grant = await self._authorize(
             project_id=task.project_id,
             user_id=user_id,
             resource="Задача",
         )
         return self._for_resource(grant, resource_id=task_id)
+
+    async def ensure_project_write(self, *, project_id: int, user_id: int) -> AccessGrant:
+        return await self.ensure_project_access(project_id=project_id, user_id=user_id)
+
+    @staticmethod
+    def require_write(grant: AccessGrant) -> None:
+        if not grant.can_write:
+            from src.exceptions.access import ResourceWriteRequiredError
+
+            raise ResourceWriteRequiredError()
+
+    async def ensure_task_deletion(self, *, task_id: int, user_id: int) -> AccessGrant:
+        grant = await self.ensure_task_access(task_id=task_id, user_id=user_id)
+        self.require_write(grant)
+        if grant.project_id is None and not grant.is_owner:
+            from src.exceptions.access import TaskOwnerRequiredError
+
+            raise TaskOwnerRequiredError(task_id)
+        return grant
 
     async def ensure_stage_access(self, *, stage_id: int, user_id: int) -> AccessGrant:
         """Проверяет доступ к стадии через проект, которому она принадлежит."""
@@ -151,14 +178,7 @@ class AccessService:
         comment = await self._load(self.comments_repository.get_by_id, comment_id=comment_id)
         if comment is None:
             raise ResourceNotAvailableError(resource="Комментарий", resource_id=comment_id)
-        task = await self._load(self.tasks_repository.get_by_id, task_id=comment.task_id)
-        if task is None:
-            raise ResourceNotAvailableError(resource="Комментарий", resource_id=comment_id)
-        grant = await self._authorize(
-            project_id=task.project_id,
-            user_id=user_id,
-            resource="Комментарий",
-        )
+        grant = await self.ensure_task_access(task_id=comment.task_id, user_id=user_id)
         return self._for_resource(grant, resource_id=comment_id)
 
     async def ensure_link_access(self, *, link_id: int, user_id: int) -> AccessGrant:
@@ -178,6 +198,15 @@ class AccessService:
             resource="Связь документа",
         )
         return self._for_resource(grant, resource_id=link_id)
+
+    async def ensure_comment_authorship(self, *, comment_id: int, user_id: int) -> AccessGrant:
+        grant = await self.ensure_comment_access(comment_id=comment_id, user_id=user_id)
+        comment = await self._load(self.comments_repository.get_by_id, comment_id=comment_id)
+        if comment.author_id is not None and comment.author_id != user_id:
+            from src.exceptions.access import ResourceWriteRequiredError
+
+            raise ResourceWriteRequiredError()
+        return grant
 
     async def _authorize(self, *, project_id: int, user_id: int, resource: str) -> AccessGrant:
         """Проверяет членство пользователя в проекте объекта."""
@@ -206,6 +235,7 @@ class AccessService:
             project_id=grant.project_id,
             resource_id=resource_id,
             is_owner=grant.is_owner,
+            can_write=grant.can_write,
         )
 
     @staticmethod

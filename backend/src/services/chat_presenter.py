@@ -3,7 +3,10 @@
 from collections import defaultdict
 from urllib.parse import quote
 
+from src.agent.tim import TIM_NAME
+from src.schemas.agent_tools import AgentToolRunSchema
 from src.schemas.project_chats import (
+    ChatAgentView,
     ChatAttachmentView,
     ChatEntityView,
     ChatMessageView,
@@ -69,9 +72,16 @@ class ChatPresenter:
         mentions = await db.mentions.get_many(ids)
         files = await db.attachments.get_many(ids)
         reactions = await db.reactions.get_many(ids)
-        user_ids = {row.author_user_id for row in [*rows, *replies] if row.author_user_id} | {
-            row.user_id for row in mentions
-        }
+        agent_ids = [row.id for row in rows if getattr(row, "author_kind", "user") == "agent"]
+        turns = {row.reply_message_id: row for row in (await db.turns.get_by_replies(agent_ids) if agent_ids else [])}
+        actions_by_turn = defaultdict(list)
+        for run in (await db.runs.get_for_turns([turn.id for turn in turns.values()]) if turns else []):
+            actions_by_turn[run.chat_turn_id].append(AgentToolRunSchema.model_validate(run))
+        user_ids = (
+            {row.author_user_id for row in [*rows, *replies] if row.author_user_id}
+            | {row.user_id for row in mentions}
+            | {turn.requester_id for turn in turns.values()}
+        )
         users = {
             row["id"]: public_user(row) for row in await db.participants.get_users(list(user_ids))
         }
@@ -118,6 +128,7 @@ class ChatPresenter:
                     chat_id=row.chat_id,
                     project_id=row.project_id,
                     seq=row.seq,
+                    author_type="AGENT" if getattr(row, "author_kind", "user") == "agent" else "USER",
                     author=users.get(row.author_user_id),
                     client_message_id=row.client_message_id,
                     content="" if deleted else row.content,
@@ -128,6 +139,7 @@ class ChatPresenter:
                     reply=ChatReplyView(
                         id=reply.id,
                         seq=reply.seq,
+                        author_type="AGENT" if getattr(reply, "author_kind", "user") == "agent" else "USER",
                         author=users.get(reply.author_user_id),
                         content="Сообщение удалено" if reply.deleted_at else reply.content[:240],
                         deleted=reply.deleted_at is not None,
@@ -143,6 +155,23 @@ class ChatPresenter:
                         {"reaction": reaction, "user_ids": user_ids}
                         for reaction, user_ids in reactions_by_message[row.id].items()
                     ],
+                    agent=self._agent(turns.get(row.id), users, actions_by_turn),
                 )
             )
         return result
+
+    @staticmethod
+    def _agent(turn, users, actions_by_turn) -> ChatAgentView | None:
+        """Карточка ответа Веры; у людских сообщений — None."""
+        if turn is None:
+            return None
+        return ChatAgentView(
+            name=TIM_NAME,
+            status=turn.status,
+            error=turn.error,
+            progress=turn.progress if turn.status in {"queued", "processing"} else None,
+            requester=users.get(turn.requester_id),
+            request_message_id=turn.request_message_id,
+            sources=turn.sources,
+            actions=actions_by_turn.get(turn.id, []),
+        )

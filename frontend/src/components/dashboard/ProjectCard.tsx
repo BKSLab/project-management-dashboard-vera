@@ -4,7 +4,8 @@ import type { DashboardProject } from "@/lib/types";
 import { formatDayMonth } from "@/lib/dates";
 import { Card } from "@/components/ui/Card";
 import { ProgressBar } from "@/components/ui/Progress";
-import { ProjectStatusBadge, StatusDot } from "@/components/ui/Badge";
+import { ProjectIcon } from "@/components/projects/ProjectIcon";
+import { ProjectStatusBadge } from "@/components/ui/Badge";
 
 /**
  * Карточка проекта по макету раздела 6: название, краткое описание, прогресс,
@@ -29,13 +30,7 @@ export function ProjectCard({ project }: { project: DashboardProject }) {
             >
                 <div className="flex min-w-0 items-start justify-between gap-3">
                     <div className="flex min-w-0 items-start gap-2.5">
-                        {project.icon ? (
-                            <span aria-hidden="true" className="mt-0.5 shrink-0 text-base leading-none">
-                                {project.icon}
-                            </span>
-                        ) : (
-                            <StatusDot color={project.color} className="mt-2" />
-                        )}
+                        <ProjectIcon project={project} size={22} />
                         <div className="flex min-w-0 flex-col gap-0.5">
                             <h3 className="truncate text-[15px] font-semibold tracking-[-0.015em] text-primary">
                                 {project.name}

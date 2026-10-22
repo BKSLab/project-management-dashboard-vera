@@ -20,15 +20,31 @@ PUBLIC_ROUTES = {
     ("POST", "/api/v1/auth/register"),
 }
 
+PUBLIC_READ_ROUTES = {
+    ("GET", "/health/live"),
+    ("GET", "/health/ready"),
+    # Секрет подписки проверяется CalendarFeedService; сессия не нужна.
+    ("GET", "/api/v1/ics/{token}.ics"),
+}
+
 # Управление токенами закрыто для самих токенов: скомпрометированный токен
 # не должен уметь выпустить себе замену и отозвать чужие.
 SESSION_ONLY_ROUTES = {
     ("POST", "/api/v1/users/me/tokens"),
     ("DELETE", "/api/v1/users/me/tokens/{token_id}"),
+    ("POST", "/api/v1/users/me/api-keys"),
+    ("PATCH", "/api/v1/users/me/api-keys/{key_id}"),
+    ("POST", "/api/v1/me/calendar/ics-token"),
+    ("DELETE", "/api/v1/me/calendar/ics-token"),
+    ("POST", "/api/v1/tasks/{task_id}/view"),
+    ("POST", "/api/v1/agent/pending/{action_id}/confirm"),
+    ("POST", "/api/v1/agent/pending/{action_id}/reject"),
 }
 
 # POST, которые ничего не меняют: расчёт, предпросмотр и поиск.
 READ_ONLY_POST_ROUTES = {
+    # Вопрос ставит ответ в очередь. Запись в домен защищена WriteGate и подтверждением.
+    ("POST", "/api/v1/agent/ask"),
     ("POST", "/api/v1/projects/{project_id}/chat/entities/resolve"),
     ("POST", "/api/v1/projects/{project_id}/risks/field-suggestion"),
     ("POST", "/api/v1/projects/{project_id}/tasks/checklist-suggestion"),
@@ -55,8 +71,8 @@ DETACHED_AUTH_ROUTES = STREAMING_ROUTES | {
     ("POST", "/api/v1/projects/{project_id}/risks/suggestions"),
 }
 
-EXPECTED_NON_GET_TOTAL = 77
-EXPECTED_MUTATION_TOTAL = 64
+EXPECTED_NON_GET_TOTAL = 127
+EXPECTED_MUTATION_TOTAL = 106
 
 
 def route_dependencies(route: APIRoute) -> set[str]:
@@ -214,7 +230,7 @@ def test_write_scope_is_required_exactly_where_it_should_be() -> None:
 
 
 def test_route_inventory_is_classified_and_counted() -> None:
-    """HTTP-реестр и единственный WebSocket чата классифицированы явно."""
+    """HTTP-реестр и WebSocket чата/внимания классифицированы явно."""
     # Каждый изменяющий по методу маршрут отнесён к известному классу. Новый неклассифицированный маршрут ломает тест: решение о его правах должно быть принято явно, а не унаследовано по умолчанию.
     actual = {(method, path) for method, path, _ in non_get_routes()}
     explicit = PUBLIC_ROUTES | SESSION_ONLY_ROUTES | READ_ONLY_POST_ROUTES
@@ -228,11 +244,15 @@ def test_route_inventory_is_classified_and_counted() -> None:
     # Число доменных мутаций совпадает с зафиксированным инвентарём.
     assert len(mutation_routes()) == EXPECTED_MUTATION_TOTAL
     sockets = [route for route in app.routes if isinstance(route, APIWebSocketRoute)]
-    assert [route.path for route in sockets] == ["/api/v1/projects/{project_id}/chat/ws"]
+    runtime_by_path = {
+        "/api/v1/projects/{project_id}/chat/ws": "get_chat_runtime",
+        "/api/v1/my/task-attention/ws": "get_task_attention_runtime",
+    }
+    assert {route.path for route in sockets} == runtime_by_path.keys()
     # Auth/membership и READ/WRITE проверяются короткими фазами ChatService;
     # реальные HTTP/ASGI интеграционные проверки покрывают запреты и отзыв прав.
     for route in sockets:
-        assert "get_chat_runtime" in route_dependencies(route)
+        assert runtime_by_path[route.path] in route_dependencies(route)
         assert "get_db_session" not in route_dependencies(route)
 
 
@@ -257,7 +277,7 @@ def test_authentication_is_required_everywhere_except_public_routes() -> None:
     unauthenticated = [
         f"{method} {path}"
         for method, path, route in api_routes()
-        if (method, path) not in PUBLIC_ROUTES | DETACHED_AUTH_ROUTES
+        if (method, path) not in PUBLIC_ROUTES | PUBLIC_READ_ROUTES | DETACHED_AUTH_ROUTES
         and not {"get_principal", "require_chat_access"} & route_dependencies(route)
     ]
 

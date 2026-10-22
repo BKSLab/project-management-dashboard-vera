@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.db.models.project_stickers import ProjectStickerColor
 from src.db.models.users import User
+from src.exceptions.project_boards import ProjectBoardNotFoundError
 from src.exceptions.project_stickers import (
     ProjectStickerNotFoundError,
     ProjectStickerRevisionConflictError,
@@ -13,6 +13,8 @@ from src.exceptions.project_stickers import (
     ProjectStickersServiceError,
     ProjectStickerTaskMismatchError,
 )
+from src.repositories.board_shapes import BoardShapesRepository
+from src.repositories.project_boards import ProjectBoardsRepository
 from src.repositories.project_stickers import ProjectStickersRepository
 from src.repositories.tasks import TasksRepository
 from src.repositories.unit_of_work import UnitOfWork
@@ -22,6 +24,7 @@ from src.schemas.project_stickers import (
     ProjectStickerUpdateSchema,
 )
 from src.services.project_stickers import ProjectStickersService
+from tests.board_support import local_user
 
 
 def sticker(*, revision: int = 1, task_ids: list[int] | None = None) -> SimpleNamespace:
@@ -29,13 +32,15 @@ def sticker(*, revision: int = 1, task_ids: list[int] | None = None) -> SimpleNa
     return SimpleNamespace(
         id=4,
         project_id=1,
+        board_id=3,
+        z_index=0,
         body="Согласовать API",
-        color=ProjectStickerColor.YELLOW,
+        color="#fff19a",
         canvas_x=40.0,
         canvas_y=40.0,
         created_by_user_id=7,
-        created_by_username_snapshot="vera",
-        created_by_display_name_snapshot="Иванова Вера",
+        created_by_username_snapshot="i.ivanov",
+        created_by_display_name_snapshot="Иванов Иван",
         task_links=[SimpleNamespace(task_id=task_id) for task_id in (task_ids or [])],
         revision=revision,
         created_at=now,
@@ -44,25 +49,35 @@ def sticker(*, revision: int = 1, task_ids: list[int] | None = None) -> SimpleNa
 
 
 def user() -> User:
-    return User(
+    return local_user(
         id=7,
-        username="vera",
-        password_hash="hash",
-        last_name="Иванова",
-        first_name="Вера",
-        middle_name="Петровна",
+        username="i.ivanov",
+        display_name="Иванов Иван Петрович",
         is_active=True,
     )
+
+
+def boards() -> AsyncMock:
+    """Доски проекта: активная доска id=3 — она же первая."""
+    repository = AsyncMock(spec=ProjectBoardsRepository)
+    repository.get_active.return_value = SimpleNamespace(id=3, project_id=1)
+    repository.get_first_active.return_value = SimpleNamespace(id=3, project_id=1)
+    return repository
 
 
 def service(
     repository: AsyncMock | None = None,
     tasks_repository: AsyncMock | None = None,
     unit_of_work: AsyncMock | None = None,
+    *,
+    boards_repository: AsyncMock | None = None,
+    shapes_repository: AsyncMock | None = None,
 ) -> ProjectStickersService:
     return ProjectStickersService(
         stickers_repository=repository or AsyncMock(spec=ProjectStickersRepository),
         tasks_repository=tasks_repository or AsyncMock(spec=TasksRepository),
+        boards_repository=boards_repository or boards(),
+        shapes_repository=shapes_repository or AsyncMock(spec=BoardShapesRepository),
         unit_of_work=unit_of_work or AsyncMock(spec=UnitOfWork),
     )
 
@@ -70,12 +85,23 @@ def service(
 @pytest.mark.asyncio
 async def test_list_returns_transport_contract() -> None:
     repository = AsyncMock(spec=ProjectStickersRepository)
-    repository.list_by_project_id.return_value = [sticker(task_ids=[11, 12])]
+    repository.list_by_board_id.return_value = [sticker(task_ids=[11, 12])]
+    boards_repository = boards()
 
-    result = await service(repository).list_stickers(project_id=1)
+    result = await service(repository, boards_repository=boards_repository).list_stickers(1, 3)
 
     assert result[0].task_ids == [11, 12]
-    repository.list_by_project_id.assert_awaited_once_with(1)
+    assert (result[0].board_id, result[0].z_index) == (3, 0)
+    repository.list_by_board_id.assert_awaited_once_with(3)
+    boards_repository.get_active.assert_awaited_once_with(project_id=1, board_id=3)
+
+    # Доска чужого проекта или удалённая — 404, стикеры не читаются.
+    repository = AsyncMock(spec=ProjectStickersRepository)
+    boards_repository = boards()
+    boards_repository.get_active.return_value = None
+    with pytest.raises(ProjectBoardNotFoundError):
+        await service(repository, boards_repository=boards_repository).list_stickers(1, 99)
+    repository.list_by_board_id.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -103,7 +129,7 @@ async def test_stale_revision_never_overwrites_someone_elses_change() -> None:
         await service(repository).update_sticker(
             project_id=1,
             sticker_id=4,
-            data=ProjectStickerUpdateSchema(revision=2, color="green"),
+            data=ProjectStickerUpdateSchema(revision=2, color="#E3F6D5"),
         )
 
     repository = AsyncMock(spec=ProjectStickersRepository)
@@ -126,13 +152,14 @@ async def test_missing_sticker_is_not_found_on_update_and_move() -> None:
         )
 
     repository = AsyncMock(spec=ProjectStickersRepository)
-    repository.update_position.return_value = False
+    repository.get_by_id.return_value = None
     with pytest.raises(ProjectStickerNotFoundError):
         await service(repository).move_sticker(
             project_id=1,
             sticker_id=404,
             data=ProjectStickerPositionUpdateSchema(canvas_x=10.0, canvas_y=20.0),
         )
+    repository.update_position.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -164,13 +191,16 @@ async def test_move_updates_only_canvas_position_and_commits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_uses_revision_and_commits() -> None:
+async def test_delete_uses_revision_detaches_arrows_and_commits() -> None:
     repository = AsyncMock(spec=ProjectStickersRepository)
     repository.get_by_id.return_value = sticker(revision=3)
     repository.delete.return_value = True
+    shapes_repository = AsyncMock(spec=BoardShapesRepository)
     unit_of_work = AsyncMock(spec=UnitOfWork)
 
-    await service(repository, unit_of_work=unit_of_work).delete_sticker(
+    await service(
+        repository, unit_of_work=unit_of_work, shapes_repository=shapes_repository
+    ).delete_sticker(
         project_id=1,
         sticker_id=4,
         revision=3,
@@ -181,16 +211,19 @@ async def test_delete_uses_revision_and_commits() -> None:
         sticker_id=4,
         expected_revision=3,
     )
+    shapes_repository.detach_refs.assert_awaited_once_with(
+        board_id=3, target_type="sticker", target_id=4
+    )
     unit_of_work.commit.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
 async def test_repository_failure_is_wrapped() -> None:
     repository = AsyncMock(spec=ProjectStickersRepository)
-    repository.list_by_project_id.side_effect = ProjectStickersRepositoryError("БД недоступна")
+    repository.list_by_board_id.side_effect = ProjectStickersRepositoryError("БД недоступна")
 
     with pytest.raises(ProjectStickersServiceError):
-        await service(repository).list_stickers(project_id=1)
+        await service(repository).list_stickers(1, 3)
 
 
 @pytest.mark.asyncio
@@ -209,17 +242,20 @@ async def test_sticker_create_and_update_preserve_author_and_links() -> None:
         data=ProjectStickerCreateSchema(body="  Согласовать API  ", task_ids=[11]),
         author_id=user().id,
         author_username=user().username,
-        author_display_name="Иванова Вера Петровна",
+        author_display_name="Иванов Иван Петрович",
     )
 
     assert result.id == 4
     saved = repository.insert.await_args.kwargs
     assert saved["data"]["created_by_user_id"] == 7
-    assert saved["data"]["created_by_username_snapshot"] == "vera"
-    assert saved["data"]["created_by_display_name_snapshot"] == "Иванова Вера Петровна"
+    assert saved["data"]["created_by_username_snapshot"] == "i.ivanov"
+    assert saved["data"]["created_by_display_name_snapshot"] == "Иванов Иван Петрович"
     assert saved["data"]["body"] == "Согласовать API"
     assert saved["data"]["canvas_x"] == 40.0
     assert saved["data"]["canvas_y"] == 40.0
+    # Без board_id (так зовёт агент) стикер ложится на первую доску проекта.
+    assert saved["data"]["board_id"] == 3
+    assert (saved["data"]["width"], saved["data"]["z_index"]) == (230.0, 0)
     links = repository.replace_task_links.await_args.kwargs
     assert links["task_ids"] == [11]
     unit_of_work.commit.assert_awaited_once_with()
@@ -233,8 +269,8 @@ async def test_sticker_create_and_update_preserve_author_and_links() -> None:
             project_id=1,
             data=ProjectStickerCreateSchema(body="Текст", task_ids=[99]),
             author_id=user().id,
-        author_username=user().username,
-        author_display_name="Иванова Вера Петровна",
+            author_username=user().username,
+            author_display_name="Иванов Иван Петрович",
         )
 
     repository.insert.assert_not_awaited()
@@ -265,7 +301,7 @@ async def test_sticker_create_and_update_preserve_author_and_links() -> None:
     assert changes["expected_revision"] == 3
     assert changes["changes"] == {
         "body": "Новый текст",
-        "color": ProjectStickerColor.BLUE,
+        "color": "#c9edff",
     }
     assert repository.replace_task_links.await_args.kwargs["task_ids"] == [12]
     assert "created_by_user_id" not in changes["changes"]

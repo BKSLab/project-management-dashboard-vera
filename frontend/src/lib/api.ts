@@ -65,6 +65,7 @@ export const api = {
             body: body !== undefined ? JSON.stringify(body) : undefined,
         }),
     postForm: <T>(path: string, body: FormData) => request<T>(path, { method: "POST", body }),
+    put: <T>(path: string, body: unknown) => request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
     patch: <T>(path: string, body: unknown) =>
         request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
     delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
@@ -87,7 +88,7 @@ export const authEndpoints = {
 /** Единый источник правды по адресам API — маршруты не разъезжаются по экранам. */
 export const endpoints = {
     taskChecklistSuggestion: (projectId: number) => `${V1}/projects/${projectId}/tasks/checklist-suggestion`,
-    dashboard: () => `${V1}/dashboard`,
+    dashboard: (scope: "mine" | "all" = "mine") => `${V1}/dashboard${scope === "all" ? "?scope=all" : ""}`,
     dashboardAnalytics: (projectId?: number | null) =>
         `${V1}/dashboard/analytics${projectId ? `?project_id=${projectId}` : ""}`,
     projects: () => `${V1}/projects`,
@@ -172,6 +173,50 @@ export const endpoints = {
     wbsSuggestion: (projectId: number) => `${V1}/projects/${projectId}/wbs/suggestion`,
     wbsSuggestionApply: (projectId: number) =>
         `${V1}/projects/${projectId}/wbs/suggestion/apply`,
+projectIconImage: (projectId: number, version?: string | null) =>
+        `${V1}/projects/${projectId}/icon-image${version ? `?v=${encodeURIComponent(version)}` : ""}`,
+projectBoards: (projectId: number) => `${V1}/projects/${projectId}/boards`,
+projectBoard: (projectId: number | null, boardId: number) => boardBase(projectId, boardId),
+freeBoards: () => `${V1}/boards`,
+boardContent: (projectId: number | null, boardId: number) => `${boardBase(projectId, boardId)}/content`,
+boardStickers: (projectId: number | null, boardId: number) => `${boardBase(projectId, boardId)}/stickers`,
+boardSticker: (projectId: number | null, boardId: number, stickerId: number) =>
+        `${boardBase(projectId, boardId)}/stickers/${stickerId}`,
+boardStickerPosition: (projectId: number | null, boardId: number, stickerId: number) =>
+        `${boardBase(projectId, boardId)}/stickers/${stickerId}/position`,
+boardShapes: (projectId: number | null, boardId: number) => `${boardBase(projectId, boardId)}/shapes`,
+boardShape: (projectId: number | null, boardId: number, shapeId: number) =>
+        `${boardBase(projectId, boardId)}/shapes/${shapeId}`,
+boardShapeToSticker: (projectId: number | null, boardId: number, shapeId: number) =>
+        `${boardBase(projectId, boardId)}/shapes/${shapeId}/to-sticker`,
+boardBatch: (projectId: number | null, boardId: number) => `${boardBase(projectId, boardId)}/batch`,
+timConversations: () => `${V1}/tim/conversations`,
+timMessages: (conversationId: number) => `${V1}/tim/conversations/${conversationId}/messages`,
+timMessageRetry: (conversationId: number, messageId: number) => `${V1}/tim/conversations/${conversationId}/messages/${messageId}/retry`,
+timFiles: (conversationId: number) => `${V1}/tim/conversations/${conversationId}/files`,
+timActionDecision: (conversationId: number, actionId: string) => `${V1}/tim/conversations/${conversationId}/actions/${actionId}/decision`,
+projectTimActionDecision: (projectId: number, actionId: string) => `${V1}/projects/${projectId}/tim/actions/${actionId}/decision`,
+agentPending: (actionId: string) => `${V1}/agent/pending/${encodeURIComponent(actionId)}`,
+agentPendingDecision: (actionId: string, decision: "confirm" | "reject") =>
+        `${V1}/agent/pending/${encodeURIComponent(actionId)}/${decision}`,
+projectCalendarWorkload: (projectId: number) =>
+        `${V1}/projects/${projectId}/calendar/workload`,
+myCalendar: () => `${V1}/me/calendar`,
+myCalendarUnscheduled: () => `${V1}/me/calendar/unscheduled`,
+myCalendarIcsToken: () => `${V1}/me/calendar/ics-token`,
+portfolioCalendar: () => `${V1}/portfolio/calendar`,
+calendarHolidays: (year: number) => `${V1}/calendar/holidays?year=${year}`,
+taskByKey: (taskKey: string) => `${V1}/tasks/by-key/${encodeURIComponent(taskKey)}`,
+projectBaseline: (projectId: number, dryRun = false) =>
+        `${V1}/projects/${projectId}/baseline${dryRun ? "?dry_run=true" : ""}`,
+users: (query: string, limit = 20) =>
+        `${V1}/users?${new URLSearchParams({ query, limit: String(limit) }).toString()}`,
+personalTasks: () => `${V1}/tasks`,
+myTasks: (role: string, includeClosed: boolean, attention?: string) =>
+        `${V1}/my/tasks?${new URLSearchParams({ role, include_closed: String(includeClosed), ...(attention && { attention }) }).toString()}`,
+taskStatus: (taskId: number) => `${V1}/tasks/${taskId}/status`,
+taskMoveTo: (taskId: number) => `${V1}/tasks/${taskId}/move-to`,
+taskMovePreview: (taskId: number, query: string) => `${V1}/tasks/${taskId}/move-to/preview?${query}`
 };
 
 /** Ключи кэша TanStack Query: всё, что относится к проекту, инвалидируется вместе. */
@@ -215,4 +260,23 @@ export const queryKeys = {
     document: (documentId: number) => ["documents", documentId] as const,
     documentLinks: (documentId: number) => ["documents", documentId, "links"] as const,
     wbs: (projectId: number) => ["projects", projectId, "wbs"] as const,
+runtime: ["runtime"] as const,
+agentPending: (actionId: string) => ["agent", "pending", actionId] as const,
+dashboardScoped: (scope: "mine" | "all") => ["dashboard", "overview", scope] as const,
+projectBoards: (projectId: number) => ["projects", projectId, "boards"] as const,
+freeBoards: ["boards"] as const,
+freeBoardContent: (boardId: number) => ["boards", boardId, "content"] as const,
+boardContent: (projectId: number, boardId: number) => ["projects", projectId, "boards", boardId, "content"] as const,
+myCalendar: (query: string) => ["me", "calendar", query] as const,
+myCalendarUnscheduled: (query: string) => ["me", "calendar", "unscheduled", query] as const,
+myCalendarIcsToken: ["me", "calendar", "ics-token"] as const,
+portfolioCalendar: (query: string) => ["portfolio", "calendar", query] as const,
+calendarHolidays: (year: number) => ["calendar", "holidays", year] as const,
+users: (query: string) => ["users", query] as const,
+myTasks: ["my-tasks"] as const,
+myTaskList: (role: string, includeClosed: boolean, attention?: string) => ["my-tasks", role, includeClosed, ...(attention ? [attention] : [])] as const
 };
+
+function boardBase(projectId: number | null, boardId: number): string {
+    return projectId === null ? `${V1}/boards/${boardId}` : `${V1}/projects/${projectId}/boards/${boardId}`;
+}

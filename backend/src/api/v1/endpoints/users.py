@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 
 from src.api.v1.responses import (
     NOT_FOUND_RESPONSE,
@@ -12,7 +12,7 @@ from src.dependencies.auth import PrincipalDep, require_write_scope
 from src.dependencies.services import UsersServiceDep
 from src.exceptions.auth import AuthServiceError
 from src.exceptions.users import UsersServiceError
-from src.schemas.users import PasswordChangeSchema, UserSchema, UserUpdateSchema
+from src.schemas.users import PasswordChangeSchema, UserSchema, UserSummarySchema, UserUpdateSchema
 
 router = APIRouter(prefix="/users", tags=["users"])
 logger = logging.getLogger(__name__)
@@ -236,3 +236,16 @@ async def delete_avatar(principal: PrincipalDep, service: UsersServiceDep) -> No
     except UsersServiceError as error:
         logger.warning("⚠️ Ошибка DELETE /users/me/avatar. Детали: %s", error)
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+@router.get("", response_model=list[UserSummarySchema], summary="Найти локальных пользователей", operation_id="searchUsers")
+async def search_users(
+    principal: PrincipalDep,
+    service: UsersServiceDep,
+    query: Annotated[str | None, Query(max_length=200)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> list[UserSummarySchema]:
+    try:
+        return await service.search_users(query=query, limit=limit)
+    except UsersServiceError as error:
+        raise HTTPException(error.status_code, detail=error.detail) from error

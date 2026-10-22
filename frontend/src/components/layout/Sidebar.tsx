@@ -2,6 +2,10 @@ import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
     FolderKanban,
+    LayoutTemplate,
+    ListTodo,
+    KeyRound,
+    CalendarDays,
     LayoutDashboard,
     PanelLeftClose,
     PanelLeftOpen,
@@ -14,13 +18,17 @@ import { cn } from "@/lib/cn";
 import { useUiStore } from "@/stores/ui";
 import { IconButton } from "@/components/ui/Button";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { StatusDot } from "@/components/ui/Badge";
+import { ProjectIcon } from "@/components/projects/ProjectIcon";
 import { UserMenu } from "@/components/users/UserMenu";
 import { useCurrentUser } from "@/lib/useAuth";
 
 const GLOBAL_ITEMS = [
     { to: "/", label: "Портфель", icon: LayoutDashboard, end: true },
     { to: "/projects", label: "Проекты", icon: FolderKanban, end: false },
+    { to: "/boards", label: "Доски", icon: LayoutTemplate, end: false },
+    { to: "/my-tasks", label: "Мои задачи", icon: ListTodo, end: false },
+    { to: "/calendar", label: "Календарь", icon: CalendarDays, end: false },
+    { to: "/my-api-keys", label: "API-ключи", icon: KeyRound, end: false },
     { to: "/mcp", label: "MCP", icon: Plug, end: false },
 ];
 
@@ -111,13 +119,7 @@ export function Sidebar() {
                         title={collapsed ? project.name : undefined}
                         className={({ isActive }) => navLinkClass(isActive, collapsed)}
                     >
-                        {project.icon ? (
-                            <span aria-hidden="true" className="shrink-0 text-sm leading-none">
-                                {project.icon}
-                            </span>
-                        ) : (
-                            <StatusDot color={project.color} />
-                        )}
+                        <ProjectIcon project={project} size={16} />
                         {!collapsed && <span className="truncate">{project.name}</span>}
                     </NavLink>
                 ))}

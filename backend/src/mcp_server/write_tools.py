@@ -1,12 +1,13 @@
-"""Инструменты MCP, изменяющие данные трекера.
+"""Инструменты MCP, изменяющие задачи, комментарии и вехи.
 
-Каждый требует токена с правом записи и вызывает те же сервисы, что и
-HTTP-эндпоинты: история задачи, сквозная нумерация и постановка в очередь
-индексации знаний работают одинаково независимо от канала.
+Каждый вызывает те же сервисы, что и HTTP-эндпоинты: история задачи,
+сквозная нумерация и постановка в очередь индексации знаний работают
+одинаково независимо от канала. Право ключа на инструмент объявлено в
+``tt_tool`` и проверяется в ``tool_context``; необязательный параметр
+``actor`` может указывать только логин владельца ключа.
 """
 
 import logging
-from datetime import date
 from typing import Annotated
 
 from mcp.server.mcpserver import Context
@@ -14,28 +15,46 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from src.db.models.project_milestones import ProjectMilestoneStatus
+from src.exceptions.access import AccessServiceError, ResourceWriteRequiredError
 from src.exceptions.base import ApplicationError
 from src.exceptions.projects import ProjectMemberUserNotFoundError
-from src.mcp_server.context import ToolContext, resolve_project, resolve_task, tool_context
-from src.mcp_server.server import mcp_server
+from src.mcp_server.context import (
+    PROJECT_NOT_AVAILABLE,
+    READ_ONLY_PROJECT,
+    ToolContext,
+    resolve_project,
+    resolve_task,
+    tool_context,
+)
+from src.mcp_server.registry import current_tool_call, tt_tool
+from src.mcp_server.server import TaskKey, domain_message, links_of, parse_date, with_task_url
 from src.schemas.enums import TaskPriority
+from src.schemas.task_moves import TaskMoveTargetSchema
 from src.services.project_query import StageRefDto, UnknownStageError
+from src.utils.api_scopes import SCOPE_COMMENTS_WRITE, SCOPE_TASKS_DELETE, SCOPE_TASKS_WRITE
 
 logger = logging.getLogger(__name__)
 
+ProjectKey = Annotated[str, Field(description="Ключ проекта, например PROJ.")]
+Actor = Annotated[str | None, Field(description="Логин текущего пользователя; действие всегда выполняется с его правами.")]
 
-@mcp_server.tool(
-    name="create_task",
+
+# ── Задачи ─────────────────────────────────────────────────────────────────
+
+
+@tt_tool(
+    name="tt_create_task",
     title="Создать задачу",
     description=(
         "Создаёт задачу в проекте. Без указания стадии задача попадает в начальную "
-        "стадию проекта — крайнюю левую колонку доски, обычно «Бэклог». "
-        "Требует токена с правом записи."
+        "стадию проекта — крайнюю левую колонку доски, обычно «Бэклог». Возвращает "
+        "ключ и ссылку на задачу."
     ),
+    scope=SCOPE_TASKS_WRITE,
 )
 async def create_task(
     context: Context,
-    project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
+    project_key: ProjectKey,
     title: Annotated[str, Field(description="Заголовок задачи.", min_length=1, max_length=255)],
     description: Annotated[str | None, Field(description="Описание задачи в Markdown.")] = None,
     stage: Annotated[
@@ -55,7 +74,13 @@ async def create_task(
         str | None,
         Field(description="Точный логин исполнителя из команды проекта."),
     ] = None,
+    observers: Annotated[
+        list[str] | None,
+        Field(description="Логины наблюдателей из команды проекта."),
+    ] = None,
+    start_date: Annotated[str | None, Field(description="Начало в формате ГГГГ-ММ-ДД.")] = None,
     due_date: Annotated[str | None, Field(description="Срок в формате ГГГГ-ММ-ДД.")] = None,
+    actor: Actor = None,
 ) -> dict:
     """Создаёт задачу в доступном проекте."""
     async with tool_context(context, require_write=True) as tools:
@@ -64,15 +89,21 @@ async def create_task(
         if description is not None:
             payload["description_md"] = description
         if stage is not None:
-            payload["stage_id"] = (await _resolve_stage(tools, project_id, stage)).stage_id
+            payload["stage_id"] = (await resolve_stage(tools, project_id, stage)).stage_id
         if priority is not None:
-            payload["priority"] = _parse_priority(priority)
+            payload["priority"] = parse_priority(priority)
         if assignee is not None:
             payload["executor_id"] = (
-                await _member_user_id(tools, project_id, assignee) if assignee.strip() else None
+                await member_user_id(tools, project_id, assignee) if assignee.strip() else None
             )
+        if observers:
+            payload["observer_ids"] = [
+                await member_user_id(tools, project_id, login) for login in observers
+            ]
+        if start_date is not None:
+            payload["start_date"] = parse_date(start_date)
         if due_date is not None:
-            payload["due_date"] = _parse_date(due_date)
+            payload["due_date"] = parse_date(due_date)
 
         try:
             created = await tools.services.tasks.create_task(
@@ -81,20 +112,25 @@ async def create_task(
                 created_by_user_id=tools.principal.user_id,
             )
         except ApplicationError as error:
-            raise ToolError(_domain_message(error, "Не удалось создать задачу.")) from error
-        return {"task_key": created.key, "title": created.title, "created": True}
+            raise ToolError(domain_message(error, "Не удалось создать задачу.")) from error
+        return with_task_url(
+            tools, {"task_key": created.key, "title": created.title, "created": True}, created.id
+        )
 
 
-@mcp_server.tool(
-    name="update_task",
+@tt_tool(
+    name="tt_update_task",
     title="Изменить задачу",
     description=(
-        "Изменяет переданные поля задачи и не трогает остальные. Требует токена с правом записи."
+        "Изменяет переданные поля задачи и не трогает остальные: заголовок, описание, "
+        "приоритет, исполнитель, сроки. Стадия — tt_move_task, чек-лист — "
+        "tt_set_checklist, наблюдатели — tt_set_watchers."
     ),
+    scope=SCOPE_TASKS_WRITE,
 )
 async def update_task(
     context: Context,
-    task_key: Annotated[str, Field(description="Ключ задачи, например PROJ-142.")],
+    task_key: TaskKey,
     title: Annotated[str | None, Field(description="Новый заголовок.", max_length=255)] = None,
     description: Annotated[str | None, Field(description="Новое описание в Markdown.")] = None,
     priority: Annotated[
@@ -105,15 +141,19 @@ async def update_task(
         str | None,
         Field(
             description=(
-                "Точный логин исполнителя из команды проекта; "
-                "пустая строка снимает исполнителя."
+                "Точный логин исполнителя из команды проекта; пустая строка снимает исполнителя."
             )
         ),
+    ] = None,
+    start_date: Annotated[
+        str | None,
+        Field(description="Начало ГГГГ-ММ-ДД; пустая строка снимает начало."),
     ] = None,
     due_date: Annotated[
         str | None,
         Field(description="Срок в формате ГГГГ-ММ-ДД; пустая строка снимает срок."),
     ] = None,
+    actor: Actor = None,
 ) -> dict:
     """Изменяет переданные поля задачи."""
     async with tool_context(context, require_write=True) as tools:
@@ -124,15 +164,17 @@ async def update_task(
         if description is not None:
             payload["description_md"] = description
         if priority is not None:
-            payload["priority"] = _parse_priority(priority)
+            payload["priority"] = parse_priority(priority)
         if assignee is not None:
             payload["executor_id"] = (
-                await _member_user_id(tools, resolved.project_id, assignee)
+                await member_user_id(tools, resolved.project_id, assignee)
                 if assignee.strip()
                 else None
             )
+        if start_date is not None:
+            payload["start_date"] = parse_date(start_date) if start_date.strip() else None
         if due_date is not None:
-            payload["due_date"] = _parse_date(due_date) if due_date.strip() else None
+            payload["due_date"] = parse_date(due_date) if due_date.strip() else None
         if not payload:
             raise ToolError("Не передано ни одного поля для изменения.")
 
@@ -140,29 +182,34 @@ async def update_task(
             updated = await tools.services.tasks.update_task(
                 task_id=resolved.task_id,
                 data=payload,
+                updated_by_user_id=tools.principal.user_id,
             )
         except ApplicationError as error:
-            raise ToolError(_domain_message(error, "Не удалось изменить задачу.")) from error
-        return {"task_key": updated.key, "updated_fields": sorted(payload)}
+            raise ToolError(domain_message(error, "Не удалось изменить задачу.")) from error
+        return with_task_url(
+            tools, {"task_key": updated.key, "updated_fields": sorted(payload)}, updated.id
+        )
 
 
-@mcp_server.tool(
-    name="move_task",
+@tt_tool(
+    name="tt_move_task",
     title="Перевести задачу в другую стадию",
     description=(
         "Переводит задачу в стадию с указанным названием и ставит её в конец стадии. "
-        "Требует токена с правом записи."
+        "Перевод в завершающую стадию закрывает задачу."
     ),
+    scope=SCOPE_TASKS_WRITE,
 )
 async def move_task(
     context: Context,
-    task_key: Annotated[str, Field(description="Ключ задачи, например PROJ-142.")],
+    task_key: TaskKey,
     stage: Annotated[str, Field(description="Название целевой стадии.", min_length=1)],
+    actor: Actor = None,
 ) -> dict:
     """Переводит задачу в другую стадию доски."""
     async with tool_context(context, require_write=True) as tools:
         resolved = await resolve_task(tools, task_key)
-        target = await _resolve_stage(tools, resolved.project_id, stage)
+        target = await resolve_stage(tools, resolved.project_id, stage)
 
         try:
             moved = await tools.services.tasks.move_task(
@@ -170,25 +217,134 @@ async def move_task(
                 stage_id=target.stage_id,
             )
         except ApplicationError as error:
-            raise ToolError(_domain_message(error, "Не удалось переместить задачу.")) from error
-        return {"task_key": moved.key, "stage": target.name, "is_done": target.is_done_stage}
+            raise ToolError(domain_message(error, "Не удалось переместить задачу.")) from error
+        return with_task_url(
+            tools,
+            {"task_key": moved.key, "stage": target.name, "is_done": target.is_done_stage},
+            moved.id,
+        )
 
 
-@mcp_server.tool(
-    name="delete_task",
+@tt_tool(
+    name="tt_transfer_task",
+    title="Перенести задачу в другой проект",
+    description=(
+        "Переносит задачу в другой проект: у задачи будет новый ключ, связи с задачами "
+        "и документами старого проекта снимаются. dry_run=true только показывает, что "
+        "изменится. Нужна запись в оба проекта."
+    ),
+    scope=SCOPE_TASKS_WRITE,
+)
+async def transfer_task(
+    context: Context,
+    task_key: TaskKey,
+    target_project_key: Annotated[str, Field(description="Ключ проекта, куда переносим.")],
+    stage: Annotated[
+        str | None, Field(description="Стадия в целевом проекте; без неё — начальная.")
+    ] = None,
+    remove_outsiders: Annotated[
+        bool,
+        Field(description="Снять участников, которых нет в команде целевого проекта."),
+    ] = False,
+    dry_run: Annotated[bool, Field(description="Только показать, что изменится.")] = False,
+    actor: Actor = None,
+) -> dict:
+    """Переносит задачу между проектами тем же сервисом, что REST move-to."""
+    async with tool_context(context, require_write=True) as tools:
+        resolved = await resolve_task(tools, task_key)
+        target_id = await resolve_project(tools, target_project_key)
+        stage_id = (await resolve_stage(tools, target_id, stage)).stage_id if stage else None
+        target = TaskMoveTargetSchema(
+            project_id=target_id, stage_id=stage_id, remove_outsiders=remove_outsiders
+        )
+        try:
+            if dry_run:
+                preview = await tools.services.moves.preview(
+                    task_id=resolved.task_id, target=target, user_id=tools.principal.user_id
+                )
+                return {"dry_run": True, **preview.model_dump(mode="json")}
+            result = await tools.services.moves.move(
+                task_id=resolved.task_id, target=target, user_id=tools.principal.user_id
+            )
+        except ApplicationError as error:
+            raise ToolError(domain_message(error, "Не удалось перенести задачу.")) from error
+        return with_task_url(
+            tools,
+            {
+                "from_key": result.from_key,
+                "task_key": result.to_key,
+                "losses": result.losses.model_dump(mode="json"),
+                "notes": result.notes,
+            },
+            result.task.id,
+        )
+
+
+@tt_tool(
+    name="tt_set_task_dates",
+    title="Изменить плановые даты задачи",
+    description=(
+        "Изменяет start_date и/или due_date задачи через доменный сервис и историю. "
+        "Пустая строка снимает дату."
+    ),
+    scope=SCOPE_TASKS_WRITE,
+)
+async def set_task_dates(
+    context: Context,
+    task_key: TaskKey,
+    start_date: Annotated[
+        str | None,
+        Field(description="Начало ГГГГ-ММ-ДД; пустая строка снимает начало."),
+    ] = None,
+    due_date: Annotated[
+        str | None,
+        Field(description="Завершение ГГГГ-ММ-ДД; пустая строка снимает срок."),
+    ] = None,
+    actor: Actor = None,
+) -> dict:
+    """Меняет только явно переданные календарные поля задачи."""
+    async with tool_context(context, require_write=True) as tools:
+        resolved = await resolve_task(tools, task_key)
+        payload: dict = {}
+        if start_date is not None:
+            payload["start_date"] = parse_date(start_date) if start_date.strip() else None
+        if due_date is not None:
+            payload["due_date"] = parse_date(due_date) if due_date.strip() else None
+        if not payload:
+            raise ToolError("Не передано ни одной даты для изменения.")
+        try:
+            updated = await tools.services.tasks.update_task(
+                task_id=resolved.task_id,
+                data=payload,
+                updated_by_user_id=tools.principal.user_id,
+            )
+        except ApplicationError as error:
+            raise ToolError(domain_message(error, "Не удалось изменить даты задачи.")) from error
+        return {
+            "task_key": updated.key,
+            "start_date": updated.start_date.isoformat() if updated.start_date else None,
+            "due_date": updated.due_date.isoformat() if updated.due_date else None,
+            "updated_fields": sorted(payload),
+        }
+
+
+@tt_tool(
+    name="tt_delete_task",
     title="Удалить задачу",
     description=(
         "Безвозвратно удаляет задачу вместе с её комментариями и файлами. "
-        "Требует токена с правом записи и явного подтверждения confirm=true."
+        "Требует явного подтверждения confirm=true и права tasks:delete."
     ),
+    scope=SCOPE_TASKS_DELETE,
 )
 async def delete_task(
     context: Context,
-    task_key: Annotated[str, Field(description="Ключ задачи, например PROJ-142.")],
+    task_key: TaskKey,
     confirm: Annotated[
         bool,
         Field(description="Подтверждение удаления; без него задача не удаляется."),
     ] = False,
+    actor: Actor = None,
 ) -> dict:
     """Удаляет задачу после явного подтверждения."""
     if not confirm:
@@ -199,107 +355,134 @@ async def delete_task(
     async with tool_context(context, require_write=True) as tools:
         resolved = await resolve_task(tools, task_key)
         key = resolved.task_key
-
+        await ensure_granted(
+            tools.services.access.ensure_task_deletion(
+                task_id=resolved.task_id, user_id=tools.principal.user_id
+            )
+        )
         try:
             await tools.services.tasks.delete_task(task_id=resolved.task_id)
         except ApplicationError as error:
-            raise ToolError(_domain_message(error, "Не удалось удалить задачу.")) from error
+            raise ToolError(domain_message(error, "Не удалось удалить задачу.")) from error
         return {"task_key": key, "deleted": True}
 
 
-@mcp_server.tool(
-    name="add_comment",
+# ── Комментарии ────────────────────────────────────────────────────────────
+
+
+@tt_tool(
+    name="tt_add_comment",
     title="Добавить комментарий к задаче",
     description=(
-        "Добавляет комментарий к задаче и фиксирует событие в её истории. "
-        "Требует токена с правом записи."
+        "Добавляет комментарий к задаче от имени вызывающего (или сотрудника из actor) "
+        "и фиксирует событие в её истории."
     ),
+    scope=SCOPE_COMMENTS_WRITE,
 )
 async def add_comment(
     context: Context,
-    task_key: Annotated[str, Field(description="Ключ задачи, например PROJ-142.")],
+    task_key: TaskKey,
     body: Annotated[str, Field(description="Текст комментария в Markdown.", min_length=1)],
-    author: Annotated[
-        str | None,
-        Field(description="Подпись автора; по умолчанию имя владельца токена."),
-    ] = None,
+    actor: Actor = None,
+    author: Annotated[str | None, Field(description="Подпись автора для прежних MCP-клиентов.")] = None,
 ) -> dict:
     """Добавляет комментарий к задаче."""
     async with tool_context(context, require_write=True) as tools:
         resolved = await resolve_task(tools, task_key)
-        author_name = (author or "").strip() or _default_author(tools)
 
         try:
-            comment = await tools.services.comments.add_comment(
-                task_id=resolved.task_id,
-                author_name=author_name,
-                body_md=body,
-            )
+            call = current_tool_call()
+            if call is not None and call.legacy:
+                comment = await tools.services.comments.add_comment(
+                    task_id=resolved.task_id,
+                    author_name=(author or "").strip() or tools.principal.short_name,
+                    body_md=body,
+                )
+            else:
+                comment = await tools.services.comments.add_comment(
+                    task_id=resolved.task_id, author_id=tools.principal.user_id, body_md=body,
+                )
         except ApplicationError as error:
-            raise ToolError(_domain_message(error, "Не удалось добавить комментарий.")) from error
-        return {
-            "task_key": resolved.task_key,
-            "author": comment.author_name,
-            "created_at": comment.created_at.isoformat(),
-        }
+            raise ToolError(domain_message(error, "Не удалось добавить комментарий.")) from error
+        return with_task_url(
+            tools,
+            {
+                "comment_id": comment.id,
+                "task_key": resolved.task_key,
+                "author": comment.author_name,
+                "created_at": comment.created_at.isoformat(),
+            },
+            resolved.task_id,
+        )
 
 
-@mcp_server.tool(
-    name="set_task_dates",
-    title="Изменить плановые даты задачи",
+@tt_tool(
+    name="tt_update_comment",
+    title="Исправить комментарий",
     description=(
-        "Изменяет start_date и/или due_date задачи через доменный сервис и историю. "
-        "Требует токена с правом записи."
+        "Заменяет текст комментария. Править можно свой комментарий; чужой — только "
+        "владельцу проекта. comment_id — из tt_list_comments."
     ),
+    scope=SCOPE_COMMENTS_WRITE,
 )
-async def set_task_dates(
+async def update_comment(
     context: Context,
-    task_key: Annotated[str, Field(description="Ключ задачи, например PROJ-142.")],
-    start_date: Annotated[
-        str | None,
-        Field(description="Начало ГГГГ-ММ-ДД; пустая строка снимает начало."),
-    ] = None,
-    due_date: Annotated[
-        str | None,
-        Field(description="Завершение ГГГГ-ММ-ДД; пустая строка снимает срок."),
-    ] = None,
+    comment_id: Annotated[int, Field(description="Идентификатор комментария.", gt=0)],
+    body: Annotated[str, Field(description="Новый текст в Markdown.", min_length=1)],
+    actor: Actor = None,
 ) -> dict:
-    """Меняет только явно переданные календарные поля задачи."""
+    """Исправляет комментарий с той же проверкой авторства, что и REST."""
     async with tool_context(context, require_write=True) as tools:
-        resolved = await resolve_task(tools, task_key)
-        payload: dict = {}
-        if start_date is not None:
-            payload["start_date"] = _parse_date(start_date) if start_date.strip() else None
-        if due_date is not None:
-            payload["due_date"] = _parse_date(due_date) if due_date.strip() else None
-        if not payload:
-            raise ToolError("Не передано ни одной даты для изменения.")
+        await ensure_comment_author(tools, comment_id)
         try:
-            updated = await tools.services.tasks.update_task(
-                task_id=resolved.task_id,
-                data=payload,
+            current = await tools.services.comments.get_comment(comment_id)
+            updated = await tools.services.comments.update_comment(
+                comment_id, body, current.body_md
             )
         except ApplicationError as error:
-            raise ToolError(_domain_message(error, "Не удалось изменить даты задачи.")) from error
-        return {
-            "task_key": updated.key,
-            "start_date": updated.start_date.isoformat() if updated.start_date else None,
-            "due_date": updated.due_date.isoformat() if updated.due_date else None,
-            "updated_fields": sorted(payload),
-        }
+            raise ToolError(domain_message(error, "Не удалось исправить комментарий.")) from error
+        return {"comment_id": updated.id, "updated": True}
 
 
-@mcp_server.tool(
-    name="create_milestone",
-    title="Создать проектную веху",
+@tt_tool(
+    name="tt_delete_comment",
+    title="Удалить комментарий",
     description=(
-        "Создаёт простую календарную веху проекта без отдельного workflow. "
-        "Требует токена с правом записи."
+        "Удаляет комментарий. Удалить можно свой; чужой — только владельцу проекта. "
+        "Требует confirm=true."
     ),
+    scope=SCOPE_COMMENTS_WRITE,
+)
+async def delete_comment(
+    context: Context,
+    comment_id: Annotated[int, Field(description="Идентификатор комментария.", gt=0)],
+    confirm: Annotated[bool, Field(description="Подтверждение удаления.")] = False,
+    actor: Actor = None,
+) -> dict:
+    """Удаляет комментарий с проверкой авторства."""
+    if not confirm:
+        raise ToolError("Удаление требует confirm=true: действие необратимо.")
+    async with tool_context(context, require_write=True) as tools:
+        await ensure_comment_author(tools, comment_id)
+        try:
+            await tools.services.comments.delete_comment(comment_id=comment_id)
+        except ApplicationError as error:
+            raise ToolError(domain_message(error, "Не удалось удалить комментарий.")) from error
+        return {"comment_id": comment_id, "deleted": True}
+
+
+# ── Вехи ───────────────────────────────────────────────────────────────────
+
+
+@tt_tool(
+    name="tt_create_milestone",
+    title="Создать проектную веху",
+    description="Создаёт простую календарную веху проекта без отдельного workflow.",
+    scope=SCOPE_TASKS_WRITE,
 )
 async def create_milestone(
     context: Context,
-    project_key: Annotated[str, Field(description="Ключ проекта, например PROJ.")],
+    project_key: ProjectKey,
     title: Annotated[str, Field(description="Название вехи.", min_length=1, max_length=255)],
     due_date: Annotated[str, Field(description="Дата вехи в формате ГГГГ-ММ-ДД.")],
     description: Annotated[str | None, Field(description="Описание вехи в Markdown.")] = None,
@@ -307,6 +490,7 @@ async def create_milestone(
         str,
         Field(description="Статус PLANNED или ACHIEVED."),
     ] = "PLANNED",
+    actor: Actor = None,
 ) -> dict:
     """Создаёт пользовательскую веху в доступном проекте."""
     async with tool_context(context, require_write=True) as tools:
@@ -320,24 +504,30 @@ async def create_milestone(
                 project_id,
                 {
                     "title": title.strip(),
-                    "due_date": _parse_date(due_date),
+                    "due_date": parse_date(due_date),
                     "status": milestone_status,
                     "description_md": description,
-                    "wbs_node_id": None,
                 },
             )
         except ApplicationError as error:
-            raise ToolError(_domain_message(error, "Не удалось создать веху.")) from error
-        return {
+            raise ToolError(domain_message(error, "Не удалось создать веху.")) from error
+        result = {
             "project_key": project_key.strip().upper(),
             "title": created.title,
             "due_date": created.due_date.isoformat(),
             "status": created.status.value,
             "created": True,
         }
+        url = links_of(tools).project(project_key)
+        if url:
+            result["url"] = url
+        return result
 
 
-async def _resolve_stage(tools: ToolContext, project_id: int, stage: str) -> StageRefDto:
+# ── Общие помощники инструментов записи ────────────────────────────────────
+
+
+async def resolve_stage(tools: ToolContext, project_id: int, stage: str) -> StageRefDto:
     """Находит стадию сервисом и переводит его ошибку в ToolError."""
     try:
         return await tools.services.query.resolve_stage(project_id=project_id, stage_name=stage)
@@ -347,8 +537,8 @@ async def _resolve_stage(tools: ToolContext, project_id: int, stage: str) -> Sta
         raise ToolError("Не удалось получить стадии проекта.") from error
 
 
-async def _member_user_id(tools: ToolContext, project_id: int, username: str) -> int:
-    """Разрешает исполнителя сервисом команды проекта.
+async def member_user_id(tools: ToolContext, project_id: int, login: str) -> int:
+    """Разрешает участника проекта по логину сервисом команды проекта.
 
     Правило «только активный участник этого проекта» принадлежит сервису:
     оно одинаково для всех каналов и не должно повторяться в транспорте.
@@ -356,39 +546,42 @@ async def _member_user_id(tools: ToolContext, project_id: int, username: str) ->
     try:
         return await tools.services.members.resolve_member_user_id(
             project_id=project_id,
-            username=username,
+            username=login.strip().lower(),
         )
     except ProjectMemberUserNotFoundError as error:
         raise ToolError(
             "Активный пользователь с таким логином не входит в команду проекта."
         ) from error
     except ApplicationError as error:
-        raise ToolError("Не удалось проверить исполнителя задачи.") from error
+        raise ToolError("Не удалось проверить участника проекта.") from error
 
 
-def _parse_priority(value: str) -> TaskPriority:
+async def ensure_granted(check):
+    """Выполняет проверку доступа сервиса и переводит отказ в ToolError."""
+    try:
+        grant = await check
+    except ResourceWriteRequiredError as error:
+        raise ToolError(READ_ONLY_PROJECT) from error
+    except AccessServiceError as error:
+        raise ToolError(domain_message(error, PROJECT_NOT_AVAILABLE)) from error
+    return grant
+
+
+async def ensure_comment_author(tools: ToolContext, comment_id: int) -> None:
+    """Автор комментария или владелец проекта и проект открыт на запись — как в REST."""
+    grant = await ensure_granted(
+        tools.services.access.ensure_comment_authorship(
+            comment_id=comment_id, user_id=tools.principal.user_id
+        )
+    )
+    if not grant.can_write:
+        raise ToolError(READ_ONLY_PROJECT)
+
+
+def parse_priority(value: str) -> TaskPriority:
     """Разбирает приоритет и подсказывает допустимые значения."""
     try:
         return TaskPriority(value.strip().upper())
     except ValueError as error:
         allowed = ", ".join(item.value for item in TaskPriority)
         raise ToolError(f"Приоритет должен быть одним из: {allowed}.") from error
-
-
-def _parse_date(value: str) -> date:
-    """Разбирает дату в формате ISO."""
-    try:
-        return date.fromisoformat(value.strip())
-    except ValueError as error:
-        raise ToolError("Дата должна быть в формате ГГГГ-ММ-ДД.") from error
-
-
-def _default_author(tools: ToolContext) -> str:
-    """Возвращает подпись автора по имени владельца токена."""
-    return tools.principal.short_name
-
-
-def _domain_message(error: ApplicationError, fallback: str) -> str:
-    """Отдаёт доменное сообщение об ошибке, не раскрывая внутренних деталей."""
-    detail = getattr(error, "detail", None)
-    return str(detail) if detail else fallback

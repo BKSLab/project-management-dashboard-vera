@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import Result, func, select
+from sqlalchemy import Result, func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -158,3 +158,40 @@ class UsersRepository:
             await self.db_session.rollback()
             logger.error("❌ Не удалось обновить пользователя id=%s.", user.id, exc_info=True)
             raise UsersRepositoryError(f"Ошибка обновления пользователя id={user.id}.") from error
+
+    async def get_by_ids(self, user_ids: set[int]) -> list[User]:
+        """Возвращает пользователей по набору идентификаторов.
+
+        Args:
+            user_ids: Идентификаторы пользователей.
+
+        Returns:
+            Найденные пользователи в порядке идентификаторов.
+
+        Raises:
+            UsersRepositoryError: Если запрос к БД завершился ошибкой.
+        """
+        if not user_ids:
+            return []
+        try:
+            result: Result = await self.db_session.execute(
+                select(User).where(User.id.in_(user_ids)).order_by(User.id)
+            )
+            return list(result.scalars().all())
+        except (SQLAlchemyError, Exception) as error:
+            await self.db_session.rollback()
+            logger.error("❌ Не удалось получить набор пользователей.", exc_info=True)
+            raise UsersRepositoryError("Ошибка получения набора пользователей.") from error
+
+    async def search(self, *, query: str | None, limit: int = 20) -> list[User]:
+        """Search active local users without exposing private profile fields."""
+        statement = select(User).where(User.is_active.is_(True)).order_by(User.last_name, User.first_name, User.id).limit(limit)
+        if query and query.strip():
+            value = "%" + query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            statement = statement.where(or_(User.username.ilike(value), User.last_name.ilike(value), User.first_name.ilike(value)))
+        try:
+            result = await self.db_session.execute(statement)
+            return list(result.scalars())
+        except SQLAlchemyError as error:
+            await self.db_session.rollback()
+            raise UsersRepositoryError("Cannot search local users.") from error

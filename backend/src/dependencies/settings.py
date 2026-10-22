@@ -7,7 +7,7 @@
 
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Request
 
 from src.core.settings import Settings, get_settings
 
@@ -18,3 +18,11 @@ def get_app_settings() -> Settings:
 
 
 SettingsDep = Annotated[Settings, Depends(get_app_settings)]
+
+
+def get_public_app_url(request: Request, settings: SettingsDep) -> str:
+    """Базовый адрес для ссылок в календарных подписках."""
+    return (settings.app.app_public_url or str(request.base_url)).rstrip("/")
+
+
+PublicAppUrlDep = Annotated[str, Depends(get_public_app_url)]

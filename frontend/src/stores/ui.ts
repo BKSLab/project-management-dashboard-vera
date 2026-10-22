@@ -1,8 +1,16 @@
 import { create } from "zustand";
+import type { BoardObjectSelectionRef } from "@/lib/types";
+
+export interface BoardSelectionContext {
+    boardId: number;
+    objects: BoardObjectSelectionRef[];
+}
 
 export type WbsLayoutMode = "horizontal" | "vertical";
 
 interface UiState {
+    boardSelection: BoardSelectionContext | null;
+    setBoardSelection: (selection: BoardSelectionContext | null) => void;
     /** Открытая карточка задачи — общая для канбана, списка и структуры. */
     selectedTaskId: number | null;
     setSelectedTaskId: (taskId: number | null) => void;
@@ -22,6 +30,14 @@ interface UiState {
 }
 
 export const useUiStore = create<UiState>((set) => ({
+    boardSelection: null,
+    setBoardSelection: (selection) => set((state) => {
+        const previous = state.boardSelection;
+        if (previous === selection || (previous && selection && previous.boardId === selection.boardId
+            && previous.objects.length === selection.objects.length
+            && previous.objects.every((item, index) => item.type === selection.objects[index].type && item.id === selection.objects[index].id))) return state;
+        return { boardSelection: selection };
+    }),
     selectedTaskId: null,
     setSelectedTaskId: (taskId) => set(taskId === null ? { selectedTaskId: null } : { selectedTaskId: taskId, selectedRisk: null }),
     selectedRisk: null,

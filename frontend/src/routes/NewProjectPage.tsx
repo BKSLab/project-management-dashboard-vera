@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, endpoints, queryKeys } from "@/lib/api";
 import { fullName, type Project, type ProjectStage } from "@/lib/types";
 import { useCurrentUser } from "@/lib/useAuth";
+import { useToast } from "@/lib/toast";
 import { formatDateOnly } from "@/lib/dates";
 import { Page } from "@/components/layout/AppShell";
 import { Button, LinkButton } from "@/components/ui/Button";
@@ -21,6 +22,8 @@ import {
 
 export function NewProjectPage() {
     const navigate = useNavigate();
+    const toast = useToast();
+    const [pendingImage, setPendingImage] = useState<File | null>(null);
     const queryClient = useQueryClient();
     const [values, setValues] = useState<ProjectFormValues>(() => ({ ...EMPTY_PROJECT_FORM, start_date: formatDateOnly(new Date()) }));
     const currentUser = useCurrentUser();
@@ -35,10 +38,17 @@ export function NewProjectPage() {
     const validMembers = usernames.length <= 100 && usernames.every((name) => /^[a-z0-9_.-]{3,50}$/.test(name));
 
     const createMutation = useMutation({
-        mutationFn: () => api.post<Project>(endpoints.projects(), {
+        mutationFn: async () => { const project = await api.post<Project>(endpoints.projects(), {
             ...toProjectPayload(values), member_usernames: usernames,
             stages: stages.map(({ name, color, is_done_stage }) => ({ name, color, is_done_stage })),
-        }),
+        });
+            if (pendingImage) {
+                const body = new FormData(); body.append("file", pendingImage);
+                try { return await api.postForm<Project>(endpoints.projectIconImage(project.id), body); }
+                catch { toast.error("Проект создан, но картинка не загрузилась. Повторите загрузку в настройках проекта."); return project; }
+            }
+            return project;
+        },
         onSuccess: (project) => {
             queryClient.invalidateQueries({ queryKey: queryKeys.projects });
             queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
@@ -69,7 +79,7 @@ export function NewProjectPage() {
                     <span className="text-muted">Руководитель: </span>
                     {currentUser.data ? fullName(currentUser.data) : "Загрузка…"}
                 </p>
-                <ProjectForm values={values} onChange={setValues} disabled={createMutation.isPending} />
+                <ProjectForm pendingImage={pendingImage} onPendingImageChange={setPendingImage} values={values} onChange={setValues} disabled={createMutation.isPending} />
                 <Field label="Команда" hint="Логины участников через запятую. Руководитель добавляется автоматически; состав можно изменить позже."
                     error={!validMembers ? "Проверьте логины участников: 3–50 символов, латиница, цифры, точка, дефис или подчёркивание." : undefined}>
                     {(id) => <Input id={id} value={memberNames} autoComplete="off" spellCheck={false}
